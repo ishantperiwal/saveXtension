@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:3210:3210"
+    volumes:
+      - savextension-data:/app/data
+    environment:
+      APP_ORIGIN: http://localhost:3210
+      COOKIE_SECURE: "false"
+    restart: unless-stopped
+volumes:
+  savextension-data:

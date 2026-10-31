@@ -1,0 +1,160 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { resolve, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
+import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
+import { HttpError, text } from './domain.mjs';
+
+const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip' };
+const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
+
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, setupCode = token() } = {}) {
+  const store = new Store(dataPath || ':memory:');
+  const attempts = new Map();
+  const appOrigin = new URL(origin).origin;
+  function limited(req, group, max = 10) {
+    const key = `${group}:${req.socket.remoteAddress}`;
+    const now = Date.now();
+    const previous = attempts.get(key);
+    const entry = !previous || previous.reset < now ? { count: 0, reset: now + 60000 } : previous;
+    if (++entry.count > max) throw new HttpError(429, 'Too many attempts. Try again in a minute.');
+    attempts.set(key, entry);
+    if (attempts.size > 10000) for (const [k, v] of attempts) if (v.reset < now) attempts.delete(k);
+  }
+  function sessionValue(req) { return req.headers.cookie?.split(';').map(v => v.trim()).find(v => v.startsWith('savex_session='))?.slice(14); }
+  function session(req) { if (!store.session(sessionValue(req))) throw new HttpError(401, 'Please sign in to your library.'); }
+  function device(req) {
+    const value = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
+    const found = store.device(value);
+    if (!found) throw new HttpError(401, 'Extension disconnected. Pair it again from your library.');
+    return found;
+  }
+  async function body(req) {
+    const type = req.headers['content-type'] || '';
+    if (!type.startsWith('application/json')) throw new HttpError(415, 'Send JSON data.');
+    const parts = []; let size = 0;
+    for await (const part of req) {
+      size += part.length;
+      if (size > 4 * 1024 * 1024) throw new HttpError(413, 'Import too large. Use batches of at most 200 posts.');
+      parts.push(part);
+    }
+    try {
+      const parsed = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+      return parsed;
+    } catch { throw new HttpError(400, 'Send a JSON object.'); }
+  }
+  function cookie(res, value, age = 604800) {
+    res.setHeader('Set-Cookie', `savex_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${secure ? '; Secure' : ''}`);
+  }
+  function json(res, value, status = 200) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
+  const server = createServer(async (req, res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    const requestOrigin = req.headers.origin;
+    // Extension origins receive CORS only for their limited token-authenticated endpoints.
+    const path = new URL(req.url, appOrigin).pathname;
+    const isExtensionRoute = path.startsWith('/api/extension/');
+    if (isExtensionRoute && extensionOrigin(requestOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    try {
+      const host = req.headers.host;
+      const expectedHost = new URL(appOrigin).host;
+      // Prevent DNS rebinding; localhost and 127.0.0.1 are interchangeable in local mode.
+      const localHosts = new URL(appOrigin).hostname === 'localhost' || new URL(appOrigin).hostname === '127.0.0.1';
+      const validLocalHost = localHosts && ['localhost', '127.0.0.1'].some(h => host === `${h}:${new URL(appOrigin).port || (secure ? '443' : '80')}`);
+      if (host !== expectedHost && !validLocalHost) throw new HttpError(403, 'Unexpected host. Configure APP_ORIGIN for this address.');
+      if (req.method === 'OPTIONS' && isExtensionRoute && extensionOrigin(requestOrigin)) { res.writeHead(204); res.end(); return; }
+      if (!['GET', 'HEAD'].includes(req.method) && !isExtensionRoute) {
+        const localOrigin = validLocalHost && requestOrigin === `http://${host}`;
+        if (requestOrigin !== appOrigin && !localOrigin) throw new HttpError(403, 'Request must come from your library.');
+      }
+      if (isExtensionRoute && requestOrigin && !extensionOrigin(requestOrigin) && requestOrigin !== appOrigin) throw new HttpError(403, 'Unsupported extension origin.');
+      if (path === '/api/session' && req.method === 'GET') return json(res, { setupRequired: !store.get('password'), authenticated: store.session(sessionValue(req)), name: store.get('name') || 'My library' });
+      if (path === '/api/setup' && req.method === 'POST') {
+        limited(req, 'auth');
+        if (store.get('password')) throw new HttpError(409, 'Your library is already set up.');
+        const input = await body(req);
+        if (!timingSafeEqual(Buffer.from(hash(input.code)), Buffer.from(hash(setupCode)))) throw new HttpError(401, 'Use the setup code printed in your server terminal.');
+        if (typeof input.password !== 'string' || input.password.length < 12 || input.password.length > 256) throw new HttpError(400, 'Choose a password between 12 and 256 characters.');
+        store.set('password', passwordHash(input.password)); store.set('name', text(input.name, 50) || 'My library');
+        cookie(res, store.createSession()); return json(res, { ok: true });
+      }
+      if (path === '/api/login' && req.method === 'POST') {
+        limited(req, 'auth'); const input = await body(req);
+        const stored = store.get('password');
+        if (!stored || typeof input.password !== 'string' || input.password.length > 256 || !passwordMatches(input.password, stored)) throw new HttpError(401, 'That password didn’t match. Try again.');
+        cookie(res, store.createSession()); return json(res, { ok: true });
+      }
+      if (path === '/api/logout' && req.method === 'POST') { store.deleteSession(sessionValue(req)); cookie(res, '', 0); return json(res, { ok: true }); }
+      if (path === '/api/extension/pair' && req.method === 'POST') {
+        limited(req, 'pair'); const input = await body(req); return json(res, store.pair(input.code, input.name));
+      }
+      if (isExtensionRoute) {
+        const d = device(req);
+        if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
+        if (path === '/api/extension/runs' && req.method === 'POST') {
+          const input = await body(req); return json(res, { runId: store.startRun(d.id, input.platform, input.account) });
+        }
+        const match = path.match(/^\/api\/extension\/runs\/([a-f0-9]+)(\/finish)?$/);
+        if (match && req.method === 'POST') {
+          const run = store.run(match[1], d.id);
+          if (!run) throw new HttpError(404, 'Sync not found.');
+          if (run.status !== 'running') throw new HttpError(409, 'This sync has already finished.');
+          const input = await body(req);
+          if (match[2]) { store.finishRun(run.id, input.status, input.message); return json(res, { ok: true }); }
+          if (!Array.isArray(input.posts) || input.posts.length > 200) throw new HttpError(400, 'Send at most 200 posts per batch.');
+          const result = store.importPosts(input.posts.map(p => p && typeof p === 'object' ? ({
+            url: p.url, title: p.title, text: p.text, author: p.author, authorName: p.authorName,
+            thumbnail: p.thumbnail, kind: p.kind, publishedAt: p.publishedAt, sourceAccount: run.account
+          }) : p));
+          store.recordRun(run.id, result); return json(res, result);
+        }
+        throw new HttpError(404, 'Extension endpoint not found.');
+      }
+      if (path.startsWith('/api/')) {
+        session(req);
+        if (path === '/api/posts' && req.method === 'GET') return json(res, { posts: store.posts(), runs: store.runs() });
+        if (path === '/api/posts/import' && req.method === 'POST') {
+          const input = await body(req);
+          if (!Array.isArray(input.posts) || input.posts.length < 1 || input.posts.length > 200) throw new HttpError(400, 'Import between 1 and 200 posts at a time.');
+          return json(res, store.importPosts(input.posts));
+        }
+        const post = path.match(/^\/api\/posts\/(\d+)$/);
+        if (post && req.method === 'PATCH') return json(res, store.updatePost(Number(post[1]), await body(req)));
+        if (post && req.method === 'DELETE') { store.deletePost(Number(post[1])); return json(res, { ok: true }); }
+        if (path === '/api/pairing' && req.method === 'POST') return json(res, { code: store.pairCode(), expiresIn: 300 });
+        if (path === '/api/devices' && req.method === 'GET') return json(res, { devices: store.devices() });
+        const dev = path.match(/^\/api\/devices\/([a-f0-9]+)$/);
+        if (dev && req.method === 'DELETE') { store.revoke(dev[1]); return json(res, { ok: true }); }
+        if (path === '/api/export' && req.method === 'GET') {
+          res.setHeader('Content-Disposition', 'attachment; filename="savextension-backup.json"');
+          return json(res, { version: 1, exportedAt: new Date().toISOString(), posts: store.posts() });
+        }
+        throw new HttpError(404, 'Endpoint not found.');
+      }
+      if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed.');
+      let file;
+      try { file = resolve(publicDir, `.${decodeURIComponent(path === '/' ? '/index.html' : path)}`); } catch { throw new HttpError(400, 'Invalid path.'); }
+      if (!file.startsWith(`${publicDir}/`)) throw new HttpError(403, 'Forbidden.');
+      try {
+        const contents = await readFile(file); res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' }); res.end(req.method === 'HEAD' ? undefined : contents);
+      } catch { throw new HttpError(404, 'File not found.'); }
+    } catch (e) {
+      if (!res.headersSent) json(res, { error: e instanceof HttpError ? e.message : 'Something went wrong. Check your server terminal.' }, e.status || 500);
+      else res.end();
+      if (!(e instanceof HttpError)) console.error(e);
+    }
+  });
+  return { server, store, setupCode };
+}
