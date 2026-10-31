@@ -22,3 +22,38 @@ test('ordinary feeds, login pages and lookalike domains are not sync targets', a
   for (const url of ['https://x.com/home', 'https://x.com/i/flow/login', 'https://www.instagram.com/', 'https://www.instagram.com/accounts/login/', 'https://x.com.evil.com/i/bookmarks']) assert.equal(parser.pageInfo(document, new URL(url)).valid, false);
   dom.window.close();
 });
+test('X History supports the selected Bookmarks tab but rejects Likes', async () => {
+  const dom = await fixture('x', 'https://x.com/i/history');
+  const { document, SaveXExtractors: parser, location } = dom.window;
+  assert.equal(parser.pageInfo(document, location).valid, false);
+  const tab = document.createElement('button');
+  tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', 'true');
+  tab.textContent = 'Bookmarks'; document.body.append(tab);
+  assert.equal(parser.pageInfo(document, location).valid, true);
+  tab.textContent = 'Likes';
+  assert.equal(parser.pageInfo(document, location).valid, false);
+  dom.window.close();
+});
+
+test('unsave evidence requires the exact post, signed-in profile, and an explicit enabled Bookmark control', async () => {
+  const dom = await fixture('x', 'https://x.com/alice/status/123456789');
+  const { document, SaveXExtractors: parser } = dom.window;
+  const article = document.querySelector('article');
+  const button = document.createElement('button');
+  button.setAttribute('data-testid', 'bookmark'); button.setAttribute('aria-label', 'Bookmark'); article.append(button);
+  const state = parser.xBookmarkState(document, 'https://x.com/i/status/123456789');
+  assert.equal(state.state, 'unsaved'); assert.equal(state.account, '@personal_account');
+  const duplicate = article.cloneNode(true); article.after(duplicate);
+  assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
+  duplicate.remove();
+  const quote = document.createElement('a'); quote.href = '/someone/status/999'; quote.innerHTML = '<time>Quoted</time>'; article.append(quote);
+  assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/999'), null);
+  assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/987654321'), null);
+  button.disabled = true; assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
+  button.disabled = false; button.setAttribute('data-testid', 'removeBookmark'); button.setAttribute('aria-label', 'Remove bookmark');
+  assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789').state, 'saved');
+  button.remove(); assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
+  article.append(button); document.querySelector('[data-testid="AppTabBar_Profile_Link"]').remove();
+  assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
+  dom.window.close();
+});

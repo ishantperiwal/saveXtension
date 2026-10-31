@@ -23,7 +23,7 @@ test('deduplicates across accounts and never erases better captures or edits', (
     assert.equal(store.importPosts([{ url: 'https://twitter.com/a/status/123', text: 'A long useful caption about AI coding', sourceAccount: '@one', thumbnail: 'https://pbs.twimg.com/media/a.jpg' }]).imported, 1);
     store.updatePost(1, { title: 'My title', notes: 'Try this next week', tags: ['Read Later'], favorite: true, archived: true });
     assert.equal(store.importPosts([{ url: 'https://x.com/i/status/123', text: 'Short', sourceAccount: '@two' }]).updated, 1);
-    const [p] = store.posts(); assert.equal(p.title, 'My title'); assert.equal(p.notes, 'Try this next week'); assert.equal(p.favorite, true); assert.equal(p.archived, true);
+    const [p] = store.posts({ scope: 'all' }); assert.equal(p.title, 'My title'); assert.equal(p.notes, 'Try this next week'); assert.equal(p.favorite, true); assert.equal(p.archived, true);
     assert.equal(p.text, 'A long useful caption about AI coding'); assert.equal(p.thumbnail, 'https://pbs.twimg.com/media/a.jpg'); assert.deepEqual(p.accounts, ['@one', '@two']); assert.deepEqual(p.tags, ['read later']);
   } finally { store.close(); }
 });
@@ -32,7 +32,7 @@ test('backup restores annotations and valid rows survive malformed rows', () => 
   try {
     const result = store.importPosts([{ url: 'https://instagram.com/p/Abc/', notes: 'Keep this', accounts: ['@one', '@two'], favorite: true, archived: true, savedAt: '2025-05-01T00:00:00Z' }, { url: 'https://evil.com/' }, null]);
     assert.equal(result.imported, 1); assert.equal(result.rejected, 2);
-    const post = store.posts()[0]; assert.equal(post.notes, 'Keep this'); assert.equal(post.favorite, true); assert.equal(post.archived, true); assert.deepEqual(post.accounts, ['@one', '@two']); assert.equal(post.savedAt, '2025-05-01T00:00:00.000Z');
+    const post = store.posts({ scope: 'all' })[0]; assert.equal(post.notes, 'Keep this'); assert.equal(post.favorite, true); assert.equal(post.archived, true); assert.deepEqual(post.accounts, ['@one', '@two']); assert.equal(post.savedAt, '2025-05-01T00:00:00.000Z');
   } finally { store.close(); }
 });
 test('passwords, expiring sessions and single-use revocable pairing', () => {

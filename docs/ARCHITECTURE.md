@@ -1,44 +1,49 @@
 # Architecture
 
-```text
-Instagram Saved / X Bookmarks (your logged-in tab)
-        │ rendered DOM only; selected tab, no cookies exported
-        ▼
-Extension collector (isolated content-script world)
-        │ batches via chrome.runtime messaging
-        ▼
-Extension service worker (holds paired device token)
-        │ HTTPS, or HTTP on loopback for local development
-        ▼
-Node 24 HTTP server → SQLite → authenticated web library
-```
+The local web library posts a job to `/api/sync`. A localhost content-script bridge wakes the extension immediately in Chrome; a 30-second Chrome alarm also checks the queue, allowing requests from other browsers or the Codex in-app browser.
 
-There are no social API calls. A website alone cannot read the social tabs; the extension supplies the import bridge.
+The extension claims a job, creates an inactive muted tab, and collects X Bookmarks or Instagram All posts using the existing Chrome login. It owns and closes only the tabs it creates. It never navigates or scrolls a pre-existing user tab.
 
-## Authentication boundaries
+Dedicated sync pages carry `#savex-sync`. An early main-world layout helper provides a timer fallback for animation-frame callbacks on these hidden pages. The isolated collector also dispatches scroll events after moving the viewport so virtualized feeds can advance without selecting the tab.
 
-The first-run setup code is random per server process and printed only in the terminal. It is needed once to set a scrypt-hashed password. Web login creates a random seven-day session; only its SHA-256 hash is stored in SQLite. The cookie is HttpOnly, SameSite=Strict, and Secure when configured for HTTPS. Mutations require the exact application Origin; Host checks limit DNS rebinding. Requests have size limits, and login/pairing attempts are rate limited by socket IP. Behind a reverse proxy the socket IP is shared, deliberately favoring a conservative personal-app limit over trusting spoofable forwarded headers.
+Collector batches are acknowledged by the Node server before being dropped from the collector queue. Jobs and runs persist an explicit quick/deep mode. Quick collection uses an account-scoped snapshot of stored post IDs and stops after 20 distinct known IDs, importing only unseen posts; repeated viewport content does not advance the boundary. Deep collection ignores that boundary and is only queued by an explicit user action. Quick limits are 500 posts/10 minutes; deep limits are 100,000 posts/two hours. Idle and interrupted collection stays partial. There is no durable remote pagination cursor; interrupted deep scans may retraverse earlier history.
 
-An authenticated web session creates a five-minute single-use pairing code. The extension exchanges it for a random device bearer token. Only the token hash is stored server-side. That token can create sync runs and send/finalize batches belonging to that device. It cannot export/read the library, edit user notes, delete posts or pair another browser. Revocation takes effect on the next server request. Extension storage is restricted to trusted extension contexts, so the collector never reads pairing tokens. Optional host permissions are requested only for the chosen library host; the social-page grant comes from activeTab.
+`sync_discoveries` records successfully stored posts observed in each account/run. Extra detail selection is restricted to that run, skips archived records, complete X list metadata and all previous successful detail fetches, and caps visits at 25. Failed attempts have a one-day retry delay. Three unavailable detail pages end enrichment; pending counts are reported. The extension does not persist an ever-growing URL array for large collections.
 
-## Data model
+The server validates and deduplicates posts in SQLite, preserving titles, notes, tags, favorite/archive state and accounts. Post media stays on its platform; the library stores links and search/classification metadata rather than image bytes. Startup removes the old generated media cache.
 
-- `posts`: unique `(platform, external_id)`; canonical URL, captured text, creator, media URL, content type, topic suggestions, custom tags, source account labels, timestamps, notes, favorite and archive flags.
-- `sync_runs`: device, platform/account, progress counters and final status/message. Stale running records appear interrupted after twenty minutes.
-- `devices`, `pairing`, `sessions`, `settings`: single-owner access and browser pairing.
+Archive is a local exclusion from the active knowledge base. `Store.posts()` and `GET /api/posts` default to active records; `scope=archive` and `scope=all` must be requested explicitly. The management UI loads all records to support archive counts and restoration, then scopes its search, filters and topics to the active or archived view. Backups include both scopes. Sync updates preserve the archive flag; enrichment queues use the active default. Future MCP retrieval tools should use the default active reads.
 
-Ingestion is transactional. An invalid row does not prevent valid rows in the same batch from importing. Reimports keep the longer caption and existing title/notes/favorite/archive state, union tags/topics/account labels, and replace a valid thumbnail URL when newly captured. Original saved timestamps from backups are restored into a fresh library; social imports use the time first imported, not an invented original save time.
+`sync_jobs` persists queue status, ownership, results and cancellation. Extension storage persists orchestration state, owned tab IDs and progress. Heartbeats and stale-job handling permit recovery after interruption. `sync_runs` records per-source imports and metadata activity. A stopped or interrupted sync keeps its acknowledged batches.
 
-## Collector lifecycle
+Local mode bypasses library passwords, sessions and extension pairing. It keeps loopback binding and host/origin checks. The legacy authenticated backend remains available for future development; the new background workflow is local-only.
 
-1. Popup starts a run for the active tab; service worker validates its URL and injects scripts using activeTab.
-2. Extract current rendered posts before each scroll. The first pass resets to the top if necessary.
-3. Keep a set of seen post URLs; send batches every twenty posts or every other pass, waiting for server acknowledgement before continuing.
-4. Stop on navigation/account changes, login/rate-limit notices, user cancellation, ten minutes, chosen post limit, or five no-new-content checks. A no-new-content result remains explicitly partial.
-5. Finish the run and retain all acknowledged data. Popup checks for missing collectors after reload/navigation; stale server records eventually display interrupted.
+No external API keys, runtime npm packages, AI services, manual X account switching, video downloads or subscription services are required. Collection remains best effort and does not guarantee full platform history. Manual X deep scans inspect up to 25 missing older saves using explicit bookmark controls on the exact post and verified account. Two stable unsaved observations separated by a reload permit removing only that source association; absence, failures, and unknown UI states do not. Archived posts are retained. Instagram and Chrome deletion propagation is not supported. Missing-check attempts have a one-day cooldown; larger backlogs require another manual deep scan. Only helpers advertising sync-mode support may claim deep jobs.
 
-The service worker stores current run state in local extension storage so reopening the popup works. There is no unattended scheduling or automatic retry. If a network acknowledgement is lost after the server commits, starting a new sync is safe because ingestion is idempotent at the post level; revisited counters can increase.
+## Native preview frames
 
-## Deliberate limits
+A preview-only HTTP server listens on a separate, dynamically allocated loopback port. The library session reports that origin and the main page’s CSP permits frames only from that preview origin. The preview server serves only validated post documents and its host JS/CSS; it has no library API or saved-content endpoints.
 
-No platform passwords, hidden API interception, proxies, CAPTCHA solvers, automatic account switching, video downloads, transcript generation, guaranteed full captions, two-way unsaving, or multi-user hosting. Thumbnails are remote links with an expiry fallback. Keyword topics and search work without external services. Library JSON backups preserve user-owned annotations.
+The grid and expanded preview load `/embed/x/:id` or `/embed/instagram/:kind/:code` on that separate origin. These documents load the platforms’ official widget scripts. Cross-origin isolation keeps them away from the library document and APIs, while sandbox permissions let the SDKs initialize their own nested players. The preview CSP permits embedding only from the configured library origin and its loopback alias.
+
+The parent validates resize/readiness messages against the exact child window, lazy-loads nearby cards, and displays retry/original-link actions on failure. Keyed card updates preserve the existing iframe during background sync and annotation changes. Expanded-preview frames are removed when the dialog closes.
+
+## X account selection
+
+The helper discovers signed-in handles by reading X’s rendered account menu and publishes the catalog to the local server. Sync jobs persist `x_account` as `current`, `all`, or a specific handle. A durable per-account plan processes each selection sequentially, using the account menu’s exact Switch to control and verifying the profile link before importing. A missing or failed selection never silently falls back to another account.
+
+Only helpers advertising account-switching support may claim jobs that require explicit selection. Results retain each source account, and ingestion merges account labels on a shared post. The library remembers the chosen account setting. Shared browser login state is allowed to change during this user-authorized workflow.
+
+## Chrome bookmark source
+
+The optional `bookmarks` permission enables read-only `chrome.bookmarks.getTree()` import. `extension/bookmarks.js` flattens the folder tree, rejects unsupported schemes and credentials, and combines duplicate URLs before batching them through normal sync runs. Chrome-only jobs require bookmark access but not social host access; older helpers cannot claim them. All-sources plans include Chrome first.
+
+Bookmark records use the `chrome` platform and a SHA-256 identity over the normalized full HTTP/HTTPS URL, preserving meaningful query strings and fragments. `bookmark_title` and `folders` are source metadata refreshed on reimport; `title`, notes and user classifications remain user-owned. No destination fetch occurs. The shared library includes a source tab, folder filter, URL/title/folder search and backups. Imports are additive, with no writes back to Chrome.
+
+## Instagram collections
+
+Instagram sync visits the account's Saved index before All posts. The extractor reads same-account collection links and accessible names, ignores All posts and Audio, and uses the numeric Instagram collection ID as identity across slug/name changes. A bounded catalog discovery adds each observed collection to the persisted job plan. Every collection inherits the explicitly requested quick/deep mode; catalog discovery never upgrades a quick sync to deep.
+
+`instagram_collections` stores account-scoped external IDs, names and links. `instagram_collection_posts` associates collections with deduplicated posts; `sync_runs.collection_id` scopes membership ingestion and known-ID snapshots. Global presence never establishes a collection boundary. Collection passes don't multiply individual detail visits. Partial lists retain existing folders and associations. Instagram membership removals are not inferred from absent page content.
+
+Library reads expose the catalog (including empty collections) and each post's memberships. The sidebar renders accessible nested list items with connecting CSS branches; collection selection filters by stable local collection ID and coexists with search/date/topic filters. Catalog/membership changes refresh without reloading the page. Backed-up posts carry their collection metadata for restoration. Helpers must advertise collection support before claiming Instagram jobs.

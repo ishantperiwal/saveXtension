@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createApp } from '../server/app.mjs';
 
 test('authenticated library → pair → incremental sync → revoke, with origin and device isolation', async () => {
-  const app = createApp({ origin: 'http://localhost:3219', setupCode: 'known-test-code' });
+  const app = createApp({ origin: 'http://localhost:3219', localMode: false, setupCode: 'known-test-code' });
   app.server.listen(3219, '127.0.0.1'); await once(app.server, 'listening');
   let cookie;
   async function req(path, body, extra = {}) {

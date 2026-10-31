@@ -1,0 +1,19 @@
+import { accountOptions } from './filters.js';
+
+// Source-account metadata identifies the saver; creator handles never enter this list.
+export function sidebarAccounts(posts, catalog = [], collections = []) {
+  let options = accountOptions(posts, catalog).filter(option => option.platform !== 'chrome');
+  for (const collection of collections) {
+    const handle = collection.account;
+    if (!handle) continue;
+    const value = `instagram:${handle.toLowerCase()}`;
+    if (!options.some(option => option.value === value)) options.push({ value, platform: 'instagram', label: handle });
+  }
+  for (const platform of ['instagram', 'x']) if (options.some(option => option.platform === platform && option.value.startsWith(`${platform}:@`))) options = options.filter(option => option.value !== `${platform}:*`);
+  const live = posts.filter(post => !post.archived);
+  return options.sort((a, b) => (a.platform === 'instagram' ? 0 : 1) - (b.platform === 'instagram' ? 0 : 1) || a.label.localeCompare(b.label)).map(option => {
+    const handle = option.value.slice(option.platform.length + 1);
+    const count = live.filter(post => post.platform === option.platform && (handle === '*' || (handle ? (post.accounts || []).some(account => account.toLowerCase() === handle) : !(post.accounts || []).length))).length;
+    return { ...option, count };
+  });
+}

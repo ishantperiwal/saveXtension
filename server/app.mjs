@@ -4,14 +4,22 @@ import { resolve, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
-import { HttpError, text } from './domain.mjs';
+import { previewServer } from './embeds.mjs';
+import { syncQueue } from './sync.mjs';
+import { HttpError, text, canonicalPost } from './domain.mjs';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, setupCode = token() } = {}) {
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token() } = {}) {
   const store = new Store(dataPath || ':memory:');
+  if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
+  const sync = syncQueue(store);
+  // Discard the generated image cache; previews are served by the platforms.
+  store.db.exec('DROP TABLE IF EXISTS media_cache');
+  const preview = previewServer(new URL(origin).origin);
+
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
   function limited(req, group, max = 10) {
@@ -24,8 +32,9 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     if (attempts.size > 10000) for (const [k, v] of attempts) if (v.reset < now) attempts.delete(k);
   }
   function sessionValue(req) { return req.headers.cookie?.split(';').map(v => v.trim()).find(v => v.startsWith('savex_session='))?.slice(14); }
-  function session(req) { if (!store.session(sessionValue(req))) throw new HttpError(401, 'Please sign in to your library.'); }
+  function session(req) { if (localMode) return; if (!store.session(sessionValue(req))) throw new HttpError(401, 'Please sign in to your library.'); }
   function device(req) {
+    if (localMode) return { id: 'local-browser', name: 'Local Chrome' };
     const value = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
     const found = store.device(value);
     if (!found) throw new HttpError(401, 'Extension disconnected. Pair it again from your library.');
@@ -51,11 +60,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   }
   function json(res, value, status = 200) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
   const server = createServer(async (req, res) => {
+    try { await preview.ready; } catch { /* The library and original links remain usable if previews cannot start. */ }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-src ${preview.origin || "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     const requestOrigin = req.headers.origin;
     // Extension origins receive CORS only for their limited token-authenticated endpoints.
     const path = new URL(req.url, appOrigin).pathname;
@@ -80,7 +90,8 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (requestOrigin !== appOrigin && !localOrigin) throw new HttpError(403, 'Request must come from your library.');
       }
       if (isExtensionRoute && requestOrigin && !extensionOrigin(requestOrigin) && requestOrigin !== appOrigin) throw new HttpError(403, 'Unsupported extension origin.');
-      if (path === '/api/session' && req.method === 'GET') return json(res, { setupRequired: !store.get('password'), authenticated: store.session(sessionValue(req)), name: store.get('name') || 'My library' });
+      if (localMode && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) throw new HttpError(403, 'Local mode only accepts connections from this computer.');
+      if (path === '/api/session' && req.method === 'GET') return json(res, { embedOrigin: preview.origin, localMode, setupRequired: !localMode && !store.get('password'), authenticated: localMode || store.session(sessionValue(req)), name: store.get('name') || 'My saves' });
       if (path === '/api/setup' && req.method === 'POST') {
         limited(req, 'auth');
         if (store.get('password')) throw new HttpError(409, 'Your library is already set up.');
@@ -102,9 +113,61 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       }
       if (isExtensionRoute) {
         const d = device(req);
+        if (localMode && path === '/api/extension/jobs' && req.method === 'POST') {
+          const input = await body(req); sync.heartbeat(input);
+          return json(res, { ...sync.status(), scanAccountsRequested: input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+        }
+        if (localMode && path === '/api/extension/queue' && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.enqueue(input.targets, input.xAccount, input.mode) }); }
+        if (localMode && path === '/api/extension/accounts' && req.method === 'POST') return json(res, { xAccounts: sync.setAccounts(await body(req)) });
+        if (localMode && path === '/api/extension/instagram-collections' && req.method === 'POST') {
+          const input = await body(req);
+          return json(res, { collections: store.upsertInstagramCollections(input.account, input.collections) });
+        }
+        if (localMode && path === '/api/extension/stop' && req.method === 'POST') return json(res, { job: sync.cancel() });
+        const jobPath = path.match(/^\/api\/extension\/jobs\/([a-f0-9]+)$/);
+        if (localMode && jobPath && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.update(jobPath[1], input.instance, input) }); }
+        if (localMode && path === '/api/extension/details' && req.method === 'GET') {
+          const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
+          const runId = query.get('runId');
+          if (runId) {
+            const run = store.run(runId, d.id);
+            if (!run || run.platform !== platform || run.account !== account || run.status !== 'running') throw new HttpError(404, 'Active sync not found.');
+          }
+          const candidates = store.detailCandidates(platform, account, runId);
+          const posts = candidates.slice(0, 25).map(p => ({ url: p.url }));
+          return json(res, { posts, remaining: Math.max(0, candidates.length - posts.length) });
+        }
+        if (localMode && path === '/api/extension/known' && req.method === 'GET') {
+          const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
+          if (!['x', 'instagram'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
+          return json(res, { ids: store.knownPostIds(platform, account, query.get('collectionId')) });
+        }
         if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
         if (path === '/api/extension/runs' && req.method === 'POST') {
-          const input = await body(req); return json(res, { runId: store.startRun(d.id, input.platform, input.account) });
+          const input = await body(req); return json(res, { runId: store.startRun(d.id, input.platform, input.account, input.mode, input.collectionId) });
+        }
+        const missingPath = path.match(/^\/api\/extension\/runs\/([a-f0-9]+)\/missing$/);
+        if (localMode && missingPath) {
+          const run = store.run(missingPath[1], d.id);
+          if (!run || run.status !== 'running' || run.mode !== 'deep' || run.platform !== 'x' || !run.account) throw new HttpError(409, 'An active manual X deep scan is required.');
+          if (req.method === 'GET') {
+            const candidates = store.missingFromRun(run);
+            return json(res, { posts: candidates.slice(0, 25), remaining: Math.max(0, candidates.length - 25) });
+          }
+          if (req.method === 'POST') {
+            const input = await body(req), post = canonicalPost(input.url);
+            if (post.platform !== 'x') throw new HttpError(400, 'Choose an X post.');
+            const observed = store.db.prepare(`SELECT 1 FROM sync_discoveries WHERE platform='x' AND account=? AND external_id=? AND last_seen_run=?`).get(run.account, post.externalId, run.id);
+            if (observed) throw new HttpError(409, 'This post was found in the current saved list.');
+            let removed = false;
+            if (input.observations !== undefined) {
+              if (!Array.isArray(input.observations) || input.observations.length !== 2 || input.observations.some(o =>
+                o?.state !== 'unsaved' || o?.externalId !== post.externalId || typeof o.account !== 'string' || o.account.toLowerCase() !== run.account.toLowerCase())) throw new HttpError(400, 'Two explicit, account-matched unsaved observations are required.');
+              removed = store.removeSourceSave(post.url, run.account);
+            }
+            store.set(`unsave-attempt:${run.account.toLowerCase()}:${post.url}`, String(Date.now()));
+            return json(res, { removed });
+          }
         }
         const match = path.match(/^\/api\/extension\/runs\/([a-f0-9]+)(\/finish)?$/);
         if (match && req.method === 'POST') {
@@ -115,16 +178,36 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (match[2]) { store.finishRun(run.id, input.status, input.message); return json(res, { ok: true }); }
           if (!Array.isArray(input.posts) || input.posts.length > 200) throw new HttpError(400, 'Send at most 200 posts per batch.');
           const result = store.importPosts(input.posts.map(p => p && typeof p === 'object' ? ({
-            url: p.url, title: p.title, text: p.text, author: p.author, authorName: p.authorName,
-            thumbnail: p.thumbnail, kind: p.kind, publishedAt: p.publishedAt, sourceAccount: run.account
+            platform: run.platform, url: p.url, title: p.title, text: p.text, author: p.author, authorName: p.authorName,
+            bookmarkTitle: p.bookmarkTitle, folders: p.folders, savedAt: p.savedAt,
+            thumbnail: p.thumbnail, media: p.media, kind: p.kind, publishedAt: p.publishedAt, sourceAccount: run.account
           }) : p));
+          if (input.details === true) for (const post of input.posts) { try { store.set(`detail:${canonicalPost(post.url).url}`, String(Date.now())); } catch { /* Invalid rows were rejected above. */ } }
+          if (input.details !== true) store.recordDiscoveries(run, input.posts);
+          if (input.detailFailed) {
+            const canonical = canonicalPost(input.detailFailed);
+            if (canonical.platform !== run.platform) throw new HttpError(400, 'Wrong detail source.');
+            store.set(`detail-attempt:${canonical.url}`, String(Date.now()));
+          }
           store.recordRun(run.id, result); return json(res, result);
         }
         throw new HttpError(404, 'Extension endpoint not found.');
       }
       if (path.startsWith('/api/')) {
         session(req);
-        if (path === '/api/posts' && req.method === 'GET') return json(res, { posts: store.posts(), runs: store.runs() });
+        if (localMode && path === '/api/library' && req.method === 'POST') {
+          const input = await body(req); store.set('name', text(input.name, 50) || 'My saves');
+          return json(res, { name: store.get('name') });
+        }
+        if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, sync.status());
+        if (localMode && path === '/api/sync/setup' && req.method === 'POST') return json(res, sync.requestSetup((await body(req)).kind));
+        if (localMode && path === '/api/sync/accounts' && req.method === 'POST') return json(res, sync.requestAccountScan());
+        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.enqueue(input.targets, input.xAccount, input.mode) }); }
+        if (localMode && path === '/api/sync/stop' && req.method === 'POST') return json(res, { job: sync.cancel() });
+        if (path === '/api/posts' && req.method === 'GET') {
+          const scope = new URL(req.url, appOrigin).searchParams.get('scope') || 'active';
+          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections() });
+        }
         if (path === '/api/posts/import' && req.method === 'POST') {
           const input = await body(req);
           if (!Array.isArray(input.posts) || input.posts.length < 1 || input.posts.length > 200) throw new HttpError(400, 'Import between 1 and 200 posts at a time.');
@@ -139,7 +222,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (dev && req.method === 'DELETE') { store.revoke(dev[1]); return json(res, { ok: true }); }
         if (path === '/api/export' && req.method === 'GET') {
           res.setHeader('Content-Disposition', 'attachment; filename="savextension-backup.json"');
-          return json(res, { version: 1, exportedAt: new Date().toISOString(), posts: store.posts() });
+          return json(res, { version: 1, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections() });
         }
         throw new HttpError(404, 'Endpoint not found.');
       }
@@ -156,5 +239,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       if (!(e instanceof HttpError)) console.error(e);
     }
   });
+  server.on('listening', () => preview.start());
+  server.on('close', () => { preview.close(); });
   return { server, store, setupCode };
 }

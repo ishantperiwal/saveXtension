@@ -1,131 +1,143 @@
 # saveXtension
 
-Your Instagram saves and X bookmarks, together in a private, searchable library.
+Your Instagram saves and X bookmarks in one searchable library, on your computer.
 
-A personal, self-hosted web app and a Manifest V3 Chrome/Edge extension. Open the account’s Saved or Bookmarks page, press **Sync**, and the extension sends the posts it can load to your library. Repeat for each account. There are **no Instagram/X API keys, AI-service keys, or npm runtime dependencies**.
+## Start
 
-## Start here
-
-Install **Node.js 24 or later**. Then:
+Use Node.js 24 or later:
 
 ```sh
-git clone https://github.com/ishantperiwal/saveXtension.git
-cd saveXtension
 npm start
 ```
 
-Open **http://localhost:3210**. On first launch the terminal prints a **setup code**. Paste it into the web app, choose a library name and a password of at least 12 characters. Your saves are stored in `data/savextension.sqlite`.
+On this Mac, you can also double-click **Start saveXtension.command**, or run `npm run open`. This starts the server if needed and opens your library.
 
-`npm start` packages the extension automatically. No `npm install` is needed to run the application; dependencies are only for development tests.
+Open **http://localhost:3210**. There is no password, setup code, or pairing code in local mode. Existing saves and notes are preserved. Change the library name under **Settings & backups**. Open a save to add a note; it saves automatically as you type.
 
-## Install and pair the extension
+No runtime npm packages, API keys, AI services, or subscriptions are required.
 
-1. In Chrome open `chrome://extensions` (Edge: `edge://extensions`). Enable **Developer mode**.
-2. Choose **Load unpacked** and select this repository’s **`extension/`** folder. Alternatively, use **Connect extension → Download extension** in the web app, unzip, and select its `extension/` folder.
-3. Pin the extension using the browser’s Extensions menu.
-4. In the web library click **Connect & sync → Generate pairing code**.
-5. Open the extension’s **settings**. Enter `http://localhost:3210`, the one-time code, and a browser name. Read and accept the import notice, then **Pair my library**. Approve access to the library host when the browser asks. Codes expire in five minutes and work once.
+## One button for setup and sync
 
-The extension gets a separate token. It never receives your library password. Revoke that browser at any time in **Settings & backups → Disconnect**.
+Click the sync control directly below the sidebar logo. It shows an estimated **Synced** time; a new library shows **Sync saves**. While a sync runs it shows the current state. Successful and partial syncs update the timestamp, which survives restarts and is not replaced by failed or cancelled attempts.
+
+The main sidebar click starts a quick sync with your saved choices. Its small arrow opens **Sync options**, with an estimated **Last synced** heading, account chips and active-save counts, plus manual **Deep scan**. Choose one or several accounts; the choices persist for the next sync. These controls are kept out of the browsing toolbar, which contains Filters and search.
+
+The sidebar control starts the selected sources:
+
+- If the extension is ready, background syncing starts immediately. You do not need to open the extension.
+- If no helper is detected, the app downloads `savextension.zip` and shows installation instructions: unzip, open `chrome://extensions` (or `edge://extensions`), enable Developer mode, and load the extracted `extension/` folder.
+- If Chrome needs background access, click **Open setup in Chrome**, then approve the extension’s one-time X/Instagram permission request.
+- If your helper connected before but is offline, the app asks you to open Chrome instead of downloading another copy.
+
+The installation dialog checks for readiness and starts the requested sync automatically when setup finishes. Closing that dialog cancels the pending request. Downloads do not repeat when you use Check installation; Download again and Reinstall remain available explicitly.
+
+Sign in to X or Instagram in Chrome normally. Social passwords and cookies are not sent to the library. Chrome still requires you to complete extension installation and permission approval yourself.
+
+The same Sync button works from another browser or the Codex in-app browser when a connected Chrome helper is online.
 
 ## Sync
 
-### X / Twitter
+Open the arrow within the sidebar **Sync** button to choose Instagram, Chrome, and individual signed-in X accounts using chips. **All** selects every available account. Click **Sync now**, or use the main sidebar button later to repeat those choices.
 
-Sign into your account in the browser and open **Bookmarks** (`https://x.com/i/bookmarks`). Click the extension icon, optionally label the account, choose a post limit, and press **Sync this Saved / Bookmarks tab**.
+For social sources, the extension creates its own inactive, muted tab and discovers saved posts in batches. It only visits individual posts when richer details are missing; successful detail captures do not expire daily. It closes its own tabs when done. Your existing tabs are never navigated or scrolled. Progress and **Stop** stay in the library; imported batches are kept even if you stop.
 
-### Instagram
+The Chrome library page starts the request immediately. If using the library in another browser or the Codex in-app browser, Chrome checks the local queue about every 30 seconds. Keep Chrome and the local server running.
 
-Open your profile’s **Saved** page on the desktop website. Open **All posts** or a specific collection so the post grid is visible. Click the extension and press **Sync**. Collection tiles on the Saved landing page aren’t themselves posts.
+For X, select one or several detected **@handle** chips inside **Sync options**. A current-account fallback appears before account discovery. The helper discovers accounts from X’s own account menu and switches automatically before importing each selected account. It verifies the active profile before starting an import. The chips follow the accounts X exposes rather than assuming a pair. Choosing several but not all X accounts requires the updated helper; older helpers leave those requests queued instead of importing excluded accounts. Signed-in accounts are detected automatically at startup and checked periodically; there is no separate refresh control.
 
-Keep the source tab open until the import stops. You may close the popup: the collector runs in the source tab. It captures small batches, scrolls to load more, and sends acknowledged batches to the server. Reopening the popup shows progress. **Stop sync** retains batches already received.
+Account switching shares X’s login state with your other Chrome tabs and may leave X on the last account synced. Saves are labeled with their source account; the same post saved by multiple accounts stays one library record with both labels. Your own titles, notes and tags are preserved. Login prompts and platform checks still require you to resolve them normally.
 
-For another account, switch accounts yourself and repeat. X profile links and the Instagram Saved path provide account labels when available; the optional input overrides detection. Imported posts are deduplicated by platform and post ID, even if you saved the same post from several accounts.
+Instagram uses the active Instagram login. On each Instagram sync, it first reads the Saved collection list, then checks **All posts** and each collection exposed in that list. Names appear automatically beneath **Instagram** as an indented sidebar tree with connecting branches. Click a collection to browse its captured posts. A post in multiple collections remains one library record, with a membership in each collection. Collection names retain emoji; identical names under different accounts remain separate.
 
-### What “Sync” means here
+Quick checks use a separate known-post boundary for each collection, so an existing library post can still acquire its original Instagram folder membership. Deep scans check older collection history only when manually requested. Collection passes capture list metadata and membership without adding individual detail-fetch passes for each folder. Empty collections remain listed, and renaming a collection updates its name without losing membership. Partial or missing collection lists never erase existing folders or memberships. The next sync requires the updated extension (1.6.0 or later); older helpers are asked to reload before claiming Instagram jobs.
 
-This is a **user-triggered, additive import**, not unattended background mirroring. Unsaving a post on Instagram/X does not delete your local copy. It doesn’t traverse unopened Instagram collections, switch accounts, or access the native mobile apps.
+**Sync** performs a quick check. It imports new post IDs and stops after a stretch of 20 distinct previously saved posts for that source account. The same post under another account does not establish this boundary. Quick checks are limited to 500 posts or ten minutes per account/collection; they do not verify older history or older unsaves. With no known posts, the quick check collects until the page stops yielding posts or a limit is reached; choose Deep scan for a larger first import.
 
-- **X:** captures rendered post text, author, timestamp, and available image/video-poster URLs. Collapsed long posts and unloaded thread replies aren’t expanded.
-- **Instagram:** captures rendered post links, thumbnail URLs and available image accessibility descriptions. Grid pages often do **not** expose full captions or reliable creator names. Full carousel slides, video files and transcripts aren’t downloaded.
-- **Previews:** images load from the original platform, with no referrer, and can expire. A fallback card retains the original link and captured text. Private, deleted or restricted originals can still require the corresponding social login.
-- **Completeness:** virtualized feeds, layout changes, slow loading, login checks and platform limits can cause partial imports. After five checks with no new posts the app reports a **partial import**, not a guaranteed full history. Each run is capped at ten minutes and the chosen post limit (50–5,000).
+**Deep scan**, in the sidebar’s **Sync options** menu and in the extension popup, is always manual. It checks older history without stopping at known posts, with limits of 100,000 posts or two hours per account/collection. No timer, quick check, startup, or partial result schedules another deep scan. Thousands of posts can still take time to load. The library keeps acknowledged batches immediately; Stop keeps imported data. An interrupted scan may need to traverse earlier pages again on the next manual attempt; there is no reliable platform pagination checkpoint yet.
 
-**Platform rules matter:** X explicitly prohibits non-API automation, including scripting its website, and says accounts may be suspended. [Read X’s automation rules](https://help.x.com/en/rules-and-policies/x-automation). Instagram’s terms also restrict unauthorized automated collection; review the [Instagram terms](https://help.instagram.com/581066165581870). A user-triggered extension is not an assurance of platform permission. This tool does not bypass login checks, rate limits, challenges or access controls. Use manual links/file imports if you don’t want browser-based collection.
+Both modes deduplicate by platform post ID. Extra detail visits are limited to 25 per source scan and to posts observed in that run. Posts with complete X list metadata or a previous successful detail capture are skipped. Failed detail attempts wait a day before retrying; pending details are reported and can be revisited in a later manual deep scan.
 
-## Use the library
+During a manual X deep scan, older saves missing from the exposed list are checked separately, up to 25 per source scan. Missing from a list alone never deletes anything. Removal requires an explicit enabled **Bookmark** control on the exact post, with the signed-in account verified, stable across samples and confirmed again after a page reload. An unavailable post, unknown control, account mismatch, or absence from a partial list alone leaves the save intact. A confirmed unsave removes that account association; another account's save and its notes are retained. Locally archived posts are retained. Instagram and Chrome unsaves/deletions are not propagated.
 
-- Search captured text, titles, notes, tags, creators, URLs and source accounts. Press `/` to focus search.
-- Filter by platform, favorites, archive, or topic. Sort newest/oldest/by creator; use grid or list view.
-- Open a card to add a title, notes and tags, archive it, or open the original.
-- **Topics** are local keyword suggestions, not AI analysis. No content is sent to an LLM.
-- **Settings & backups → Export library** downloads JSON containing your saves and annotations.
-- **Add a save → Import** reads JSON, HTML, TXT URL lists, or JSON data assigned inside an X archive `.js` file. It never executes imported scripts. Extract ZIP archives first. Formats and export contents vary, and some exports omit saved posts. Only supported post links are imported.
-- An imported saveXtension backup restores notes, tags, accounts, favorite/archive states and saved timestamps into a fresh library. Reimports preserve existing edits. Restore backup files through the authenticated UI, not through the extension.
-- **Sample library** is explicitly labeled example content and never added to your real saves.
+Slow loading, virtualized feeds and platform changes can produce partial imports. Five checks without new content, an interruption, or a safety limit produces an incomplete result, never a claim that all history or all removals were verified.
 
-## Configuration
+## Chrome bookmarks
 
-Copy `.env.example` to `.env` to change defaults. Node reads `.env` at startup.
+Choose **Chrome bookmarks** and click **Sync**. On first use, open setup and approve **Allow Chrome bookmarks**. This optional permission is separate from X/Instagram access; browser bookmarks work without social logins. Chrome itself describes the permission as reading and changing bookmarks, but saveXtension only reads the tree.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | Listening address; loopback by default |
-| `PORT` | `3210` | HTTP port |
-| `APP_ORIGIN` | `http://localhost:<PORT>` | Exact browser-facing origin; required for a custom hostname/reverse proxy |
-| `COOKIE_SECURE` | `false` | Set `true` behind HTTPS; required when origin is HTTPS |
-| `DATA_DIR` | `./data` | Persistent SQLite directory |
+The **Chrome bookmarks** source tab shows titles, domains and full folder paths. Search includes bookmark titles, URLs, folders and your annotations. Filter by folder or view browser bookmarks alongside social saves in **All saves**. Duplicate URLs merge with all their folders. A repeat sync refreshes Chrome’s title and folder metadata while preserving your own title, notes and tags. Chrome links stay separate from social-save records even when a bookmark points at a social post.
 
-For access from other machines, host it behind an **HTTPS reverse proxy**, set `HOST=0.0.0.0`, `APP_ORIGIN=https://your-host.example`, and `COOKIE_SECURE=true`. Preserve the original `Host` header at the proxy. Pair the extension with that exact public origin. A hosted library can be viewed from your phone; browser syncing still runs on desktop. This is a **single-user personal library**, not a multi-tenant service with invitations, account recovery or billing.
+The import uses the current Chrome profile’s bookmark tree, without opening bookmarked websites or changing bookmarks. It supports HTTP/HTTPS links; bookmarklets, internal Chrome pages and file links are skipped. Deleted Chrome bookmarks are retained in the library until you remove them there; library edits do not change Chrome. No page screenshots, favicons or website content are downloaded. Chrome bookmark metadata is included in library backups.
 
-### Docker
+## Native previews and local content
 
-```sh
-docker compose up --build -d
-docker compose logs app
+X posts and Instagram posts/Reels render as native platform embeds directly in the grid and in the expanded preview. Their own media players and carousel controls are available where the platform supports the post. Your notes and automatic topic labels remain around the embed. Chrome bookmark titles come from Chrome.
+
+Only posts near the viewport load embeds. Platform scripts run inside sandboxed preview frames rather than the library document. Background metadata refreshes update the wrapper without rebuilding an existing player. Closing an expanded preview unloads that preview’s frame.
+
+Posts load live from their platforms. There is no saved-copy view or duplicated creator header. Unavailable embeds show **Retry** and **Open original**. Native embeds need internet access and depend on the platform allowing embedding; private, deleted, age-restricted or embedding-disabled posts may be unavailable. No paid embedding service or API key is required.
+
+Links, searchable metadata, classifications and your annotations stay in SQLite. Post images and video are not copied into the library; the old generated image cache is removed on upgrade. Richer metadata capture is best effort.
+
+## Backups
+
+**Settings & backups → Export library** downloads JSON with your saves and annotations. **Settings → Import a file** accepts saveXtension JSON backups, JSON/HTML/TXT URL lists and supported X archive JS data files. ZIP archives must be extracted first; imported scripts are never executed.
+
+For a full library database backup, stop the server and copy the entire `data/` folder. Data is stored in `data/savextension.sqlite`.
+
+## Local configuration
+
+Optional `.env` settings:
+
+```dotenv
+HOST=127.0.0.1
+PORT=3210
+# DATA_DIR=./data
 ```
 
-Open `http://localhost:3210` and use the setup code from the logs. Compose binds only to loopback and keeps SQLite in the `savextension-data` volume. Back up the volume or export your library before removing it.
+Local mode accepts only loopback connections and localhost origins. It retains host/origin checks. It is intended for your computer, not public hosting. The old password-authentication backend is retained behind `AUTH_REQUIRED=true` for future development; the new background sync workflow targets local mode.
 
-### Backups and password recovery
-
-Keep JSON exports somewhere private. For a full database backup, stop the server before copying the entire `data/` directory (SQLite may use `-wal` and `-shm` companions while running). Database files and export JSON are not encrypted at rest.
-
-If you forget your password, there is no remote recovery service. Stop the server and run:
-
-```sh
-npm run reset-password
-```
-
-Confirm the local reset, restart, and use the newly printed setup code. This preserves saves, invalidates web sessions, revokes paired browsers and requires a new library password. It requires access to the local database; protect that directory.
-
-## Develop and test
+## Development
 
 ```sh
 npm ci
 npm test
-npx playwright install chromium
 npm run test:e2e
-npm run dev
 ```
 
-Server/domain tests cover URL validation, authentication, request origins, one-time pairing, token scopes/revocation, annotations and multi-account deduplication. DOM fixtures cover X and Instagram extraction. The browser suite exercises setup, saving, notes, search, file imports, backups, mobile layout, and the real extension service worker/options/collector against intercepted fixture pages. It pre-grants origins in an isolated test-only manifest to represent the browser permission dialog and toolbar’s activeTab grant. It **does not** sign into or collect from live social accounts.
+If needed, install the test browser with `npx playwright install chromium`. Browser tests use isolated profiles and intercepted fixture pages, without signing into real social accounts. Tests cover no-password local access, name/annotation preservation, queue claims/cancellation, live-only embeds, automatic X account switching, source-account deduplication and inactive-tab sync without moving the active tab.
 
-```sh
-npm run package:extension
-```
+`npm start` packages the extension automatically. `npm run package:extension` also creates `dist/extension.zip` and `public/extension.zip`. Reload the extension after source changes.
 
-Produces `dist/extension.zip` and the web app’s download at `public/extension.zip`. Reload the unpacked extension in the extensions page after editing its source.
+## Reading interface
 
-## Project map
+The library opens directly to search, source/topic filters and saved content. Counts appear once in source navigation. Sync progress floats at the bottom right with source icons, Stop and Dismiss, without moving posts. Finished notices disappear after eight seconds; dismissed jobs stay quiet for this browser session. Full run history lives in Settings. Favorites remain hidden. Archive sits below Chrome in the source list, and saves can be archived or restored from their footer or expanded view. Archived saves are excluded from the active library, source counts, topics, search and default API reads. Existing annotations and backup fields remain intact.
 
-```text
-server/       HTTP server, authentication, SQLite store, validation
-public/       Web library: plain browser JavaScript and CSS, no build step
-extension/    Manifest V3 extension, pairing settings, popup, DOM collectors
-scripts/      Extension packaging and local password recovery
-tests/        API/domain tests, DOM fixtures, browser integration test
-docs/         Security and architecture notes
-```
+Interface refinement used [unslop](https://heydamir.design/unslop) by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)), CC BY 4.0. Native post embeds provide the visual content; the shell uses quiet neutrals and the existing bookmark mark.
 
-The app’s `/api/*` routes are its **own internal backend**, not Instagram/X APIs. The extension only reads rendered DOM content and sends it to your selected library. It does not call undocumented social endpoints or copy social session cookies.
+## Notes
+
+Each save has one editable note. Changes save after a short typing pause, on blur and when the editor closes; there is no Save Changes action. Writes to the same save are serialized so a slower earlier request cannot replace newer typing. Pending drafts stay in browser storage and are restored after reload, then retried automatically after a failed request or reconnection. The status distinguishes saving, saved and retrying. Notes retain whitespace and support clearing to an empty value. Titles and manual tags are not editable in the interface; existing legacy metadata stays in backups. The top-level add button is removed in favor of source sync.
+
+## Search and navigation
+
+Press **⌘F** on Mac or **Ctrl+F** on Windows/Linux to focus the library search and select its current query. The search pill shows the shortcut for the current operating system. From the note editor, the shortcut flushes the note and closes the editor before focusing search. The slash key types normally. Source navigation uses recognizable Instagram, X and Chrome marks in a floating rounded sidebar; on small screens the same source controls form a compact floating strip.
+
+## Filters
+
+The library always uses the grid, ordered newest saved first. **Filters** opens a panel for saved dates, account chips, topics and Chrome folders. Select one or several Instagram/X handles directly, or Chrome bookmarks. Platform icons distinguish handles shared across services. A two-handle timeline brackets the saved period. Now is on the left and All Time (negative infinity) on the right; either endpoint can move. Selected endpoint labels are bold beneath the slider, with no repeated caption above. Stops include one calendar month ago, 30 days ago, one week ago, Yesterday and Today. The two handles cannot cross. Drag a handle, click/drag the track to move the nearest handle, or use arrow keys, Home and End. Labels and the matching-save count update while moving. The lower boundary is inclusive and the upper boundary exclusive, so Yesterday → Today selects yesterday and Today → Now selects today. Calendar boundaries use the browser’s local timezone.
+
+Saved dates on Instagram/X records reflect their first library sync, not the unavailable original bookmark timestamp. Chrome uses the bookmark’s original date. Account and topic selections each match either choice; different filter categories combine. Posts saved by multiple selected accounts appear once. The panel previews matching results and applies with **Show saves**; Escape/Close discards the draft. **Reset** beside Show clears the draft. Applied filters appear as removable chips, with **Clear all** to reset them. Chrome folders are available when Chrome alone is selected. Search combines with these filters, and Cmd/Ctrl+F closes the panel to focus search.
+
+The interface uses locally served Space Grotesk with IBM Plex Mono for handles, counts and small details. Their SIL Open Font License files are included in `public/fonts/`; no font service is contacted at runtime.
+
+
+## Archive and knowledge-base reads
+
+Archive is a local, reversible exclusion. It does not unsave posts on Instagram/X or change Chrome bookmarks. Archive a save using its footer action; open **Archive** in the source list to search it or **Restore to saves**. Restoring retains the original saved date, notes, topics, folders and account associations. Repeat syncs preserve the archive flag.
+
+`GET /api/posts` and `Store.posts()` return active saves by default. A future MCP reader should use this default for its knowledge-base input. `GET /api/posts?scope=archive` explicitly retrieves archived saves; `scope=all` is used by the library's Archive management interface. These are retrieval scopes, not access-control boundaries. Backups at `/api/export` include both active and archived saves so exclusions survive restoration.
+
+## Appearance
+
+The wider floating sidebar lists Instagram and X source handles individually, with their own save counts. Each row opens that account’s saves, and Instagram collections are nested beneath their owning handle. Shared posts count under each owner and appear once in All saves. Chrome and Archive follow the account rows. The library currently uses light mode throughout, including X previews, so native Instagram posts fit the surrounding interface. Theme switching is hidden for now; saved dark preferences and system appearance do not override light mode. The dark palette remains available in the code for future use.

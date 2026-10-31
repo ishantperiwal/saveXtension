@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cleanPost, text, tags, HttpError } from './domain.mjs';
+import { cleanPost, cleanInstagramCollection, text, noteText, tags, HttpError } from './domain.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
 export const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -40,7 +40,31 @@ export class Store {
         started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL DEFAULT 'running',
         imported INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS sync_discoveries (
+        platform TEXT NOT NULL, account TEXT NOT NULL COLLATE NOCASE, external_id TEXT NOT NULL,
+        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        last_seen_run TEXT NOT NULL,
+        PRIMARY KEY(platform, account, external_id)
+      );
+      CREATE INDEX IF NOT EXISTS sync_discoveries_run ON sync_discoveries(last_seen_run);
+      CREATE TABLE IF NOT EXISTS instagram_collections (
+        id INTEGER PRIMARY KEY, account TEXT NOT NULL COLLATE NOCASE, external_id TEXT NOT NULL,
+        name TEXT NOT NULL, url TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(account,external_id)
+      );
+      CREATE TABLE IF NOT EXISTS instagram_collection_posts (
+        collection_id INTEGER NOT NULL REFERENCES instagram_collections(id) ON DELETE CASCADE,
+        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        PRIMARY KEY(collection_id,post_id)
+      );
+      CREATE INDEX IF NOT EXISTS instagram_collection_posts_post ON instagram_collection_posts(post_id);
     `);
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'media')) this.db.exec("ALTER TABLE posts ADD COLUMN media TEXT NOT NULL DEFAULT '[]'");
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'bookmark_title')) this.db.exec("ALTER TABLE posts ADD COLUMN bookmark_title TEXT NOT NULL DEFAULT ''");
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'folders')) this.db.exec("ALTER TABLE posts ADD COLUMN folders TEXT NOT NULL DEFAULT '[]'");
+    if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'activity_at')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN activity_at TEXT');
+    if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'mode')) this.db.exec("ALTER TABLE sync_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
+    if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'collection_id')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN collection_id INTEGER');
   }
   get(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value; }
   set(key, value) { this.db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)').run(key, value); }
@@ -77,11 +101,45 @@ export class Store {
   revoke(id) { this.db.prepare('DELETE FROM devices WHERE id=?').run(id); }
   decode(row) {
     return { id: row.id, platform: row.platform, externalId: row.external_id, url: row.url, title: row.title, text: row.text, author: row.author, authorName: row.author_name,
-      thumbnail: row.thumbnail, kind: row.kind, tags: JSON.parse(row.tags), topics: JSON.parse(row.topics), accounts: JSON.parse(row.accounts),
+      thumbnail: row.thumbnail, bookmarkTitle: row.bookmark_title || '', folders: JSON.parse(row.folders || '[]'), media: JSON.parse(row.media || '[]'), kind: row.kind, tags: JSON.parse(row.tags), topics: JSON.parse(row.topics), accounts: JSON.parse(row.accounts),
       publishedAt: row.published_at, savedAt: row.saved_at, updatedAt: row.updated_at, notes: row.notes, favorite: !!row.favorite, archived: !!row.archived };
   }
-  posts() { return this.db.prepare('SELECT * FROM posts ORDER BY saved_at DESC,id DESC').all().map(row => this.decode(row)); }
-  post(id) { const row = this.db.prepare('SELECT * FROM posts WHERE id=?').get(id); return row ? this.decode(row) : null; }
+  posts({ scope = 'active' } = {}) {
+    if (!['active', 'archive', 'all'].includes(scope)) throw new HttpError(400, 'Unknown library scope.');
+    const where = scope === 'all' ? '' : scope === 'archive' ? ' WHERE archived=1' : ' WHERE archived=0';
+    const memberships = new Map();
+    for (const row of this.db.prepare(`SELECT m.post_id,c.id,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id`).all()) {
+      const { post_id, ...collection } = row;
+      if (!memberships.has(post_id)) memberships.set(post_id, []);
+      memberships.get(post_id).push(collection);
+    }
+    return this.db.prepare(`SELECT * FROM posts${where} ORDER BY saved_at DESC,id DESC`).all().map(row => ({ ...this.decode(row), collections: memberships.get(row.id) || [] }));
+  }
+  post(id) {
+    const row = this.db.prepare('SELECT * FROM posts WHERE id=?').get(id);
+    if (!row) return null;
+    const collections = this.db.prepare(`SELECT c.id,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
+    return { ...this.decode(row), collections };
+  }
+  saveInstagramCollection(collection) {
+    return this.db.prepare(`INSERT INTO instagram_collections(account,external_id,name,url,updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(account,external_id) DO UPDATE SET name=excluded.name,url=excluded.url,updated_at=excluded.updated_at RETURNING id`).get(collection.account, collection.externalId, collection.name, collection.url, new Date().toISOString()).id;
+  }
+  upsertInstagramCollections(account, inputs) {
+    if (typeof account !== 'string' || !/^@[\w.]{1,100}$/.test(account)) throw new HttpError(400, 'Choose an Instagram account.');
+    if (!Array.isArray(inputs) || inputs.length > 1000) throw new HttpError(400, 'Send up to 1,000 Instagram collections at a time.');
+    const collections = inputs.map(input => cleanInstagramCollection(account, input));
+    this.db.exec('BEGIN IMMEDIATE');
+    try { for (const collection of collections) this.saveInstagramCollection(collection); this.db.exec('COMMIT'); }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return this.instagramCollections().filter(c => c.account.toLowerCase() === account.toLowerCase());
+  }
+  instagramCollections() {
+    return this.db.prepare(`SELECT c.id,c.account,c.external_id AS externalId,c.name,c.url,c.updated_at AS updatedAt,
+      COUNT(CASE WHEN p.archived=0 THEN 1 END) AS count
+      FROM instagram_collections c LEFT JOIN instagram_collection_posts m ON m.collection_id=c.id LEFT JOIN posts p ON p.id=m.post_id
+      GROUP BY c.id ORDER BY c.account COLLATE NOCASE,c.name COLLATE NOCASE,c.id`).all();
+  }
   importPosts(inputs) {
     const result = { imported: 0, updated: 0, rejected: 0, errors: [] };
     this.db.exec('BEGIN IMMEDIATE');
@@ -97,15 +155,24 @@ export class Store {
         if (row) {
           // An incomplete re-import must never erase a better caption, thumbnail or user edits.
           const old = this.decode(row);
-          this.db.prepare(`UPDATE posts SET text=?, title=?, author=?, author_name=?, thumbnail=?, kind=?, tags=?, topics=?, accounts=?, published_at=?, updated_at=? WHERE id=?`).run(
+          this.db.prepare(`UPDATE posts SET text=?, title=?, author=?, author_name=?, thumbnail=?, media=?, kind=?, tags=?, topics=?, accounts=?, published_at=?, updated_at=? WHERE id=?`).run(
             p.text.length > old.text.length ? p.text : old.text, old.title || p.title, p.author || old.author, p.authorName || old.authorName,
-            p.thumbnail || old.thumbnail, p.kind === 'text' ? old.kind : p.kind, JSON.stringify([...new Set([...old.tags, ...p.tags])]),
+            p.thumbnail || old.thumbnail, JSON.stringify(p.media.length > old.media.length ? p.media : old.media), p.kind === 'text' ? old.kind : p.kind, JSON.stringify([...new Set([...old.tags, ...p.tags])]),
             JSON.stringify([...new Set([...old.topics, ...p.topics])]), JSON.stringify([...accounts]), p.publishedAt || old.publishedAt, now, row.id);
           result.updated++;
         } else {
-          this.db.prepare(`INSERT INTO posts (platform,external_id,url,title,text,author,author_name,thumbnail,kind,tags,topics,accounts,published_at,saved_at,updated_at,notes,favorite,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-            p.platform, p.externalId, p.url, p.title, p.text, p.author, p.authorName, p.thumbnail, p.kind, JSON.stringify(p.tags), JSON.stringify(p.topics), JSON.stringify([...accounts]), p.publishedAt, p.savedAt || now, now, p.notes, +p.favorite, +p.archived);
+          this.db.prepare(`INSERT INTO posts (platform,external_id,url,title,text,author,author_name,thumbnail,media,kind,tags,topics,accounts,published_at,saved_at,updated_at,notes,favorite,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+            p.platform, p.externalId, p.url, p.title, p.text, p.author, p.authorName, p.thumbnail, JSON.stringify(p.media), p.kind, JSON.stringify(p.tags), JSON.stringify(p.topics), JSON.stringify([...accounts]), p.publishedAt, p.savedAt || now, now, p.notes, +p.favorite, +p.archived);
           result.imported++;
+        }
+        if (p.platform === 'chrome') this.db.prepare('UPDATE posts SET bookmark_title=?,folders=? WHERE platform=? AND external_id=?').run(p.bookmarkTitle, JSON.stringify(p.folders), p.platform, p.externalId);
+        if (p.platform === 'instagram' && Array.isArray(input.collections)) {
+          const postId = this.db.prepare("SELECT id FROM posts WHERE platform='instagram' AND external_id=?").get(p.externalId).id;
+          for (const value of input.collections.slice(0, 1000)) {
+            let collection; try { collection = cleanInstagramCollection(value.account, value); } catch { continue; }
+            const collectionId = this.saveInstagramCollection(collection);
+            this.db.prepare('INSERT OR IGNORE INTO instagram_collection_posts VALUES(?,?)').run(collectionId, postId);
+          }
         }
       }
       this.db.exec('COMMIT');
@@ -116,26 +183,93 @@ export class Store {
     const post = this.post(id);
     if (!post) throw new HttpError(404, 'Post not found.');
     this.db.prepare('UPDATE posts SET title=?,notes=?,tags=?,favorite=?,archived=?,updated_at=? WHERE id=?').run(
-      input.title === undefined ? post.title : text(input.title, 180), input.notes === undefined ? post.notes : text(input.notes, 10000),
+      input.title === undefined ? post.title : text(input.title, 180), input.notes === undefined ? post.notes : noteText(input.notes),
       JSON.stringify(input.tags === undefined ? post.tags : tags(input.tags)), input.favorite === undefined ? +post.favorite : +!!input.favorite,
       input.archived === undefined ? +post.archived : +!!input.archived, new Date().toISOString(), id);
     return this.post(id);
   }
   deletePost(id) { this.db.prepare('DELETE FROM posts WHERE id=?').run(id); }
-  startRun(deviceId, platform, account) {
-    if (!['x', 'instagram'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
+  startRun(deviceId, platform, account, mode = 'quick', collectionId = null) {
+    if (!['x', 'instagram', 'chrome'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
+    if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
+    if (collectionId !== null) {
+      const collection = this.db.prepare('SELECT * FROM instagram_collections WHERE id=?').get(Number(collectionId));
+      if (platform !== 'instagram' || !collection || collection.account.toLowerCase() !== String(account).toLowerCase()) throw new HttpError(400, 'Choose a collection belonging to this Instagram account.');
+    }
     const id = randomBytes(12).toString('hex');
-    this.db.prepare('INSERT INTO sync_runs (id,device_id,platform,account,started_at) VALUES (?,?,?,?,?)').run(id, deviceId, platform, text(account, 100), new Date().toISOString());
+    this.db.prepare('INSERT INTO sync_runs (id,device_id,platform,account,started_at,mode,collection_id) VALUES (?,?,?,?,?,?,?)').run(id, deviceId, platform, text(account, 100), new Date().toISOString(), mode, collectionId === null ? null : Number(collectionId));
     return id;
   }
   run(id, deviceId) { return this.db.prepare('SELECT * FROM sync_runs WHERE id=? AND device_id=?').get(id, deviceId); }
-  recordRun(id, result) { this.db.prepare('UPDATE sync_runs SET imported=imported+?,updated=updated+?,rejected=rejected+? WHERE id=?').run(result.imported, result.updated, result.rejected, id); }
+  knownPostIds(platform, account, collectionId = null) {
+    if (collectionId !== null) return this.db.prepare(`SELECT p.external_id FROM instagram_collection_posts m JOIN posts p ON p.id=m.post_id
+      JOIN instagram_collections c ON c.id=m.collection_id WHERE c.id=? AND c.account=? AND p.platform=?`).all(Number(collectionId), account, platform).map(p => p.external_id);
+    return this.db.prepare(`SELECT DISTINCT p.external_id FROM posts p JOIN json_each(p.accounts) a
+      WHERE p.platform=? AND a.value=? COLLATE NOCASE`).all(platform, account).map(row => row.external_id);
+  }
+  recordDiscoveries(run, inputs) {
+    const find = this.db.prepare('SELECT id FROM posts WHERE platform=? AND external_id=?');
+    const save = this.db.prepare(`INSERT INTO sync_discoveries(platform,account,external_id,post_id,last_seen_run) VALUES(?,?,?,?,?)
+      ON CONFLICT(platform,account,external_id) DO UPDATE SET post_id=excluded.post_id,last_seen_run=excluded.last_seen_run`);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const input of inputs) {
+        let p; try { p = cleanPost(input); } catch { continue; }
+        if (p.platform !== run.platform) continue;
+        const post = find.get(p.platform, p.externalId);
+        if (post) {
+          save.run(p.platform, run.account, p.externalId, post.id, run.id);
+          if (run.collection_id) this.db.prepare('INSERT OR IGNORE INTO instagram_collection_posts VALUES(?,?)').run(run.collection_id, post.id);
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  detailCandidates(platform, account, runId) {
+    const rows = runId
+      ? this.db.prepare(`SELECT p.* FROM posts p JOIN sync_discoveries d ON d.post_id=p.id
+          WHERE d.last_seen_run=? AND d.platform=? AND d.account=? AND p.archived=0 ORDER BY p.id`).all(runId, platform, account)
+      : this.db.prepare('SELECT * FROM posts WHERE platform=? AND archived=0 ORDER BY id').all(platform);
+    return rows.map(row => this.decode(row)).filter(p => {
+      if (account && !p.accounts.some(a => a.toLowerCase() === account.toLowerCase())) return false;
+      // A successful detail fetch remains valid. Missing details can retry after a day.
+      if (Number(this.get(`detail:${p.url}`) || 0) > 0) return false;
+      if (Date.now() - Number(this.get(`detail-attempt:${p.url}`) || 0) < 86400000) return false;
+      return platform === 'instagram' || !p.text || !p.author;
+    });
+  }
+  missingFromRun(run) {
+    return this.db.prepare(`SELECT p.id,p.url,p.external_id FROM posts p
+      LEFT JOIN sync_discoveries d ON d.post_id=p.id AND d.account=?
+      WHERE p.platform='x' AND p.archived=0
+      AND EXISTS(SELECT 1 FROM json_each(p.accounts) a WHERE a.value=? COLLATE NOCASE)
+      AND (d.last_seen_run IS NULL OR d.last_seen_run<>?) ORDER BY p.id`).all(run.account, run.account, run.id)
+      .filter(p => Date.now() - Number(this.get(`unsave-attempt:${run.account.toLowerCase()}:${p.url}`) || 0) >= 86400000)
+      .map(p => ({ url: p.url, externalId: p.external_id }));
+  }
+  removeSourceSave(url, account) {
+    const row = this.db.prepare("SELECT * FROM posts WHERE platform='x' AND url=?").get(url);
+    if (!row || row.archived) return false;
+    const accounts = JSON.parse(row.accounts);
+    if (!accounts.some(a => a.toLowerCase() === account.toLowerCase())) return false;
+    const remaining = accounts.filter(a => a.toLowerCase() !== account.toLowerCase());
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (remaining.length) {
+        this.db.prepare('UPDATE posts SET accounts=?,updated_at=? WHERE id=?').run(JSON.stringify(remaining), new Date().toISOString(), row.id);
+        this.db.prepare('DELETE FROM sync_discoveries WHERE post_id=? AND account=?').run(row.id, account);
+      } else this.deletePost(row.id);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  recordRun(id, result) { this.db.prepare('UPDATE sync_runs SET imported=imported+?,updated=updated+?,rejected=rejected+?,activity_at=? WHERE id=?').run(result.imported, result.updated, result.rejected, new Date().toISOString(), id); }
   finishRun(id, status, message) {
     this.db.prepare('UPDATE sync_runs SET status=?,message=?,finished_at=? WHERE id=?').run(['completed', 'partial', 'cancelled', 'failed'].includes(status) ? status : 'partial', text(message, 500), new Date().toISOString(), id);
   }
   runs() {
     return this.db.prepare(`SELECT id,platform,account,started_at AS startedAt,finished_at AS finishedAt,
-      CASE WHEN status='running' AND julianday(started_at) < julianday('now','-20 minutes') THEN 'interrupted' ELSE status END AS status,
+      CASE WHEN status='running' AND julianday(COALESCE(activity_at,started_at)) < julianday('now','-20 minutes') THEN 'interrupted' ELSE status END AS status,
       imported,updated,rejected,message FROM sync_runs ORDER BY started_at DESC LIMIT 30`).all();
   }
   close() { this.db.close(); }

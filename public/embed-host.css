@@ -1,0 +1,38 @@
+:root { color-scheme: light; --paper: #fff; --ink: #242622; --link: #526446; }
+:root[data-theme="dark"] { color-scheme: dark; --paper: #222522; --ink: #e9ece5; --link: #c2d5af; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  overflow: hidden;
+  font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Keep native corners and shadows inside the preview viewport. The measured
+   root includes this padding, so the bottom of the post stays visible too. */
+#embed-root {
+  display: flow-root;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+}
+
+#embed-root > iframe {
+  display: block !important;
+  box-sizing: border-box;
+  margin: 0 auto !important;
+  max-width: 100% !important;
+}
+
+.twitter-tweet { margin: 0 auto !important; }
+.instagram-media {
+  box-sizing: border-box;
+  margin: 0 !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+a { color: var(--link); }
