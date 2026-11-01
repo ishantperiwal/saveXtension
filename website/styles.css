@@ -1,0 +1,29 @@
+@font-face { font-family: 'Space Grotesk'; src: url('./fonts/SpaceGrotesk.ttf') format('truetype'); font-weight: 300 700; font-style: normal; font-display: swap; }
+* { box-sizing: border-box; }
+:root { color-scheme: light; font-family: 'Space Grotesk', sans-serif; color: #242622; background: #f8f9f6; }
+body { min-height: 100svh; margin: 0; display: grid; grid-template-rows: 1fr auto; }
+main { align-self: center; padding: 64px clamp(28px, 7vw, 112px); }
+.bookmark { display: block; width: 34px; height: 34px; margin-bottom: 28px; color: #b54228; }
+h1 { margin: 0; font-size: clamp(54px, 9vw, 128px); font-weight: 500; line-height: 1.08; letter-spacing: -.065em; }
+h1 span { color: #b54228; }
+.downloads { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 40px; }
+.download-option { display: grid; gap: 10px; }
+.download { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 50px; padding: 13px 20px; border: 1px solid #cbd0c5; border-radius: 999px; color: inherit; background: #fff; text-decoration: none; font-size: 15px; font-weight: 500; transition: border-color 140ms ease, background-color 140ms ease; }
+.download:hover { background: #eef1e8; border-color: #8c9b7c; }
+.download svg { width: 18px; height: 18px; flex-shrink: 0; }
+a:focus-visible { outline: 2px solid #b54228; outline-offset: 5px; }
+.platform { padding-left: 20px; color: #777b71; font-size: 12px; }
+.requirement { margin: 30px 0 0; font-size: 13px; }
+.setup { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: #6b7065; }
+.release { display: inline-block; margin-top: 16px; color: #777b71; text-underline-offset: 4px; font-size: 12px; }
+.release:hover { color: #242622; }
+footer { padding: 32px clamp(28px, 5vw, 80px); text-align: right; font-size: clamp(18px, 2vw, 26px); line-height: 1.4; letter-spacing: -.035em; }
+@media (max-width: 560px) {
+  main { padding-top: 48px; padding-bottom: 48px; }
+  h1 { font-size: clamp(42px, 14vw, 72px); }
+  .bookmark { margin-bottom: 22px; }
+  .downloads { flex-direction: column; align-items: flex-start; gap: 20px; margin-top: 32px; }
+  .download-option { width: min(100%, 270px); }
+  footer { padding-top: 16px; padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

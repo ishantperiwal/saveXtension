@@ -2,6 +2,10 @@
 
 Your Instagram saves and X bookmarks in one searchable library, on your computer.
 
+Download for Mac (Apple Silicon) or Windows (64-bit) at **[ishantperiwal.github.io/saveXtension](https://ishantperiwal.github.io/saveXtension/)**. Google Chrome is the supported browser for syncing, using the Chrome helper and your existing sign-ins.
+
+The minimal download page lives in `website/`. `node scripts/build-download-page.mjs` generates `dist/downloads/` with links to the latest stable installer assets. The Download page workflow deploys to GitHub Pages after page changes or a successful Desktop installers run, so new releases refresh both download buttons without a browser-side GitHub API request.
+
 ## Desktop app
 
 The Electron desktop app bundles its runtime and local server. Install the Mac DMG by dragging **saveXtension** to **Applications**, or run the Windows EXE installer. Opening the app starts the library automatically. Opening it again brings the existing window forward rather than starting a second server.
