@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { resolve, dirname, extname } from 'node:path';
+import { resolve, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
@@ -229,7 +229,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed.');
       let file;
       try { file = resolve(publicDir, `.${decodeURIComponent(path === '/' ? '/index.html' : path)}`); } catch { throw new HttpError(400, 'Invalid path.'); }
-      if (!file.startsWith(`${publicDir}/`)) throw new HttpError(403, 'Forbidden.');
+      if (!file.startsWith(`${publicDir}${sep}`)) throw new HttpError(403, 'Forbidden.');
       try {
         const contents = await readFile(file); res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' }); res.end(req.method === 'HEAD' ? undefined : contents);
       } catch { throw new HttpError(404, 'File not found.'); }

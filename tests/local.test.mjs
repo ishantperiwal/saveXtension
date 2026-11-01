@@ -76,6 +76,11 @@ test('live-only previews discard the generated image cache and retain links and 
     assert.equal(posts[0].thumbnail, 'https://pbs.twimg.com/media/fixture.png');
     assert.equal(posts[0].notes, 'Keep my note'); assert.equal(posts[0].title, 'My title');
     assert.equal(imageRequests, 0);
+    const page = await fetch('http://localhost:3223/');
+    assert.equal(page.status, 200); assert.match(await page.text(), /<!doctype html>/i);
+    assert.equal((await fetch('http://localhost:3223/app.js')).status, 200);
+    assert.equal((await fetch('http://localhost:3223/%2e%2e%2fpackage.json')).status, 403);
+    assert.notEqual((await fetch('http://localhost:3223/%2e%2e%5cpackage.json')).status, 200);
     assert.equal((await fetch('http://localhost:3223/media/old-image')).status, 404);
   } finally { globalThis.fetch = realFetch; app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.store.close(); await rm(dir, { recursive: true, force: true }); }
 });
