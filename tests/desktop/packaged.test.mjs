@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const executablePath = process.env.SAVEX_DESKTOP_EXECUTABLE;
 
 test('packaged desktop runs from its own runtime and resources and persists its database outside the app', { skip: !executablePath, timeout: 60000 }, async () => {
@@ -20,6 +21,15 @@ test('packaged desktop runs from its own runtime and resources and persists its 
     assert.equal(info.packaged, true); assert.equal(info.data, dir);
     await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
     await expect(page.getByText(`Installed version ${info.version}`, { exact: true })).toBeVisible();
+    await page.getByRole('switch', { name: 'Enable MCP server' }).check();
+    const mcpUrl = await page.getByRole('textbox', { name: 'MCP server URL' }).inputValue();
+    const mcpClient = new Client({ name: 'packaged-verification', version: '1' });
+    try {
+      await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
+      assert((await mcpClient.listTools()).tools.some(t => t.name === 'set_save_topics'));
+      const overview = await mcpClient.callTool({ name: 'library_overview', arguments: {} });
+      assert.equal(overview.isError, undefined);
+    } finally { await mcpClient.close(); }
     await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     const origin = new URL(page.url()).origin;
     const helper = await page.evaluate(() => window.saveXDesktop.helperInfo());
@@ -35,6 +45,7 @@ test('packaged desktop runs from its own runtime and resources and persists its 
     desktop = await _electron.launch({ executablePath, env });
     page = await desktop.firstWindow(); await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeVisible();
     assert.equal(new URL(page.url()).origin, origin);
+    assert.equal((await fetch(`${origin}/api/mcp`).then(r => r.json())).enabled, true);
     const posts = await page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     assert.equal(posts[0].notes, 'A note saved by the packaged app');
     await promisify(execFile)(executablePath, [], { env, timeout: 10000 });

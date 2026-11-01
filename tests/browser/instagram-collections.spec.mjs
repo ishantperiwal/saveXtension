@@ -14,6 +14,7 @@ test('the collection tree keeps mobile controls in place and filters shared post
   await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
   await page.locator('[data-instagram-collection="101"]').click();
   await expect(page.locator('.save-card')).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('compact-collection-toolbar-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
   const sidebar = await page.locator('.sidebar').boundingBox(), settings = await page.getByRole('button', { name: 'Settings & backups', exact: true }).boundingBox();
   expect(settings.width).toBeLessThanOrEqual(40); expect(settings.x).toBeGreaterThan(sidebar.x + sidebar.width - 80);
@@ -77,7 +78,7 @@ for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers cre
     await expect(page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' })).toContainText('2', { timeout: 7000 });
     await page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
     await expect(page.locator('.save-card')).toHaveCount(2);
-    await expect(page.getByRole('heading', { name: 'Design notes', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Design notes', exact: true })).toHaveClass('sr-only');
     await expect(page.locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
     await page.locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click();
     await expect(page.locator('.save-card')).toHaveCount(2);

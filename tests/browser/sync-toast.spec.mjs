@@ -22,6 +22,16 @@ test('sync progress floats at the bottom right without moving the collection, an
   expect(await toast.evaluate(element => !element.closest('main'))).toBeTruthy();
   const box = await toast.boundingBox(), viewport = page.viewportSize();
   expect(viewport.width - box.x - box.width).toBe(24); expect(viewport.height - box.y - box.height).toBe(24);
+  expect(box.height).toBeLessThanOrEqual(48); expect(box.width).toBeLessThan(300);
+  await expect(toast.locator('#sync-toast-details')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeHidden();
+  await expect(toast.locator('.sync-dots span').first()).toHaveCSS('animation-name', 'sync-dot');
+  await toast.hover();
+  await expect(toast.locator('#sync-toast-details')).toBeVisible();
+  await expect(toast.getByRole('button', { name: 'Deep scanning Instagram' })).toHaveAttribute('aria-expanded', 'true');
+  expect((await toast.boundingBox()).height).toBeGreaterThan(box.height);
+  await page.mouse.move(0, 0); await expect(toast.locator('#sync-toast-details')).toBeHidden();
+  await toast.locator('.sync-toast-summary').focus(); await expect(toast.locator('#sync-toast-details')).toBeVisible();
   await page.getByRole('button', { name: 'Stop', exact: true }).click(); await expect.poll(() => stops).toBe(1); await expect(toast).toBeHidden();
   state.job = { id: 'toast-failed', status: 'failed', targets: ['instagram'], message: 'Instagram: No tab with id: 2128255104.' };
   await expect(toast).toContainText('The background Instagram tab closed', { timeout: 6000 });
@@ -44,4 +54,9 @@ test('finished notices fade away, later jobs still appear, and the notification 
   const box = await toast.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(16); expect(box.x + box.width).toBeLessThanOrEqual(374); expect(box.y + box.height).toBeLessThanOrEqual(828);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: 'test-results/sync-toast-mobile.png' });
+  await toast.getByRole('button', { name: /Syncing saves/ }).click();
+  await expect(toast.locator('#sync-toast-details')).toBeVisible();
+  await page.screenshot({ path: 'test-results/sync-toast-expanded-mobile.png' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(toast.locator('.sync-dots span').first()).toHaveCSS('animation-name', 'none');
 });

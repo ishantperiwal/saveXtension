@@ -3,10 +3,12 @@ import { syncAccountOptions, legacySyncSelection, syncSelectionRequest } from '.
 import { sidebarAccounts } from './sidebar-accounts.js';
 import { embedTarget } from './embed-target.js';
 import { mountEmbeds, disposeEmbeds, configureEmbeds } from './embeds.js';
+import { layoutCards, disposeCardLayout } from './masonry.js';
 import { createNoteAutosave } from './notes.js';
 import { applyFilters, defaultFilters, dateBounds, filterChips, accountOptions } from './filters.js';
 import { mountDateRange } from './date-range.js';
 import { enhanceSelects, closeSelect } from './select.js';
+import { mountMcpSettings } from './mcp-settings.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $('#app'), modal = $('#modal');
 const paths = {
@@ -63,7 +65,7 @@ const relative = date => {
 };
 let storedSyncAccounts = null;
 try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
-const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
+const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
 let toastTimer, searchTimer, updatePoll, collectionVersion = 0;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
 let dismissedSyncJobs = new Set();
@@ -111,7 +113,7 @@ async function boot() {
   try {
     const session = await api('/session'); state.name = session.name; state.localMode = session.localMode; configureEmbeds(session.embedOrigin);
     if (!session.authenticated) return authScreen(session.setupRequired);
-    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.instagramCollections = data.instagramCollections || []; state.demo = false; render(); void notes.resume(data.posts); if (state.localMode) await syncStatus();
+    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.demo = false; render(); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
 }
 function authScreen(setup) {
@@ -132,20 +134,21 @@ function navItem(filter, label, symbol, count) {
 function navigationAccounts() { return sidebarAccounts(allPosts(), state.sync?.xAccounts?.accounts || [], state.demo ? [] : state.instagramCollections || []); }
 function selectedAccountLabel() { return state.filters.accounts.length === 1 ? navigationAccounts().find(account => account.value === state.filters.accounts[0])?.label || '' : ''; }
 function renderAccountNavigation() {
-  const root = $('#account-navigation'); if (!root) return;
   const accounts = navigationAccounts(), collections = state.demo ? [] : state.instagramCollections || [];
   const counts = new Map();
   for (const post of allPosts().filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(collection => collection.id))) counts.set(id, (counts.get(id) || 0) + 1);
   const signature = JSON.stringify([accounts, collections, [...counts]]);
-  if (root.dataset.signature === signature) return;
-  const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection } : null;
-  root.innerHTML = accounts.map(account => {
-    const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
-    const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}`) : [];
-    return `<div class="source-account-group"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<ul class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}">${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
-  }).join('');
-  root.dataset.signature = signature;
-  if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
+  for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram']]) {
+    const root = $(selector); if (!root || root.dataset.signature === signature) continue;
+    const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection } : null;
+    root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
+      const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
+      const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}`) : [];
+      return `<div class="source-account-group"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<ul class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}">${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
+    }).join('');
+    root.dataset.signature = signature;
+    if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
+  }
 }
 function updateSidebarSelection() {
   document.querySelectorAll('[data-filter]').forEach(button => {
@@ -167,7 +170,7 @@ function renderSidebarMarkers() {
   const sidebar = $('.sidebar'), marks = $('.sidebar-selection-marks');
   if (!sidebar || !marks) return;
   const bounds = sidebar.getBoundingClientRect();
-  const selected = [...sidebar.querySelectorAll('[data-filter].active, [data-nav-account].active, [data-instagram-collection].active, .archive-nav.active')].filter(item => {
+  const selected = [...sidebar.querySelectorAll('[data-filter].active, [data-nav-account].active, .archive-nav.active')].filter(item => {
     if (!item.getClientRects().length) return false;
     const rect = item.getBoundingClientRect(), clip = item.closest('nav').getBoundingClientRect();
     return rect.top + rect.height / 2 >= clip.top && rect.top + rect.height / 2 <= clip.bottom && rect.left + rect.width / 2 >= clip.left && rect.left + rect.width / 2 <= clip.right;
@@ -181,12 +184,13 @@ function renderSidebarMarkers() {
 const sidebarObserver = new ResizeObserver(renderSidebarMarkers);
 function render() {
   closeSelect();
+  disposeCardLayout();
   sidebarObserver.disconnect();
   const focused = document.activeElement; const focusId = focused?.id; const selection = focused?.selectionStart;
   const posts = allPosts(), live = posts.filter(p => !p.archived);
   app.innerHTML = `<div class="workspace">
     <aside class="sidebar">
-      <div class="sidebar-header"><a href="/" class="brand">${icon('bookmark')}<span>save<span class="accent">X</span>tension</span></a></div>
+      <div class="sidebar-header"><a href="/" class="brand">${icon('bookmark')}<span>save<span class="accent">X</span>tension</span></a><button class="icon-button settings-button" data-action="settings" aria-label="Settings & backups" title="Settings & backups">${icon('settings')}</button></div>
       <div class="sidebar-sync-group"><button class="sidebar-sync" data-action="sync" aria-label="Sync" aria-describedby="last-sync-label">${icon('refresh')}<span id="last-sync-label">Sync saves</span></button><button class="sidebar-sync-options" data-action="sync-options" aria-label="Sync options" title="Sources, accounts and deep scan" aria-haspopup="dialog" aria-controls="modal" aria-expanded="false">${icon('chevron')}</button></div>
       <nav aria-label="Library">
         ${navItem('all', 'All saves', 'grid', live.length)}
@@ -194,20 +198,19 @@ function render() {
           <div id="account-navigation"></div>
           ${navItem('chrome', 'Chrome bookmarks', 'bookmark', live.filter(p => p.platform === 'chrome').length)}
           <button class="nav-item archive-nav" data-action="archive-view" aria-label="Archive ${posts.length - live.length}" aria-pressed="false" title="Archive">${icon('archive')}<span class="nav-label-text">Archive</span><span class="nav-count">${posts.length - live.length}</span></button>
+          <div id="instagram-navigation"></div>
         </div>
       </nav>
-      <div class="sidebar-bottom"><button class="nav-item settings-button" data-action="settings" aria-label="Settings & backups" title="Settings & backups">${icon('settings')}<span>Settings</span></button></div>
       <div class="sidebar-selection-marks" aria-hidden="true"></div>
     </aside>
     <main class="main">
       <div class="page-content">
         <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
         <div class="collection-tools">
-          <div class="browse-controls"><button class="filter-button" id="open-filters" data-action="filters" aria-label="Filters" aria-haspopup="dialog" aria-expanded="false">${icon('filter')}<span>Filters</span><span class="filter-count" hidden></span></button></div>
+          <div class="browse-controls"><button class="filter-button" id="open-filters" data-action="filters" aria-label="Filters" aria-haspopup="dialog" aria-expanded="false">${icon('filter')}<span>Filters</span><span class="filter-count" hidden></span></button><div id="active-filters" class="active-filters" hidden></div></div>
           <label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label>
         </div>
         ${state.demo ? '<div class="demo-banner"><span>Sample saves</span><button data-action="exit-demo">Close</button></div>' : ''}
-        <div id="active-filters" class="active-filters" hidden></div>
         <div id="results"></div>
       </div>
     </main>
@@ -225,6 +228,7 @@ function renderResults() {
   renderFilterUI();
   const posts = filteredPosts();
   if (!posts.length) {
+    disposeCardLayout();
     const emptyLibrary = !scopedPosts().length;
     $('#results').innerHTML = emptyLibrary
       ? state.archive ? '<section class="empty-state"><h2>Archive is empty</h2></section>' : `<section class="empty-state"><h2>No saves yet</h2><button class="text-button" data-action="demo">View sample saves</button></section>`
@@ -248,12 +252,12 @@ function renderFilterUI() {
     active.innerHTML = chips.map(c => `<button class="filter-chip" data-remove-filter="${c.key}" aria-label="${esc(c.removeLabel || `Remove ${c.key} filter`)}" title="${esc(c.title || c.label)}">${c.platform ? sourceIcon(c.platform) : ''}${esc(c.label)} ${icon('close')}</button>`).join('') + (chips.length > 1 ? '<button class="text-button" data-action="reset-filters">Clear all</button>' : '');
   }
   updateSidebarSelection();
-  const heading = $('.page-content h1'); if (heading) { heading.textContent = state.archive ? 'Archive' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive || state.filters.collection ? 'collection-heading' : 'sr-only'; }
+  const heading = $('.page-content h1'); if (heading) { heading.textContent = state.archive ? 'Archive' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive ? 'collection-heading' : 'sr-only'; }
   renderSidebarMarkers();
 }
 function filterDialog() {
   const current = state.filters, posts = scopedPosts();
-  const topics = [...new Set(posts.flatMap(p => p.topics))].sort();
+  const topics = [...new Set([...posts.flatMap(p => p.topics), ...(state.archive || state.demo ? [] : state.topicCatalog.map(t => t.name))])].sort();
   const accounts = accountOptions(posts, state.sync?.xAccounts?.accounts || []);
   const accountName = value => value.platform === 'chrome' ? 'Chrome bookmarks' : value.label === platformName(value.platform) ? value.label : `${platformName(value.platform)} ${value.label}`;
   const folders = [...new Set(posts.filter(p => p.platform === 'chrome').flatMap(p => p.folders || []))].sort();
@@ -313,7 +317,7 @@ const cardVersions = new WeakMap();
 function reconcileCards(posts) {
   let cards = $('#results > .cards');
   if (!cards) { $('#results').innerHTML = '<div class="cards"></div>'; cards = $('#results > .cards'); }
-  cards.className = 'cards';
+  cards.classList.add('cards');
   const previous = new Map([...cards.children].map(el => [el.dataset.postId, el]));
   const wanted = new Set(posts.map(p => String(p.id)));
   for (const [key, el] of previous) if (!wanted.has(key)) { el.remove(); previous.delete(key); }
@@ -331,7 +335,7 @@ function reconcileCards(posts) {
     if (cards.children[index] !== el) cards.insertBefore(el, cards.children[index] || null);
   });
   for (const el of previous.values()) el.remove();
-  mountEmbeds(cards);
+  layoutCards(cards); mountEmbeds(cards);
 }
 function updateCollection() {
   if (!$('#results')) return render();
@@ -344,7 +348,7 @@ function updateCollection() {
 async function refresh(silent = false) {
   if (state.demo) return;
   const version = collectionVersion;
-  try { const data = await api('/posts?scope=all'); if (version !== collectionVersion) return; if (data.embedOrigin) configureEmbeds(data.embedOrigin); const changed = JSON.stringify(state.posts) !== JSON.stringify(data.posts) || JSON.stringify(state.instagramCollections) !== JSON.stringify(data.instagramCollections || []); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.instagramCollections = data.instagramCollections || []; if (changed || !silent) updateCollection(); }
+  try { const data = await api('/posts?scope=all'); if (version !== collectionVersion) return; if (data.embedOrigin) configureEmbeds(data.embedOrigin); const changed = JSON.stringify(state.posts) !== JSON.stringify(data.posts) || JSON.stringify(state.instagramCollections) !== JSON.stringify(data.instagramCollections || []); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; if (changed || !silent) updateCollection(); }
   catch (e) { if (!silent) toast(e.message, true); }
 }
 async function connectDialog() { await startSync(); }
@@ -490,13 +494,23 @@ function dismissSyncToast(id = state.sync?.job?.id) {
   clearTimeout(syncToastTimer);
   const el = $('#sync-status'); el.hidden = true; el.replaceChildren(); delete el.dataset.content;
 }
+const syncNotice = $('#sync-status');
+function expandSyncNotice(expanded) {
+  syncNotice.dataset.expanded = String(expanded);
+  syncNotice.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(expanded));
+}
+syncNotice.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') expandSyncNotice(true); });
+syncNotice.addEventListener('pointerleave', () => { if (!syncNotice.contains(document.activeElement)) expandSyncNotice(false); });
+syncNotice.addEventListener('focusin', () => expandSyncNotice(true));
+syncNotice.addEventListener('focusout', () => queueMicrotask(() => { if (!syncNotice.matches(':hover') && !syncNotice.contains(document.activeElement)) expandSyncNotice(false); }));
+document.addEventListener('pointerdown', event => { if (!syncNotice.contains(event.target)) expandSyncNotice(false); }, { passive: true });
 function renderSyncToast(job, busy, message) {
   const el = $('#sync-status'), checking = state.syncChecking;
   if (job?.status === 'completed' && previousSyncJob?.id === job.id && ['queued', 'running'].includes(previousSyncJob.status)) completedToastJob = job.id;
   previousSyncJob = job && { id: job.id, status: job.status };
   const key = checking ? 'checking' : job ? `${job.id}:${job.status}` : '';
   const changed = key !== syncToastKey;
-  if (changed) { clearTimeout(syncToastTimer); syncToastKey = key; }
+  if (changed) { clearTimeout(syncToastTimer); syncToastKey = key; expandSyncNotice(el.matches(':hover') || el.contains(document.activeElement)); }
   const finished = ['failed', 'partial', 'completed'].includes(job?.status);
   const visible = checking || job && !dismissedSyncJobs.has(job.id) && (busy || ['failed', 'partial'].includes(job.status) || job.status === 'completed' && completedToastJob === job.id);
   el.hidden = !visible;
@@ -509,12 +523,15 @@ function renderSyncToast(job, busy, message) {
   const title = checking ? 'Connecting to Chrome' : job.status === 'queued' ? 'Sync queued' : busy ? `${job.mode === 'deep' ? 'Deep scanning' : 'Syncing'} ${sourceName}` : job.status === 'failed' ? 'Sync needs attention' : job.status === 'partial' ? 'Sync finished with a few issues' : 'Sync complete';
   if (/No tab with id/i.test(message)) message = `The background ${active ? platformName(active) : 'browser'} tab closed before syncing finished. Your saves are kept. Try syncing again.`;
   el.dataset.tone = checking || busy ? 'active' : job.status === 'completed' ? 'success' : 'warning';
-  const content = `<div class="sync-toast-sources" aria-hidden="true">${sources.map(sourceIcon).join('')}</div><div class="sync-toast-content"><div class="sync-toast-heading"><strong>${esc(title)}</strong>${busy ? '<button class="text-button" data-action="stop-sync">Stop</button>' : ''}${job && !checking ? `<button class="icon-button" data-action="dismiss-sync" aria-label="Dismiss sync status">${icon('close')}</button>` : ''}</div><p>${esc(message)}</p></div>`;
+  const summary = `<strong>${esc(title)}</strong>${checking || busy ? '<span class="sync-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>' : ''}`;
+  const content = `<div class="sync-toast-sources" aria-hidden="true">${sources.map(sourceIcon).join('')}</div><div class="sync-toast-content"><div class="sync-toast-heading">${checking || busy ? `<button class="sync-toast-summary" data-action="show-sync-details" aria-expanded="false" aria-controls="sync-toast-details">${summary}</button>` : summary}<div class="sync-toast-actions">${busy ? '<button class="text-button" data-action="stop-sync">Stop</button>' : ''}${job && !checking ? `<button class="icon-button" data-action="dismiss-sync" aria-label="Dismiss sync status">${icon('close')}</button>` : ''}</div></div><p id="sync-toast-details"></p></div>`;
   if (el.dataset.content !== content) {
     const focusedAction = el.contains(document.activeElement) ? document.activeElement.dataset.action : null;
     el.innerHTML = content; el.dataset.content = content;
     if (focusedAction) el.querySelector(`[data-action="${focusedAction}"]`)?.focus({ preventScroll: true });
   }
+  $('#sync-toast-details', el).textContent = message;
+  el.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(el.dataset.expanded === 'true'));
 }
 async function queueSync(targets, mode = 'quick') {
   const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: selectedSyncRequest().xAccount, mode } });
@@ -632,15 +649,18 @@ function mountUpdateSettings() {
 }
 async function settingsDialog() {
   if (state.localMode) {
-    showModal(`<h2>Settings</h2><form id="library-form"><label>Library name<input name="name" value="${esc(state.name)}" maxlength="50" placeholder="My saves"></label><button class="primary" type="submit">Save name</button></form><h3 class="section-gap">Backup</h3><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div><details class="settings-history"><summary>Sync history</summary><div class="sync-history">${state.runs.length ? state.runs.slice(0, 8).map(r => `<div><span class="run-icon">${icon(r.platform)}</span><span><strong>${platformName(r.platform)}${r.account ? ` · ${esc(r.account)}` : ''}</strong><small>${r.imported} new · ${r.updated} revisited · ${esc(r.status)}${r.message ? `<br>${esc(r.message)}` : ''}</small></span><time>${relative(r.startedAt)}</time></div>`).join('') : '<p>Your first sync will appear here.</p>'}</div></details>`);
+    showModal(`<h2>Settings</h2><form id="library-form"><label>Library name<input name="name" value="${esc(state.name)}" maxlength="50" placeholder="My saves"></label><button class="primary" type="submit">Save name</button></form><h3 class="section-gap">Backup</h3><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div>`);
     $('#library-form').onsubmit = async e => { e.preventDefault(); try { const result = await api('/library', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); state.name = result.name; modal.close(); render(); toast('Library name saved.'); } catch (error) { toast(error.message, true); } };
+    const mcpSection = document.createElement('section'); mcpSection.className = 'mcp-settings section-gap';
+    $('#library-form').insertAdjacentElement('afterend', mcpSection);
+    void mountMcpSettings(mcpSection, { api, toast, esc, icon });
     mountUpdateSettings(); return;
   }
   showModal('<h2>Settings</h2><p>Loading settings…</p>');
   try {
     const { devices } = await api('/devices');
     if (!modal.open) return;
-    showModal(`<span class="dialog-kicker">Make it yours</span><h2>Settings</h2><h3>Connected browsers</h3><div class="device-list">${devices.length ? devices.map(d => `<div class="device"><span>${icon('shield')}</span><div><strong>${esc(d.name)}</strong><small>${d.lastSeen ? `Last used ${relative(d.lastSeen).toLowerCase()}` : 'Paired, ready to sync'}</small></div><button class="text-button danger" data-revoke="${d.id}">Disconnect</button></div>`).join('') : '<p class="muted">No browsers paired yet.</p>'}</div><button class="secondary" data-action="connect">${icon('plus')} Pair a browser</button><h3 class="section-gap">Your data, always yours.</h3><p>Back up your saves, notes and tags as JSON. Import that file to restore a new library.</p><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div><details class="settings-history"><summary>Sync history</summary><div class="sync-history">${state.runs.length ? state.runs.slice(0, 8).map(r => `<div><span class="run-icon">${icon(r.platform)}</span><span><strong>${platformName(r.platform)}${r.account ? ` · ${esc(r.account)}` : ''}</strong><small>${r.imported} new · ${r.updated} revisited · ${esc(r.status)}${r.message ? `<br>${esc(r.message)}` : ''}</small></span><time>${relative(r.startedAt)}</time></div>`).join('') : '<p class="muted">Your first sync will appear here.</p>'}</div></details><div class="notice">Topic suggestions use simple local keyword matching. No posts are sent to an AI service. Thumbnails load from the original platform and may expire; your captured text and notes stay saved.</div><button class="text-button" data-action="logout">${icon('logout')} Sign out of this browser</button>`);
+    showModal(`<span class="dialog-kicker">Make it yours</span><h2>Settings</h2><h3>Connected browsers</h3><div class="device-list">${devices.length ? devices.map(d => `<div class="device"><span>${icon('shield')}</span><div><strong>${esc(d.name)}</strong><small>${d.lastSeen ? `Last used ${relative(d.lastSeen).toLowerCase()}` : 'Paired, ready to sync'}</small></div><button class="text-button danger" data-revoke="${d.id}">Disconnect</button></div>`).join('') : '<p class="muted">No browsers paired yet.</p>'}</div><button class="secondary" data-action="connect">${icon('plus')} Pair a browser</button><h3 class="section-gap">Your data, always yours.</h3><p>Back up your saves, notes and tags as JSON. Import that file to restore a new library.</p><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div><div class="notice">Topic suggestions use simple local keyword matching. No posts are sent to an AI service. Thumbnails load from the original platform and may expire; your captured text and notes stay saved.</div><button class="text-button" data-action="logout">${icon('logout')} Sign out of this browser</button>`);
   } catch (e) { toast(e.message, true); modal.close(); }
 }
 function importDialog() {
@@ -649,13 +669,14 @@ function importDialog() {
     e.preventDefault(); const button = $('button', e.target); button.disabled = true;
     try {
       const file = $('#import-file').files[0]; if (file.size > 20 * 1024 * 1024) throw new Error('Choose a file smaller than 20 MB.');
-      const posts = parseImport(await file.text(), file.name);
-      if (!posts.length) throw new Error('No supported Instagram or X post links were found in this file.');
+      const content = await file.text(), posts = parseImport(content, file.name);
+      let topicMetadata; try { const backup = JSON.parse(content); if (backup.version && Array.isArray(backup.posts) && Array.isArray(backup.topics)) topicMetadata = backup.topics; } catch { /* Other supported import formats have no topic catalog. */ }
+      if (!posts.length && !topicMetadata?.length) throw new Error('No supported Instagram or X post links were found in this file.');
       const account = new FormData(e.target).get('sourceAccount');
       let imported = 0, updated = 0, rejected = 0;
-      for (let i = 0; i < posts.length; i += 100) {
+      for (let i = 0; i < Math.max(posts.length, topicMetadata ? 1 : 0); i += 100) {
         $('#import-progress').textContent = `Importing ${Math.min(i + 100, posts.length)} of ${posts.length}…`;
-        const result = await api('/posts/import', { method: 'POST', body: { posts: posts.slice(i, i + 100).map(p => ({ ...p, sourceAccount: account || p.sourceAccount })) } });
+        const result = await api('/posts/import', { method: 'POST', body: { posts: posts.slice(i, i + 100).map(p => ({ ...p, sourceAccount: account || p.sourceAccount })), ...(i === 0 && topicMetadata ? { topics: topicMetadata } : {}) } });
         imported += result.imported; updated += result.updated; rejected += result.rejected;
       }
       state.demo = false; modal.close(); await refresh(); toast(`${imported} new saves · ${updated} revisited${rejected ? ` · ${rejected} skipped` : ''}`);
@@ -718,6 +739,7 @@ document.addEventListener('click', async e => {
       case 'archive-view': state.archive = true; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; updateCollection(); break;
       case 'filters': filterDialog(); break;
       case 'reset-filters': state.filters = defaultFilters(); renderResults(); break;
+      case 'show-sync-details': expandSyncNotice(true); break;
       case 'dismiss-sync': dismissSyncToast(); break;
       case 'stop-sync': await api('/sync/stop', { method: 'POST', body: {} }); wakeExtension(); await syncStatus(); break;
       case 'connect': await connectDialog(); break;

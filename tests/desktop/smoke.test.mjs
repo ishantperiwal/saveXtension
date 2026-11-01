@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { _electron, chromium } from 'playwright';
 import { expect } from '@playwright/test';
 import { createRequire } from 'node:module';
-import { mkdtemp, cp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, cp, readFile, writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -16,6 +16,8 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
   await mkdir(appPath);
   for (const name of ['desktop', 'server', 'public', 'extension']) await cp(resolve(name), join(appPath, name), { recursive: true });
   await cp(resolve('package.json'), join(appPath, 'package.json'));
+  // The copied source fixture now has runtime dependencies (the MCP SDK).
+  await symlink(resolve('node_modules'), join(appPath, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   // Keep all app code intact; replace only the OS browser launcher with a controllable adapter.
   await writeFile(join(appPath, 'desktop/browser.mjs'), `import {appendFile} from 'node:fs/promises';export async function openSyncBrowser(url){await appendFile(${JSON.stringify(browserCalls)},url+String.fromCharCode(10));}`);
   const env = { ...process.env, SAVEX_DESKTOP_DATA_DIR: dataDir, SAVEX_DESKTOP_LEGACY_ORIGIN: 'http://localhost:1' }; delete env.ELECTRON_RUN_AS_NODE;
@@ -51,6 +53,8 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
     await expect.poll(async () => (await status())?.status, { timeout: 75000 }).toBe('partial');
     const firstJob = await status(); assert.equal(firstJob.mode, 'quick');
     await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts.length)).toBe(2);
+    // Browser setup can move focus away; the library refreshes when foregrounded.
+    await page.bringToFront();
     await expect(page.locator('.save-card')).toHaveCount(2, { timeout: 7000 });
     await page.locator('.save-card').first().getByRole('button', { name: 'Edit note', exact: true }).click();
     await page.getByLabel('Note', { exact: true }).fill('Saved in the desktop app');

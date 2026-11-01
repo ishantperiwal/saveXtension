@@ -31,6 +31,7 @@ export function cleanInstagramCollection(account, input) {
   return { account, externalId: match[2], name, url: `https://www.instagram.com${url.pathname.replace(/\/?$/, '/')}` };
 }
 export function noteText(value) { return typeof value === 'string' ? value.slice(0, 10000) : ''; }
+export function updatedTime(previous) { return new Date(Math.max(Date.now(), (Date.parse(previous) || 0) + 1)).toISOString(); }
 export function tags(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(t => text(t, 40).toLowerCase()).filter(Boolean))].slice(0, 16);
@@ -69,7 +70,7 @@ export function cleanPost(input) {
     authorName: text(input.authorName, 120), thumbnail: imageUrl(input.thumbnail),
     media: [...new Set((Array.isArray(input.media) ? input.media : []).map(imageUrl).filter(Boolean))].slice(0, 20),
     kind: ['image', 'video', 'carousel', 'text'].includes(input.kind) ? input.kind : canonical.platform === 'instagram' ? 'image' : 'text',
-    tags: tags(input.tags), topics: topicsFor(`${title} ${caption} ${text(input.bookmarkTitle, 1000)} ${(Array.isArray(input.folders) ? input.folders : []).join(" ")}`),
+    tags: tags(input.tags), topics: typeof input.topicsCurated === 'boolean' && Array.isArray(input.topics) ? [...new Set(input.topics.filter(t => typeof t === 'string' && t.trim() && t.trim().length <= 80 && !/[\p{Cc}]/u.test(t)).map(t => t.normalize('NFKC').trim()))].slice(0, 50) : topicsFor(`${title} ${caption} ${text(input.bookmarkTitle, 1000)} ${(Array.isArray(input.folders) ? input.folders : []).join(" ")}`),
     sourceAccount: text(input.sourceAccount, 100), accounts: Array.isArray(input.accounts) ? input.accounts.map(a => text(a, 100)).filter(Boolean).slice(0, 50) : [],
     notes: noteText(input.notes), favorite: input.favorite === true, archived: input.archived === true,
     savedAt: Number.isFinite(Date.parse(input.savedAt)) ? new Date(input.savedAt).toISOString() : null,

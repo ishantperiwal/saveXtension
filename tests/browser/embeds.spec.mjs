@@ -52,6 +52,32 @@ test('unavailable embeds offer retry and original links without showing a stored
   await expect(page.locator('.embed-toolbar,.embed-fallback,[data-embed-toggle]')).toHaveCount(0);
 });
 
+test('masonry keeps two posts adjacent and fills the shorter column as sync adds posts', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  const model = await setup(page);
+  await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(2);
+  const first = page.locator('.save-card[data-post-id="901"]'), second = page.locator('.save-card[data-post-id="902"]');
+  const player = await first.locator('.embed-stage > iframe').elementHandle();
+  const host = page.frameLocator('.save-card[data-post-id="901"] .embed-stage > iframe');
+  await host.locator('#embed-root > iframe').evaluate(frame => { frame.style.height = '1400px'; });
+  await expect.poll(async () => (await first.boundingBox()).height).toBeGreaterThan(1400);
+  let a = await first.boundingBox(), b = await second.boundingBox();
+  expect(Math.abs(a.y - b.y)).toBeLessThan(2); expect(b.x).toBeGreaterThan(a.x + a.width);
+  model.posts.push({ ...posts()[0], id: 903, externalId: '123456790', url: 'https://x.com/i/status/123456790', savedAt: '2026-10-29T12:00:00Z' });
+  const third = page.locator('.save-card[data-post-id="903"]');
+  await expect(third).toBeVisible({ timeout: 8000 });
+  await expect(third.locator('.native-embed')).toHaveAttribute('data-embed-state', 'ready');
+  a = await first.boundingBox(); b = await second.boundingBox(); const c = await third.boundingBox();
+  expect(Math.abs(c.x - b.x)).toBeLessThan(2); expect(Math.abs(c.y - b.y - b.height - 20)).toBeLessThan(2);
+  expect(c.y).toBeLessThan(a.y + a.height);
+  expect(await player.evaluate(frame => frame.isConnected)).toBe(true);
+  await page.screenshot({ path: 'test-results/masonry-grid-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => Math.round((await second.boundingBox()).x)).toBe(Math.round((await first.boundingBox()).x));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await player.evaluate(frame => frame.isConnected)).toBe(true);
+});
+
 test('creator identity appears only inside the native post, with no empty metadata header', async ({ page }) => {
   const saved = posts().map(p => ({ ...p, title: '', notes: '', archived: false, favorite: true }));
   await setup(page, saved);

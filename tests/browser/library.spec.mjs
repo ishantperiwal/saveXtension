@@ -103,6 +103,7 @@ test('one click in library collects and enriches in an inactive tab, then closes
     await chooseSelect(library, 'Sync source', 'x');
     await library.getByRole('button', { name: 'Sync', exact: true }).click();
     await expect.poll(async () => (await worker.evaluate(async () => (await chrome.storage.local.get('syncState')).syncState))?.stage).toBe('collecting');
+    await library.locator('#sync-status .sync-toast-summary').hover();
     await library.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect.poll(async () => (await worker.evaluate(async () => (await chrome.storage.local.get('job')).job)), { timeout: 15000 }).toBeUndefined();
     expect(await worker.evaluate(async () => (await chrome.tabs.query({})).map(t => t.id))).toEqual(initialTabs);

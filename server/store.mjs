@@ -2,7 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cleanPost, cleanInstagramCollection, text, noteText, tags, HttpError } from './domain.mjs';
+import { cleanPost, cleanInstagramCollection, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
+import { initializeTopics, topicNames, writeTopicNames } from './topics.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
 export const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -65,6 +66,7 @@ export class Store {
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'activity_at')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN activity_at TEXT');
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'mode')) this.db.exec("ALTER TABLE sync_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'collection_id')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN collection_id INTEGER');
+    initializeTopics(this.db);
   }
   get(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value; }
   set(key, value) { this.db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)').run(key, value); }
@@ -102,7 +104,8 @@ export class Store {
   decode(row) {
     return { id: row.id, platform: row.platform, externalId: row.external_id, url: row.url, title: row.title, text: row.text, author: row.author, authorName: row.author_name,
       thumbnail: row.thumbnail, bookmarkTitle: row.bookmark_title || '', folders: JSON.parse(row.folders || '[]'), media: JSON.parse(row.media || '[]'), kind: row.kind, tags: JSON.parse(row.tags), topics: JSON.parse(row.topics), accounts: JSON.parse(row.accounts),
-      publishedAt: row.published_at, savedAt: row.saved_at, updatedAt: row.updated_at, notes: row.notes, favorite: !!row.favorite, archived: !!row.archived };
+      publishedAt: row.published_at, savedAt: row.saved_at, updatedAt: row.updated_at, notes: row.notes, favorite: !!row.favorite, archived: !!row.archived,
+      topicsCurated: !!row.topics_curated };
   }
   posts({ scope = 'active' } = {}) {
     if (!['active', 'archive', 'all'].includes(scope)) throw new HttpError(400, 'Unknown library scope.');
@@ -113,13 +116,13 @@ export class Store {
       if (!memberships.has(post_id)) memberships.set(post_id, []);
       memberships.get(post_id).push(collection);
     }
-    return this.db.prepare(`SELECT * FROM posts${where} ORDER BY saved_at DESC,id DESC`).all().map(row => ({ ...this.decode(row), collections: memberships.get(row.id) || [] }));
+    return this.db.prepare(`SELECT * FROM posts${where} ORDER BY saved_at DESC,id DESC`).all().map(row => ({ ...this.decode(row), topics: topicNames(this.db, row.id), collections: memberships.get(row.id) || [] }));
   }
   post(id) {
     const row = this.db.prepare('SELECT * FROM posts WHERE id=?').get(id);
     if (!row) return null;
     const collections = this.db.prepare(`SELECT c.id,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
-    return { ...this.decode(row), collections };
+    return { ...this.decode(row), topics: topicNames(this.db, id), collections };
   }
   saveInstagramCollection(collection) {
     return this.db.prepare(`INSERT INTO instagram_collections(account,external_id,name,url,updated_at) VALUES(?,?,?,?,?)
@@ -148,7 +151,7 @@ export class Store {
         let p;
         try { p = cleanPost(input); } catch (e) { result.rejected++; result.errors.push({ index, message: e.message }); continue; }
         const row = this.db.prepare('SELECT * FROM posts WHERE platform=? AND external_id=?').get(p.platform, p.externalId);
-        const now = new Date().toISOString();
+        const now = updatedTime(row?.updated_at);
         const accounts = new Set(row ? JSON.parse(row.accounts) : []);
         p.accounts.forEach(a => accounts.add(a));
         if (p.sourceAccount) accounts.add(p.sourceAccount);
@@ -158,13 +161,15 @@ export class Store {
           this.db.prepare(`UPDATE posts SET text=?, title=?, author=?, author_name=?, thumbnail=?, media=?, kind=?, tags=?, topics=?, accounts=?, published_at=?, updated_at=? WHERE id=?`).run(
             p.text.length > old.text.length ? p.text : old.text, old.title || p.title, p.author || old.author, p.authorName || old.authorName,
             p.thumbnail || old.thumbnail, JSON.stringify(p.media.length > old.media.length ? p.media : old.media), p.kind === 'text' ? old.kind : p.kind, JSON.stringify([...new Set([...old.tags, ...p.tags])]),
-            JSON.stringify([...new Set([...old.topics, ...p.topics])]), JSON.stringify([...accounts]), p.publishedAt || old.publishedAt, now, row.id);
+            JSON.stringify(row.topics_curated ? topicNames(this.db, row.id) : [...new Set([...topicNames(this.db, row.id), ...p.topics])]), JSON.stringify([...accounts]), p.publishedAt || old.publishedAt, now, row.id);
           result.updated++;
         } else {
           this.db.prepare(`INSERT INTO posts (platform,external_id,url,title,text,author,author_name,thumbnail,media,kind,tags,topics,accounts,published_at,saved_at,updated_at,notes,favorite,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
             p.platform, p.externalId, p.url, p.title, p.text, p.author, p.authorName, p.thumbnail, JSON.stringify(p.media), p.kind, JSON.stringify(p.tags), JSON.stringify(p.topics), JSON.stringify([...accounts]), p.publishedAt, p.savedAt || now, now, p.notes, +p.favorite, +p.archived);
           result.imported++;
         }
+        const stored = this.db.prepare('SELECT id,topics,topics_curated FROM posts WHERE platform=? AND external_id=?').get(p.platform, p.externalId);
+        if (!row || !row.topics_curated) writeTopicNames(this.db, stored.id, JSON.parse(stored.topics), input.topicsCurated === true);
         if (p.platform === 'chrome') this.db.prepare('UPDATE posts SET bookmark_title=?,folders=? WHERE platform=? AND external_id=?').run(p.bookmarkTitle, JSON.stringify(p.folders), p.platform, p.externalId);
         if (p.platform === 'instagram' && Array.isArray(input.collections)) {
           const postId = this.db.prepare("SELECT id FROM posts WHERE platform='instagram' AND external_id=?").get(p.externalId).id;
@@ -185,7 +190,7 @@ export class Store {
     this.db.prepare('UPDATE posts SET title=?,notes=?,tags=?,favorite=?,archived=?,updated_at=? WHERE id=?').run(
       input.title === undefined ? post.title : text(input.title, 180), input.notes === undefined ? post.notes : noteText(input.notes),
       JSON.stringify(input.tags === undefined ? post.tags : tags(input.tags)), input.favorite === undefined ? +post.favorite : +!!input.favorite,
-      input.archived === undefined ? +post.archived : +!!input.archived, new Date().toISOString(), id);
+      input.archived === undefined ? +post.archived : +!!input.archived, updatedTime(post.updatedAt), id);
     return this.post(id);
   }
   deletePost(id) { this.db.prepare('DELETE FROM posts WHERE id=?').run(id); }

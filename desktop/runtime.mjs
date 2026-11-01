@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
 import { Store } from '../server/store.mjs';
+import { topicCatalog, importTopicCatalog, topicNames } from '../server/topics.mjs';
 
 export const DEFAULT_PORT = 3217;
 export const isWebLink = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } };
@@ -26,6 +27,8 @@ export function readDatabaseSnapshot(path) {
     const has = table => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
     if (!has('posts')) throw new Error('This file is not a saveXtension library.');
     const posts = db.prepare('SELECT * FROM posts').all().map(row => Store.prototype.decode(row));
+    const topics = has('topics') ? topicCatalog(db, { all: true }) : [];
+    if (has('post_topics')) for (const post of posts) post.topics = topicNames(db, post.id);
     const collections = has('instagram_collections') ? db.prepare('SELECT id,account,external_id AS externalId,name,url FROM instagram_collections').all() : [];
     if (has('instagram_collection_posts')) {
       const byId = new Map(posts.map(post => [post.id, post]));
@@ -36,12 +39,13 @@ export function readDatabaseSnapshot(path) {
       }
     }
     const name = has('settings') ? db.prepare("SELECT value FROM settings WHERE key='name'").get()?.value : null;
-    db.exec('COMMIT'); return { posts, instagramCollections: collections, name };
+    db.exec('COMMIT'); return { posts, instagramCollections: collections, name, topics };
   } finally { db.close(); }
 }
 
 export function importSnapshot(store, snapshot) {
   if (!snapshot || !Array.isArray(snapshot.posts)) throw new Error('Choose a saveXtension JSON backup or SQLite library.');
+  if (snapshot.topics) importTopicCatalog(store.db, snapshot.topics);
   let imported = 0, updated = 0, rejected = 0;
   for (let i = 0; i < snapshot.posts.length; i += 200) {
     const result = store.importPosts(snapshot.posts.slice(i, i + 200));
@@ -108,6 +112,7 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
       if (closed) return; closed = true;
       // Stop explicitly so reopening can never leave an orphaned running job.
       await fetch(`${origin}/api/sync/stop`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+      await instance.mcp.close();
       await new Promise(resolve => {
         const timeout = setTimeout(() => instance.server.closeAllConnections(), 2000);
         instance.server.close(() => { clearTimeout(timeout); resolve(); }); instance.server.closeIdleConnections();

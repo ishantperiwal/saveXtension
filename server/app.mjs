@@ -7,6 +7,8 @@ import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
 import { previewServer } from './embeds.mjs';
 import { syncQueue } from './sync.mjs';
 import { HttpError, text, canonicalPost } from './domain.mjs';
+import { createLibraryMcp } from './mcp.mjs';
+import { topicCatalog, importTopicCatalog } from './topics.mjs';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf' };
@@ -22,6 +24,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
 
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
+  const mcp = createLibraryMcp(store, { origin: appOrigin, localMode });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -84,6 +87,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       const localHosts = new URL(appOrigin).hostname === 'localhost' || new URL(appOrigin).hostname === '127.0.0.1';
       const validLocalHost = localHosts && ['localhost', '127.0.0.1'].some(h => host === `${h}:${new URL(appOrigin).port || (secure ? '443' : '80')}`);
       if (host !== expectedHost && !validLocalHost) throw new HttpError(403, 'Unexpected host. Configure APP_ORIGIN for this address.');
+      if (path === '/mcp') {
+        if (!localMode || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) throw new HttpError(403, 'MCP accepts local connections only.');
+        const allowedOrigins = new Set([appOrigin, `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, `http://localhost:${new URL(appOrigin).port || '80'}`]);
+        if (requestOrigin !== undefined && !allowedOrigins.has(requestOrigin)) throw new HttpError(403, 'Unsupported MCP origin.');
+        return await mcp.handle(req, res);
+      }
       if (req.method === 'OPTIONS' && isExtensionRoute && extensionOrigin(requestOrigin)) { res.writeHead(204); res.end(); return; }
       if (!['GET', 'HEAD'].includes(req.method) && !isExtensionRoute) {
         const localOrigin = validLocalHost && requestOrigin === `http://${host}`;
@@ -195,6 +204,9 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       }
       if (path.startsWith('/api/')) {
         session(req);
+        if (path === '/api/mcp' && req.method === 'GET') return json(res, mcp.status());
+        if (path === '/api/mcp' && req.method === 'POST') return json(res, await mcp.setEnabled((await body(req)).enabled));
+        if (path === '/api/topics' && req.method === 'GET') return json(res, { topics: topicCatalog(store.db) });
         if (localMode && path === '/api/library' && req.method === 'POST') {
           const input = await body(req); store.set('name', text(input.name, 50) || 'My saves');
           return json(res, { name: store.get('name') });
@@ -206,11 +218,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/sync/stop' && req.method === 'POST') return json(res, { job: sync.cancel() });
         if (path === '/api/posts' && req.method === 'GET') {
           const scope = new URL(req.url, appOrigin).searchParams.get('scope') || 'active';
-          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections() });
+          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db) });
         }
         if (path === '/api/posts/import' && req.method === 'POST') {
           const input = await body(req);
-          if (!Array.isArray(input.posts) || input.posts.length < 1 || input.posts.length > 200) throw new HttpError(400, 'Import between 1 and 200 posts at a time.');
+          if (!Array.isArray(input.posts) || (!input.posts.length && !input.topics?.length) || input.posts.length > 200) throw new HttpError(400, 'Import up to 200 posts at a time, or a topic catalog.');
+          if (input.topics !== undefined) importTopicCatalog(store.db, input.topics);
           return json(res, store.importPosts(input.posts));
         }
         const post = path.match(/^\/api\/posts\/(\d+)$/);
@@ -222,7 +235,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (dev && req.method === 'DELETE') { store.revoke(dev[1]); return json(res, { ok: true }); }
         if (path === '/api/export' && req.method === 'GET') {
           res.setHeader('Content-Disposition', 'attachment; filename="savextension-backup.json"');
-          return json(res, { version: 1, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections() });
+          return json(res, { version: 2, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db, { all: true }) });
         }
         throw new HttpError(404, 'Endpoint not found.');
       }
@@ -240,6 +253,6 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     }
   });
   server.on('listening', () => preview.start());
-  server.on('close', () => { preview.close(); });
-  return { server, store, setupCode };
+  server.on('close', () => { preview.close(); void mcp.close(); });
+  return { server, store, setupCode, mcp };
 }

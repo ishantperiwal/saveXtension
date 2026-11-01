@@ -19,6 +19,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('handles replace platform groupings and each row filters only that owner on that platform', async ({ page }) => {
+  await expect.poll(() => page.locator('.sidebar nav .nav-item:not(.instagram-collection)').evaluateAll(items => items.map(item => item.dataset.navAccount || item.dataset.filter || item.dataset.action))).toEqual(['all', 'x:@beta', 'x:@same', 'x:@zero', 'chrome', 'archive-view', 'instagram:@other', 'instagram:@same']);
+  await expect(page.locator('.sidebar nav')).toHaveCSS('scrollbar-width', 'none');
   await expect(page.locator('[data-filter="instagram"],[data-filter="x"]')).toHaveCount(0);
   await expect(row(page, 'instagram:@same').locator('.nav-label-text')).toHaveText('@same');
   await expect(row(page, 'instagram:@same').locator('.nav-count')).toHaveText('2');

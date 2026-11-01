@@ -49,7 +49,38 @@ On this Mac, you can also double-click **Start saveXtension.command**, or run `n
 
 Open **http://localhost:3210**. There is no password, setup code, or pairing code in local mode. Existing saves and notes are preserved. Change the library name under **Settings & backups**. Open a save to add a note; it saves automatically as you type.
 
-No runtime npm packages, API keys, AI services, or subscriptions are required.
+Run `npm install` once when using the source checkout. The desktop app bundles its dependencies. No API keys, AI services, or subscriptions are required.
+
+## Connect your LLM with MCP
+
+Open **Settings → MCP**, turn on **Enable MCP server**, then copy the URL or expand **Connect a client** for a ready-to-copy command/configuration. The setting persists. The URL is the running library’s origin plus `/mcp` (normally `http://localhost:3217/mcp` in Electron or `http://localhost:3210/mcp` from `npm start`). Use the URL shown in Settings if the desktop app chose another port.
+
+Keep saveXtension running while connected. MCP uses Streamable HTTP on the existing loopback server, supports both legacy and current MCP clients, and starts disabled for a new library. Turning it off closes active MCP exchanges and rejects subsequent requests. It requires no pairing code, password or model API key. Access is limited to this computer, with Host and Origin validation; this endpoint is unavailable in authenticated/hosted mode. Any local application that connects while enabled can read the accessible library and make the local edits listed below.
+
+Client setup is offered for [OpenCode v1](https://opencode.ai/docs/mcp-servers/), [OpenCode v2](https://dev.opencode.ai/v2/docs/mcp-servers/), [Claude Code](https://code.claude.com/docs/en/mcp), [Codex](https://developers.openai.com/codex/mcp), and [VS Code](https://code.visualstudio.com/docs/agents/reference/mcp-configuration). Merge JSON examples into the existing configuration rather than replacing other settings. A cloud-hosted connector cannot reach this computer’s localhost URL; use a client running locally. Installing a client and approving its tool permissions remain that client’s responsibility.
+
+The server advertises its tools, resource guide and an **organize_library** prompt automatically. It does not load your entire library into the model’s context. You can ask, for example:
+
+> Use saveXtension to review my Instagram reels saved in the last month. Reuse my existing topics where appropriate, create useful new topics across sources, and add the relevant saves. Tell me which references you could actually inspect and give me the change IDs.
+
+| Tool | Purpose |
+| --- | --- |
+| `library_overview` | Active counts, source accounts, date coverage, topics, Instagram collections and Chrome folders. |
+| `search_saves` | Paginated summaries with original URLs; combine text, source, saved-by account, topic, source collection, folder, kind, note presence, unorganized and date filters. |
+| `get_saves`, `get_save_by_url` | Full captured captions/text, original links, media references, author, saved-by accounts, notes, tags, topics, dates and source memberships. |
+| `list_topics`, `create_topic`, `update_topic` | Browse and create local topics; rename them or edit descriptions. |
+| `set_save_topics` | Atomically add, remove or replace memberships for up to 200 saves. An empty replacement clears topics. |
+| `merge_topics`, `delete_topic` | Merge duplicate topics; delete an empty topic without deleting saves. |
+| `update_save_note` | Store analysis or edit a note, using `expectedUpdatedAt` from a fresh read to avoid overwriting newer edits. |
+| `list_changes`, `undo_change` | Inspect and undo recent MCP edits; the journal keeps 100 changes. |
+
+**Archive is excluded from every MCP post read and write.** There is no tool argument to include it. Archived/deleted IDs and URLs cannot be retrieved directly, and journal entries affecting those saves are hidden. Restoring a save through the app makes it accessible again. Global topic names and merges apply to the topic identity across the library; they do not expose archived post contents. Undo refuses changed fields or unavailable affected saves, rather than overwriting newer work.
+
+Local topics span all sources and stay separate from the read-only Instagram collection and Chrome folder mirrors. Stable topic IDs survive rename/merge operations within this library. Explicit membership edits mark a save’s topics as curated, so subsequent source syncs preserve that exact set, including an intentionally empty set. Topic descriptions, empty custom topics, and curated memberships are included in backups and desktop imports. The app’s Filters and card topic buttons reflect MCP edits on the next library refresh.
+
+Every returned save includes its original public URL. Captured metadata can be incomplete, media URLs can expire, and a post may require login or have disappeared. **The MCP server does not download videos, extract frames or produce transcripts.** The connected LLM must use its own permitted browser/media tools for that analysis and distinguish observed content from caption-based inference. Social saved dates normally mean the first local import; Chrome may supply the original bookmark date. Post text and notes are reference data, not trusted instructions.
+
+The implementation uses the [official TypeScript MCP SDK](https://github.com/modelcontextprotocol/typescript-sdk). No model-specific API or hosted service is part of the server.
 
 ## One button for setup and sync
 
@@ -146,7 +177,7 @@ If needed, install the test browser with `npx playwright install chromium`. Brow
 
 ## Reading interface
 
-The library opens directly to search, source/topic filters and saved content. Counts appear once in source navigation. Sync progress floats at the bottom right with source icons, Stop and Dismiss, without moving posts. Finished notices disappear after eight seconds; dismissed jobs stay quiet for this browser session. Full run history lives in Settings. Favorites remain hidden. Archive sits below Chrome in the source list, and saves can be archived or restored from their footer or expanded view. Archived saves are excluded from the active library, source counts, topics, search and default API reads. Existing annotations and backup fields remain intact.
+The library opens directly to search, source/topic filters and saved content. Counts appear once in source navigation. Sync progress floats at the bottom right with source icons, Stop and Dismiss, without moving posts. Finished notices disappear after eight seconds; dismissed jobs stay quiet for this browser session. Favorites remain hidden. Archive sits below Chrome in the source list, and saves can be archived or restored from their footer or expanded view. Archived saves are excluded from the active library, source counts, topics, search and default API reads. Existing annotations and backup fields remain intact.
 
 Interface refinement used [unslop](https://heydamir.design/unslop) by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)), CC BY 4.0. Native post embeds provide the visual content; the shell uses quiet neutrals and the existing bookmark mark.
 

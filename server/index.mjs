@@ -15,5 +15,5 @@ app.server.listen(port, host, () => {
   console.log(`\n  saveXtension → ${origin}\n`);
   if (!localMode && !app.store.get('password')) console.log(`  First-time setup code: ${app.setupCode}\n  Enter this code in the web app, then choose your password.\n`);
 });
-function shutdown() { app.server.close(() => { app.store.close(); process.exit(0); }); }
+async function shutdown() { await app.mcp.close(); app.server.close(() => { app.store.close(); process.exit(0); }); }
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
