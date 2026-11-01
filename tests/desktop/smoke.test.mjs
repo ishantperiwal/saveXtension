@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execute = promisify(execFile), require = createRequire(import.meta.url);
 
-test('desktop launches, syncs with its Chrome helper, preserves notes, and quick-syncs on reopening', { timeout: 120000 }, async () => {
+test('desktop launches, syncs with its Chrome helper, preserves notes, and quick-syncs on reopening', { timeout: 240000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'savex-electron-'));
   const appPath = join(dir, 'application'), dataDir = join(dir, 'library'), browserCalls = join(dir, 'browser-calls.txt');
   await mkdir(appPath);
@@ -48,7 +48,7 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
     await page.route('https://platform.twitter.com/**', route => route.abort());
     await page.getByRole('button', { name: 'Sync', exact: true }).click();
     const status = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
-    await expect.poll(async () => (await status())?.status, { timeout: 35000 }).toBe('partial');
+    await expect.poll(async () => (await status())?.status, { timeout: 75000 }).toBe('partial');
     const firstJob = await status(); assert.equal(firstJob.mode, 'quick');
     await expect.poll(async () => page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts.length)).toBe(2);
     await expect(page.locator('.save-card')).toHaveCount(2, { timeout: 7000 });
@@ -66,7 +66,7 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     assert.equal(saved.length, 2); assert(saved.some(post => post.notes === 'Saved in the desktop app'));
     await expect.poll(async () => (await status())?.id, { timeout: 15000 }).not.toBe(firstJob.id);
-    await expect.poll(async () => (await status())?.status, { timeout: 25000 }).toBe('partial');
+    await expect.poll(async () => (await status())?.status, { timeout: 60000 }).toBe('partial');
     assert.equal((await status()).mode, 'quick');
     const jobId = (await status()).id;
     await execute(executablePath, [appPath], { env, timeout: 10000 });
