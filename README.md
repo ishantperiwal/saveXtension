@@ -2,6 +2,37 @@
 
 Your Instagram saves and X bookmarks in one searchable library, on your computer.
 
+## Desktop app
+
+The Electron desktop app bundles its runtime and local server. Install the Mac DMG by dragging **saveXtension** to **Applications**, or run the Windows EXE installer. Opening the app starts the library automatically. Opening it again brings the existing window forward rather than starting a second server.
+
+On the first Sync, follow the in-app setup to load the included helper in Chrome or Edge and approve social/bookmark access. The helper uses the logins in that browser; Electron does not copy your Chrome cookies. Chrome/Edge must remain available while syncing. The desktop app opens a short-lived browser connection page and the helper closes it once connected. Background collection still uses extension-owned tabs.
+
+After the first configured sync, opening the app automatically runs a **quick** sync for the last selected accounts. **Library → Quick sync when app opens** turns this behavior on or off. Deep scans always require an explicit click.
+
+**Settings → App updates** shows the installed version, download progress and **Check for updates**. Installed builds also check on opening and automatically download a newer stable installer from this repository's GitHub Releases. Only the matching OS/architecture package is accepted. The app verifies its size and GitHub SHA-256 digest before offering **Install version…**. Finish or stop sync first; installation opens the verified installer and quits the app. On Mac, drag the replacement into Applications, then reopen it. Saves and notes stay in the application-data directory. Local source runs do not download installers.
+
+Code commits alone are not app releases. To publish, bump `package.json` and the root package-lock version, commit, and push a matching `vX.Y.Z` tag. The Desktop installers workflow tests and builds on macOS and Windows, then publishes both installers only after both jobs pass. The first build with App updates must be installed manually once; older builds have no updater. These test builds use the normal installer flow rather than a silent replacement/restart mechanism.
+
+Data and the managed helper live outside the installed app, under `saveXtension` in the operating system's application-data directory. Replacing the app does not replace the database. On first launch, an available local-mode library at `localhost:3210` is copied into the desktop library; the original is retained. If it is not running, use **Library → Import existing library** to choose a JSON backup or SQLite library. Development launches can also copy the checkout's existing `data/savextension.sqlite`. Only saves, collection metadata and the library name are imported; old queued jobs and authentication settings are not copied.
+
+Build and verify locally:
+
+```sh
+npm ci
+npx install-electron --no
+npx playwright install chromium
+npm run desktop
+npm run test:desktop
+npm run desktop:mac
+npm run desktop:verify
+npm run desktop:win
+```
+
+Installers are written to `dist/desktop/`. The current Mac command targets Apple Silicon; pass `--x64` directly to electron-builder for an Intel Mac build. The Windows command produces an x64 NSIS installer. Running **Desktop installers** manually uploads artifacts without publishing; pushing a version tag publishes a release after all checks pass.
+
+These initial installers are test builds. The Mac app has a local ad-hoc signature, not Apple notarization, and the Windows installer has no publisher certificate. OS trust prompts may appear. The Windows installer can be built on a Mac, but Windows launch/install behavior requires verification on Windows. For isolated development tests, `SAVEX_DESKTOP_DATA_DIR` chooses a separate app-data directory and `SAVEX_DESKTOP_LEGACY_ORIGIN` selects the legacy source; normal users need neither.
+
 ## Start
 
 Use Node.js 24 or later:

@@ -15,6 +15,7 @@
     if (type === 'WAKE_SYNC') void send('CHECK_JOBS');
     else if (type === 'PROBE_EXTENSION') void send('CHECK_JOBS', requestId);
     else if (['OPEN_SETUP', 'OPEN_BOOKMARK_SETUP'].includes(type)) void send(type, requestId);
+    else if (type === 'CLOSE_DESKTOP_CONNECT' && location.pathname === '/desktop-connect.html' && new URLSearchParams(location.search).get('desktop') === '1') void send(type);
   });
   void send('CHECK_JOBS');
 })();

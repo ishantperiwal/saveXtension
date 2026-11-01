@@ -64,7 +64,7 @@ const relative = date => {
 let storedSyncAccounts = null;
 try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
 const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
-let toastTimer, searchTimer, collectionVersion = 0;
+let toastTimer, searchTimer, updatePoll, collectionVersion = 0;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
 let dismissedSyncJobs = new Set();
 try { dismissedSyncJobs = new Set(JSON.parse(sessionStorage.getItem('savex-dismissed-sync-jobs') || '[]')); } catch { /* First notification in this tab. */ }
@@ -92,6 +92,7 @@ const notes = createNoteAutosave({
 });
 function flushActiveNote() { if (activeNote) { void notes.flush(activeNote); activeNote = null; } }
 function showModal(content, wide = false) {
+  clearInterval(updatePoll);
   closeSelect();
   flushActiveNote();
   disposeEmbeds(modal);
@@ -103,6 +104,8 @@ function showModal(content, wide = false) {
 }
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
 modal.addEventListener('close', () => { closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false'); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; });
+
+modal.addEventListener('close', () => clearInterval(updatePoll));
 
 async function boot() {
   try {
@@ -346,6 +349,11 @@ async function refresh(silent = false) {
 }
 async function connectDialog() { await startSync(); }
 function bridgeRequest(type = 'PROBE_EXTENSION', timeout = 1400) {
+  if (window.saveXDesktop) return Promise.all([window.saveXDesktop.connect(type), window.saveXDesktop.helperInfo()]).then(([browser, helper]) => {
+    state.desktopHelperVersion = helper.version;
+    state.bridge = browser ? { ...browser, seenAt: Date.now() } : null;
+    return state.bridge;
+  });
   return new Promise(resolve => {
     const requestId = crypto.randomUUID();
     const done = value => { clearTimeout(timer); window.removeEventListener('message', receive); resolve(value); };
@@ -361,6 +369,8 @@ function bridgeRequest(type = 'PROBE_EXTENSION', timeout = 1400) {
 }
 function currentAvailability(targets = state.pendingTargets || sourceTargets()) {
   const bridge = state.bridge && Date.now() - state.bridge.seenAt < 5000 ? state.bridge : null;
+  const browser = bridge || state.sync?.browser;
+  if (window.saveXDesktop && state.desktopHelperVersion && browser?.version && browser.version !== state.desktopHelperVersion) return 'missing';
   return syncAvailability(state.sync?.browser, bridge, targets);
 }
 function downloadExtension() {
@@ -370,13 +380,20 @@ function downloadExtension() {
 function setupDialog(mode, targets, download = false, syncMode = 'quick') {
   const missing = mode === 'missing', offline = mode === 'offline', chromeBookmarks = targets.includes('chrome');
   const title = missing ? 'Install once. Then just Sync.' : offline ? 'Open Chrome to sync.' : chromeBookmarks ? 'Allow Chrome bookmarks once.' : 'Allow background access once.';
-  const intro = missing ? 'The extension wasn’t detected. Your download contains the browser helper that brings your saves here.' : offline ? 'Your Chrome helper was connected before, but it isn’t responding right now. Open Chrome with the profile where you installed saveXtension.' : chromeBookmarks ? 'Chrome needs your permission to read bookmark titles, links and folders from this profile and save them in your local library.' : 'Your extension is installed. Chrome needs your permission to read saved posts in background tabs.';
+  const intro = missing ? window.saveXDesktop ? 'The desktop app includes a browser helper. Install it once in Chrome or Edge to use your existing social logins.' : 'The extension wasn’t detected. Your download contains the browser helper that brings your saves here.' : offline ? 'Your Chrome helper was connected before, but it isn’t responding right now. Open Chrome with the profile where you installed saveXtension.' : chromeBookmarks ? 'Chrome needs your permission to read bookmark titles, links and folders from this profile and save them in your local library.' : 'Your extension is installed. Chrome needs your permission to read saved posts in background tabs.';
   showModal(`<div class="sync-setup"><span class="dialog-kicker">${missing ? 'One-time setup' : 'Almost ready'}</span><h2>${title}</h2><p>${intro}</p>${missing ? `<ol class="setup-steps"><li><strong>Unzip the download</strong><p>Keep the extracted folder somewhere permanent.</p></li><li><strong>Open Chrome’s extensions page</strong><p>Enter <code>chrome://extensions</code> in Chrome’s address bar. For Edge, use <code>edge://extensions</code>.</p><button class="text-button" id="copy-extensions">Copy Chrome address</button></li><li><strong>Load the extension folder</strong><p>Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and choose the extracted <code>extension</code> folder.</p></li><li><strong>Allow your selected sources</strong><p>Open saveXtension once and click <b>${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}</b>. Approve Chrome’s permission request.</p></li></ol><div class="button-row"><a class="secondary" href="/extension.zip" download="savextension.zip">${icon('download')} Download again</a><button class="primary" id="check-extension">Check installation</button></div>` : offline ? `<p>Leave Chrome open. We’ll start your sync as soon as it reconnects.</p><div class="button-row"><button class="primary" id="check-extension">Check connection</button><button class="text-button" id="reinstall-extension">Reinstall extension</button></div><p class="fine-print">If the extension is disabled, enable it at <code>chrome://extensions</code>. If you recently reloaded it, refresh the library in Chrome.</p>` : `<p>Click below to open setup in Chrome, then click <b>${chromeBookmarks ? 'Allow Chrome bookmarks' : 'Enable background sync'}</b>${targets.length > 1 && chromeBookmarks ? ' and enable background sync for your social saves' : ''}. Your sync starts automatically after you approve access.</p><button class="primary" id="open-extension-setup">Open setup in Chrome</button><p class="fine-print">If setup doesn’t open, click the saveXtension extension icon in Chrome and choose ${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}.</p>`}<p class="setup-status" id="setup-status" role="status">${missing ? 'Waiting for installation. Your sync will start automatically when ready.' : offline ? 'Waiting for Chrome…' : 'Waiting for permission…'}</p></div>`);
   modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingMode = syncMode;
-  if (missing && download && sessionStorage.getItem('savex-extension-downloaded') !== 'true') downloadExtension();
+  if (missing && window.saveXDesktop) {
+    $('.setup-steps', modal).innerHTML = `<li><strong>Open Chrome or Edge extensions</strong><p>Turn on <b>Developer mode</b>. If you have an older saveXtension copy, disable it before loading this one.</p><button class="text-button" id="desktop-open-extensions">Open extensions</button></li><li><strong>Load the included helper</strong><p>Click <b>Load unpacked</b> and choose the extension folder shown below. The desktop app keeps this folder updated.</p><div class="button-row"><button class="secondary" id="desktop-show-helper">Show helper folder</button><button class="text-button" id="desktop-copy-helper">Copy folder path</button></div><p class="fine-print" id="desktop-helper-path"></p></li><li><strong>Allow your sources</strong><p>Open the saveXtension helper in Chrome or Edge and approve access to your selected sources. Sign in to X and Instagram in that browser as usual.</p></li>`;
+    const zip = $('a[download="savextension.zip"]', modal); if (zip) zip.remove();
+    $('#desktop-open-extensions').onclick = () => window.saveXDesktop.openExtensions().catch(error => toast(error.message, true));
+    $('#desktop-show-helper').onclick = () => window.saveXDesktop.showHelper().catch(error => toast(error.message, true));
+    $('#desktop-copy-helper').onclick = async () => { await window.saveXDesktop.copyHelperPath(); $('#desktop-copy-helper').textContent = 'Copied'; };
+    void window.saveXDesktop.helperInfo().then(info => { if ($('#desktop-helper-path')) $('#desktop-helper-path').textContent = info.path; });
+  } else if (missing && download && sessionStorage.getItem('savex-extension-downloaded') !== 'true') downloadExtension();
   if ($('#copy-extensions')) $('#copy-extensions').onclick = async () => { try { await navigator.clipboard.writeText('chrome://extensions'); $('#copy-extensions').textContent = 'Copied'; } catch { $('#setup-status').textContent = 'Enter chrome://extensions in Chrome’s address bar.'; } };
   if ($('#check-extension')) $('#check-extension').onclick = checkSetup;
-  if ($('#reinstall-extension')) $('#reinstall-extension').onclick = () => { setupDialog('missing', targets, false, syncMode); downloadExtension(); };
+  if ($('#reinstall-extension')) $('#reinstall-extension').onclick = () => { setupDialog('missing', targets, false, syncMode); if (!window.saveXDesktop) downloadExtension(); };
   if ($('#open-extension-setup')) $('#open-extension-setup').onclick = async e => {
     e.target.disabled = true;
     try {
@@ -518,7 +535,10 @@ async function syncStatus() {
   } catch { /* The reconnect screen handles server downtime. */ }
   finally { statusLoading = false; }
 }
-function wakeExtension() { window.postMessage({ source: 'savex-library', type: 'WAKE_SYNC' }, location.origin); }
+function wakeExtension() {
+  if (window.saveXDesktop) { void window.saveXDesktop.connect('WAKE_SYNC').catch(error => toast(error.message, true)); return; }
+  window.postMessage({ source: 'savex-library', type: 'WAKE_SYNC' }, location.origin);
+}
 async function startSync(mode = 'quick') {
   if (state.syncChecking || !sourceTargets().length) return;
   const fromOptions = modal.open && modal.dataset.syncOptions === 'true';
@@ -577,11 +597,44 @@ async function toggleArchive(id) {
     document.querySelectorAll(`[data-archive="${post.id}"]`).forEach(button => { button.disabled = false; });
   }
 }
+function mountUpdateSettings() {
+  if (!window.saveXDesktop?.updateStatus) return;
+  $('#library-form').insertAdjacentHTML('afterend', '<section class="app-updates" aria-labelledby="app-update-heading"><h3 class="section-gap" id="app-update-heading">App updates</h3><p class="fine-print" id="app-update-version"></p><p id="app-update-status" role="status" aria-live="polite">Checking update status…</p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button></section>');
+  const section = $('.app-updates'), button = $('#app-update-button'), progress = $('#app-update-progress');
+  let latest, reading = false;
+  function render(status) {
+    if (!section.isConnected || !modal.open) return;
+    latest = status;
+    $('#app-update-version', section).textContent = `Installed version ${status.currentVersion}`;
+    $('#app-update-status', section).textContent = status.message;
+    const downloading = status.phase === 'downloading';
+    progress.hidden = !downloading; progress.value = status.percent || 0;
+    progress.setAttribute('aria-valuetext', `${status.percent || 0}% downloaded`);
+    button.textContent = status.phase === 'ready' ? `Install version ${status.availableVersion}` : downloading ? `Downloading… ${status.percent || 0}%` : status.phase === 'checking' ? 'Checking…' : status.phase === 'error' ? 'Try again' : 'Check for updates';
+    button.disabled = ['checking', 'downloading', 'development'].includes(status.phase);
+  }
+  async function refreshUpdate() {
+    if (reading || !section.isConnected || !modal.open) return;
+    reading = true;
+    try { render(await window.saveXDesktop.updateStatus()); }
+    catch (error) { if (section.isConnected) $('#app-update-status', section).textContent = error.message; }
+    finally { reading = false; }
+  }
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      if (latest?.phase === 'ready') await window.saveXDesktop.installUpdate();
+      else render(await window.saveXDesktop.checkForUpdates());
+    } catch (error) { toast(error.message, true); }
+    finally { await refreshUpdate(); }
+  };
+  void refreshUpdate(); updatePoll = setInterval(refreshUpdate, 1000);
+}
 async function settingsDialog() {
   if (state.localMode) {
     showModal(`<h2>Settings</h2><form id="library-form"><label>Library name<input name="name" value="${esc(state.name)}" maxlength="50" placeholder="My saves"></label><button class="primary" type="submit">Save name</button></form><h3 class="section-gap">Backup</h3><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div><details class="settings-history"><summary>Sync history</summary><div class="sync-history">${state.runs.length ? state.runs.slice(0, 8).map(r => `<div><span class="run-icon">${icon(r.platform)}</span><span><strong>${platformName(r.platform)}${r.account ? ` · ${esc(r.account)}` : ''}</strong><small>${r.imported} new · ${r.updated} revisited · ${esc(r.status)}${r.message ? `<br>${esc(r.message)}` : ''}</small></span><time>${relative(r.startedAt)}</time></div>`).join('') : '<p>Your first sync will appear here.</p>'}</div></details>`);
     $('#library-form').onsubmit = async e => { e.preventDefault(); try { const result = await api('/library', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); state.name = result.name; modal.close(); render(); toast('Library name saved.'); } catch (error) { toast(error.message, true); } };
-    return;
+    mountUpdateSettings(); return;
   }
   showModal('<h2>Settings</h2><p>Loading settings…</p>');
   try {

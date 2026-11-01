@@ -401,6 +401,11 @@ async function checkJobs() {
 async function handle(message, sender) {
   if (sender.id !== chrome.runtime.id) throw new Error('Unknown sender.');
   const extensionPage = sender.url?.startsWith(chrome.runtime.getURL(''));
+  if (message.type === 'CLOSE_DESKTOP_CONNECT' && sender.tab) {
+    const url = new URL(sender.url);
+    if (localOrigin(url.origin) !== await origin() || url.pathname !== '/desktop-connect.html' || url.searchParams.get('desktop') !== '1') throw new Error('Only the desktop connection tab can close itself.');
+    await chrome.tabs.remove(sender.tab.id); return {};
+  }
   if (['CHECK_JOBS', 'OPEN_SETUP', 'OPEN_BOOKMARK_SETUP'].includes(message.type) && sender.tab && localOrigin(new URL(sender.url).origin)) {
     const address = localOrigin(message.origin);
     if (!address || address !== new URL(sender.url).origin) throw new Error('Unexpected library address.');

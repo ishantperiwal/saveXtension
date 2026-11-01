@@ -22,6 +22,27 @@ test('ordinary feeds, login pages and lookalike domains are not sync targets', a
   for (const url of ['https://x.com/home', 'https://x.com/i/flow/login', 'https://www.instagram.com/', 'https://www.instagram.com/accounts/login/', 'https://x.com.evil.com/i/bookmarks']) assert.equal(parser.pageInfo(document, new URL(url)).valid, false);
   dom.window.close();
 });
+test('Instagram collection links with creator prefixes resolve to the same posts as All posts', () => {
+  const dom = new JSDOM(`<main>
+    <a href="/studio.name/p/Shared/?img_index=1"><img alt="A saved reference"></a>
+    <a href="/p/Shared/"><img alt="Duplicate"></a>
+    <a href="https://www.instagram.com/motion_studio/reel/Reel_123/?igsh=tracking"><img alt="A motion reference"></a>
+    <a href="/creator/reels/Reel_123/">Duplicate reel</a>
+    <a href="//www.instagram.com/creator/tv/Video-123/"><img alt="A video reference"></a>
+    <a href="https://evil.example/creator/p/Nope/">Other website</a>
+    <a href="https://www.instagram.com.evil.example/creator/p/Nope/">Lookalike</a>
+    <a href="https://user:password@www.instagram.com/creator/p/Nope/">Credentials</a>
+    <a href="/creator/saved/123/">Collection</a>
+    <a href="/creator/extra/p/Nope/">Invalid route</a>
+  </main>`, { url: 'https://www.instagram.com/me/saved/design/123/', runScripts: 'outside-only' });
+  try {
+    dom.window.eval(script);
+    const posts = dom.window.SaveXExtractors.extract(dom.window.document, 'instagram');
+    assert.deepEqual(Array.from(posts, post => post.url), ['https://www.instagram.com/p/Shared/', 'https://www.instagram.com/reel/Reel_123/', 'https://www.instagram.com/tv/Video-123/']);
+    assert.equal(posts[0].author, 'studio.name');
+    assert.equal(posts[1].kind, 'video');
+  } finally { dom.window.close(); }
+});
 test('X History supports the selected Bookmarks tab but rejects Likes', async () => {
   const dom = await fixture('x', 'https://x.com/i/history');
   const { document, SaveXExtractors: parser, location } = dom.window;

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "saveXtension \u2014 sync your saves",
-  "version": "1.6.0",
+  "version": "1.7.1",
   "description": "Bring Chrome bookmarks, Instagram saves and X bookmarks into your local library.",
   "permissions": [
     "activeTab",

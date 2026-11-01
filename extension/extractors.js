@@ -59,15 +59,18 @@
   function instagramPosts(doc) {
     const found = new Map();
     for (const anchor of doc.querySelectorAll('a[href]')) {
-      const href = anchor.getAttribute('href');
-      const match = href?.match(/^(?:https:\/\/(?:www\.)?instagram\.com)?\/(p|reels?|tv)\/([\w-]+)(?:\/|$)/); if (!match) continue;
+      let url; try { url = new URL(anchor.getAttribute('href'), 'https://www.instagram.com'); } catch { continue; }
+      if (url.protocol !== 'https:' || !['instagram.com', 'www.instagram.com'].includes(url.hostname) || url.username || url.password || url.port) continue;
+      // Collection grids include the creator before /p/ or /reel/; All posts
+      // can omit it. Both forms must have the same canonical post identity.
+      const match = url.pathname.match(/^\/(?:([\w.]+)\/)?(p|reels?|tv)\/([\w-]+)(?:\/|$)/); if (!match) continue;
       const img = anchor.querySelector('img');
       const alt = img?.getAttribute('alt') || '';
-      const author = alt.match(/(?:Photo|Video|Reel) by ([\w.]+) (?:on|in) /i)?.[1] || '';
-      const prior = found.get(match[2]);
-      const post = { url: `https://www.instagram.com/${match[1] === 'reels' ? 'reel' : match[1]}/${match[2]}/`, author,
-        authorName: '', text: alt, thumbnail: img?.getAttribute('src') || '', kind: match[1].startsWith('reel') || anchor.querySelector('video') ? 'video' : /carousel/i.test(anchor.getAttribute('aria-label') || '') ? 'carousel' : 'image' };
-      if (!prior || post.text.length > prior.text.length || (!prior.thumbnail && post.thumbnail)) found.set(match[2], post);
+      const author = alt.match(/(?:Photo|Video|Reel) by ([\w.]+) (?:on|in) /i)?.[1] || match[1] || '';
+      const prior = found.get(match[3]);
+      const post = { url: `https://www.instagram.com/${match[2] === 'reels' ? 'reel' : match[2]}/${match[3]}/`, author,
+        authorName: '', text: alt, thumbnail: img?.getAttribute('src') || '', kind: match[2].startsWith('reel') || match[2] === 'tv' || anchor.querySelector('video') ? 'video' : /carousel/i.test(anchor.getAttribute('aria-label') || '') ? 'carousel' : 'image' };
+      if (!prior || post.text.length > prior.text.length || (!prior.thumbnail && post.thumbnail)) found.set(match[3], post);
     }
     return [...found.values()];
   }

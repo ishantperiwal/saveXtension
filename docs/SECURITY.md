@@ -1,5 +1,13 @@
 # Local-mode boundaries
 
+The Electron renderer has Node integration disabled, context isolation and sandboxing enabled, and no webview capability. The preload exposes a fixed list of helper actions. Main-process IPC checks both the originating web contents and exact library origin. External HTTP/HTTPS links open in the system browser; other protocols and unexpected in-window navigation are blocked. Renderer permission requests are denied; source permissions belong to Chrome/Edge.
+
+The packaged helper is copied into a stable, user-owned application-data directory. Browser launching uses fixed application candidates and argument arrays, never a shell command assembled from page content. The connection-tab close action verifies the configured local origin, exact page path and desktop marker before closing the sender tab. The desktop runtime retains the server's loopback and origin protections. Platform cookies stay in the collecting browser.
+
+Initial installers are local test builds: macOS uses an ad-hoc signature without Apple notarization, and Windows has no publisher signature. The build does not modify operating-system trust settings. Distribution certificates and notarization are separate release work.
+
+The desktop updater trusts stable installer releases from `ishantperiwal/saveXtension`, with no GitHub token embedded in the app. It rejects unexpected repositories, asset names, architectures and non-GitHub redirect hosts. Files must match the release asset's declared size and SHA-256 digest; incomplete/corrupt downloads are removed and the file is hashed again before launch. A checksum verifies the published bytes, not a publisher identity independently of GitHub. Downloading never executes a package. The user explicitly opens the installer through a native dialog, and OS trust checks remain in effect. Repository/release write access therefore controls distribution. The library database and login sessions are not sent to the update service.
+
 The default app is a personal library for this computer. It has no password, setup code, or pairing token. `server/index.mjs` restricts local-mode binding to loopback, and the HTTP server accepts local-mode connections only from loopback addresses. Host checks and library mutation Origin checks remain enabled.
 
 The extension has localhost access and requests X/Instagram host access once through Chrome. This enables inactive-tab collection with the user's existing browser sessions. No platform cookies or passwords are copied into the local library. The localhost bridge only wakes the sync queue; it cannot choose arbitrary URLs or invoke arbitrary extension actions.

@@ -2,7 +2,7 @@ import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { chooseSelect } from './select-helper.mjs';
+import { chooseSelect, openSyncOptions } from './select-helper.mjs';
 
 test('the collection tree keeps mobile controls in place and filters shared posts', async ({ page }, testInfo) => {
   const collections = [{ id: 101, account: '@me', name: 'Design notes' }, { id: 102, account: '@me', name: '❤️' }];
@@ -21,7 +21,7 @@ test('the collection tree keeps mobile controls in place and filters shared post
   await page.locator('.sidebar').screenshot({ path: testInfo.outputPath('instagram-collection-tree-mobile.png') });
 });
 
-test('the next Instagram quick sync discovers collections and makes existing saves browsable beneath Instagram', async ({ baseURL }, testInfo) => {
+for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers creator-prefixed collection posts and links existing saves`, async ({ baseURL }, testInfo) => {
   test.setTimeout(120000);
   const profile = await mkdtemp(resolve(tmpdir(), 'savex-ig-collections-'));
   const extension = resolve(profile, 'extension'); await cp(resolve('extension'), extension, { recursive: true });
@@ -32,7 +32,7 @@ test('the next Instagram quick sync discovers collections and makes existing sav
   await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
   const context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
   const shell = body => `<html><head><meta charset="utf-8"></head><body><a href="/collection_user/" aria-label="Profile"><img alt="collection_user profile picture"></a><main>${body}</main></body></html>`;
-  const post = id => `<a href="/p/${id}/"><img alt="Saved reference ${id}"></a>`;
+  const post = (id, collection = false) => `<a href="${collection ? '/reference.creator' : ''}/p/${id}/"><img alt="Saved reference ${id}"></a>`;
   const catalog = '<a href="/collection_user/saved/all-posts/" aria-label="All Posts">All Posts</a><a href="/collection_user/saved/design/1001/" aria-label="Design notes">Design notes</a><a href="/collection_user/saved/_/1002/" aria-label="❤️">❤️</a>';
   const detailVisits = []; let page;
   try {
@@ -43,9 +43,9 @@ test('the next Instagram quick sync discovers collections and makes existing sav
       let body;
       if (path === '/') body = shell('<a href="/collection_user/saved/">Saved</a>');
       else if (path === '/collection_user/saved/') body = shell(catalog);
-      else if (path.includes('/1001/')) body = shell(['Shared', 'DesignOnly'].map(post).join(''));
-      else if (path.includes('/1002/')) body = shell(['Shared', 'HeartOnly'].map(post).join(''));
-      else if (path.includes('/all-posts/')) body = shell(['Shared', 'DesignOnly', 'HeartOnly'].map(post).join(''));
+      else if (path.includes('/1001/')) body = shell(['Shared', 'DesignOnly'].map(id => post(id, true)).join(''));
+      else if (path.includes('/1002/')) body = shell(['Shared', 'HeartOnly'].map(id => post(id, true)).join(''));
+      else if (path.includes('/all-posts/')) body = shell(['Shared', 'DesignOnly', 'HeartOnly'].map(id => post(id)).join(''));
       else { detailVisits.push(path); body = shell('Unavailable'); }
       return route.fulfill({ contentType: 'text/html', body });
     });
@@ -54,17 +54,26 @@ test('the next Instagram quick sync discovers collections and makes existing sav
     // These posts predate collection support. Their global presence must not skip membership discovery.
     await page.evaluate(async () => {
       const headers = { 'Content-Type': 'application/json' };
+      const previous = (await (await fetch('/api/posts?scope=all')).json()).posts;
+      for (const post of previous.filter(post => post.platform === 'instagram' && ['Shared', 'DesignOnly', 'HeartOnly'].includes(post.externalId))) {
+        await fetch(`/api/posts/${post.id}`, { method: 'DELETE' });
+      }
       const { runId } = await (await fetch('/api/extension/runs', { method: 'POST', headers, body: JSON.stringify({ platform: 'instagram', account: '@collection_user' }) })).json();
       await fetch(`/api/extension/runs/${runId}`, { method: 'POST', headers, body: JSON.stringify({ details: true, posts: ['Shared', 'DesignOnly', 'HeartOnly'].map(id => ({ url: `https://www.instagram.com/p/${id}/`, text: 'Already saved', author: 'creator' })) }) });
       await fetch(`/api/extension/runs/${runId}/finish`, { method: 'POST', headers, body: JSON.stringify({ status: 'completed' }) });
     });
+    const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
+    const previousJobId = (await job())?.id;
     await chooseSelect(page, 'Sync source', 'instagram');
-    await page.getByRole('button', { name: 'Sync', exact: true }).click();
+    if (mode === 'deep') {
+      await openSyncOptions(page);
+      await page.getByRole('button', { name: 'Deep scan', exact: true }).click();
+    } else await page.getByRole('button', { name: 'Sync', exact: true }).click();
     await expect(page.getByRole('list', { name: 'Instagram collections' })).toBeVisible({ timeout: 30000 });
     await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
-    const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
+    await expect.poll(async () => (await job())?.id, { timeout: 10000 }).not.toBe(previousJobId);
     await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('partial');
-    expect((await job()).mode).toBe('quick');
+    expect((await job()).mode).toBe(mode);
     await expect(page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' })).toContainText('2', { timeout: 7000 });
     await page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
     await expect(page.locator('.save-card')).toHaveCount(2);

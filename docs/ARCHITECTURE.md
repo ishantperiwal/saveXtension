@@ -1,5 +1,17 @@
 # Architecture
 
+## Desktop runtime
+
+Electron owns the same local HTTP application and SQLite store in its main process, using its bundled Node runtime. The desktop library defaults to loopback port 3217, persists the chosen port and tries nearby ports when occupied. A single-instance lock brings the existing window forward. Data lives in the operating system's application-data directory, outside the installation. A first launch can copy records from a running local-mode library; native JSON/readonly SQLite import remains available. Migration excludes authentication settings and queued jobs.
+
+The renderer uses the existing web interface with a sandboxed, isolated preload exposing only the desktop helper actions. Chrome or Edge performs collection through the included extension, copied to a stable application-data folder and configured for the desktop origin. A short-lived browser connection page establishes the helper heartbeat; its close action is limited to that exact page. Installation, platform login and source permissions require the user's initial browser interaction.
+
+After the first configured sync, opening the desktop app queues a quick sync for the previous account selection when the helper is ready. This preference can be disabled in the Library menu. Previous deep mode is never reused automatically. Quitting cancels outstanding work and closes the owned server while retaining acknowledged records. On macOS, closing the window leaves the app running until Quit.
+
+`desktop/updates.mjs` reads the latest stable GitHub Release and downloads the exact version/platform/architecture installer. Downloads stream into the application-data updates directory, with bounded size, timeout, GitHub-only redirects and SHA-256 verification. Concurrent checks share one operation; verified cached packages are reused after relaunch. The Settings panel polls the narrow preload update API for progress. Installation is explicitly requested, re-verifies the cached file and opens the OS installer before quitting; active sync blocks it. Development source launches do not fetch packages. The tagged release workflow tests native packaged apps on both supported operating systems before publishing installers.
+
+## Collection and storage
+
 The local web library posts a job to `/api/sync`. A localhost content-script bridge wakes the extension immediately in Chrome; a 30-second Chrome alarm also checks the queue, allowing requests from other browsers or the Codex in-app browser.
 
 The extension claims a job, creates an inactive muted tab, and collects X Bookmarks or Instagram All posts using the existing Chrome login. It owns and closes only the tabs it creates. It never navigates or scrolls a pre-existing user tab.
@@ -43,6 +55,8 @@ Bookmark records use the `chrome` platform and a SHA-256 identity over the norma
 ## Instagram collections
 
 Instagram sync visits the account's Saved index before All posts. The extractor reads same-account collection links and accessible names, ignores All posts and Audio, and uses the numeric Instagram collection ID as identity across slug/name changes. A bounded catalog discovery adds each observed collection to the persisted job plan. Every collection inherits the explicitly requested quick/deep mode; catalog discovery never upgrades a quick sync to deep.
+
+Collection grids can expose creator-prefixed post links (`/creator/p/code/` or `/creator/reel/code/`) while All posts uses the shorter form. The extractor validates the Instagram host, accepts either form and emits the same canonical post URL and shortcode. Collection membership is attached to that existing post identity rather than creating another save.
 
 `instagram_collections` stores account-scoped external IDs, names and links. `instagram_collection_posts` associates collections with deduplicated posts; `sync_runs.collection_id` scopes membership ingestion and known-ID snapshots. Global presence never establishes a collection boundary. Collection passes don't multiply individual detail visits. Partial lists retain existing folders and associations. Instagram membership removals are not inferred from absent page content.
 
