@@ -26,20 +26,28 @@ test('updates compare stable numeric versions and choose an exact platform/archi
 });
 
 test('simultaneous checks download once, expose progress, verify bytes, and reuse a cached download after relaunch', async () => fixture(async (base, directory) => {
-  let downloads = 0, opened = 0; const progress = [];
+  let downloads = 0, opened = 0, finishDownload;
+  const remaining = new Promise(resolve => { finishDownload = resolve; });
   const fetchImpl = async url => {
     if (url.includes('api.github.com')) return Response.json(release());
     if (url.includes('github.com/')) return new Response(null, { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/test/installer' } });
     downloads++;
     return new Response(new ReadableStream({ async start(controller) {
       controller.enqueue(bytes.subarray(0, 8));
-      await new Promise(resolve => setTimeout(resolve, 10)); progress.push(updater.status().percent);
+      await remaining;
       controller.enqueue(bytes.subarray(8)); controller.close();
     } }));
   };
   const updater = createUpdater({ ...base, fetchImpl, openInstaller: async path => { assert.deepEqual(await readFile(path), bytes); opened++; } });
-  await Promise.all([updater.check(), updater.check()]);
-  assert.equal(downloads, 1); assert(progress[0] > 0 && progress[0] < 100);
+  const checking = Promise.all([updater.check(), updater.check()]);
+  try {
+    // Hold back the remaining bytes until the updater has consumed the first
+    // chunk. Disk setup can exceed a fixed timer on hosted Windows runners.
+    const deadline = Date.now() + 5000;
+    while (!updater.status().received && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(downloads, 1); assert.equal(updater.status().received, 8);
+    assert(updater.status().percent > 0 && updater.status().percent < 100);
+  } finally { finishDownload(); await checking; }
   assert.equal(updater.status().phase, 'ready'); assert.equal(opened, 0);
   await updater.install(); assert.equal(opened, 1);
   const next = createUpdater({ ...base, fetchImpl }); await next.check();
