@@ -34,7 +34,8 @@ function arrange(state) {
   const { grid, cards } = state;
   if (!grid.isConnected || !cards.size || !grid.clientWidth) return;
   state.width = grid.clientWidth;
-  const columns = Math.min(cards.size, Math.max(1, Math.floor((state.width + GAP) / (MIN_WIDTH + GAP))));
+  // Keep the same column width for sparse archives and filtered results.
+  const columns = Math.max(1, Math.floor((state.width + GAP) / (MIN_WIDTH + GAP)));
   const width = (state.width - (columns - 1) * GAP) / columns;
   grid.classList.add('is-masonry');
   // Write all widths before reading heights, avoiding a layout flush per card.

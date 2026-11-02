@@ -15,7 +15,21 @@ test('Settings enables local MCP, copies client setup, reflects LLM topic edits 
   await context.grantPermissions(['clipboard-read','clipboard-write']);
   await page.getByRole('button',{name:'Copy URL',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(`${origin}/mcp`);
-  await page.getByText('Connect a client',{exact:true}).click();
+  await expect(page.getByRole('group', { name:'Copy a connection prompt' })).toBeVisible();
+  for (const client of ['OpenCode','Claude Code','Codex','VS Code']) {
+    const chip = page.getByRole('button', {name:`Copy ${client} connection prompt`,exact:true});
+    await chip.click();
+    await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toContain(`Connect ${client}`);
+    const prompt = await page.evaluate(()=>navigator.clipboard.readText());
+    expect(prompt).toContain(`${origin}/mcp`); expect(prompt).toContain('library_overview');
+    expect(prompt).toContain('Do not modify my saves, topics or notes');
+    expect(prompt).toContain('preserving all other MCP servers');
+    if (client === 'OpenCode') { expect(prompt).toContain('Detect my OpenCode version'); expect(prompt).toContain('mcp.servers.savextension'); expect(prompt).toContain('DeepSeek'); }
+    await expect(chip).toHaveClass(/is-copied/); await expect(chip).toContainText(client);
+  }
+  await expect(page.locator('.mcp-client-chip.is-copied')).toHaveCount(0);
+  await page.screenshot({path:'test-results/mcp-prompt-chips-desktop.png'});
+  await page.getByText('Manual setup',{exact:true}).click();
   await page.getByRole('combobox',{name:'MCP client'}).click();await page.getByRole('option',{name:'Codex',exact:true}).click();
   await expect(page.locator('#mcp-client-config')).toHaveText(`codex mcp add savextension --url ${origin}/mcp`);
   await page.getByRole('button',{name:'Copy setup',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(`codex mcp add savextension --url ${origin}/mcp`);
@@ -38,4 +52,25 @@ test('Settings enables local MCP, copies client setup, reflects LLM topic edits 
     await page.getByRole('button',{name:'Settings & backups',exact:true}).click();await expect(toggle).toBeChecked();await page.reload();
     await page.getByRole('button',{name:'Settings & backups',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(page.getByRole('textbox',{name:'MCP server URL'})).toBeHidden();
   }finally{await client.close();await post('/api/mcp',{enabled:false});}
+});
+
+
+test('copy prompt chips stay visible without manual setup and expose selectable text if clipboard access fails',async({page})=>{
+  await page.route('**/api/posts?scope=all',route=>route.fulfill({json:{posts:[],runs:[]}}));
+  await page.route('**/api/mcp',route=>route.fulfill({json:{available:true,enabled:true,url:'http://localhost:4567/mcp'}}));
+  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('Clipboard unavailable');}}}));
+  await page.goto('/'); await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
+  const group=page.getByRole('group',{name:'Copy a connection prompt'});
+  await expect(group.getByRole('button')).toHaveCount(4);
+  await expect(page.locator('.mcp-setup')).not.toHaveAttribute('open','');
+  await group.getByRole('button',{name:'Copy OpenCode connection prompt',exact:true}).click();
+  const field=page.getByRole('textbox',{name:'Connection prompt',exact:true});
+  await expect(field).toBeVisible(); await expect(field).toBeFocused();
+  await expect(field).toHaveValue(/http:\/\/localhost:4567\/mcp/);
+  const selection=await field.evaluate(el=>({start:el.selectionStart,end:el.selectionEnd,length:el.value.length}));
+  expect(selection).toEqual({start:0,end:selection.length,length:selection.length});
+  await expect(page.locator('#mcp-error')).toContainText('Copy the selected prompt');
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  await page.screenshot({path:'test-results/mcp-prompt-fallback-mobile.png'});
 });

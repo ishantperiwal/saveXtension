@@ -48,3 +48,25 @@ test('Instagram folders stay beneath their owner, and handles stay visible on mo
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: 'test-results/account-sidebar-mobile.png' });
 });
+
+test('Instagram chevrons toggle each owner independently and remember the choice', async ({ page }) => {
+  const toggle = page.getByRole('button', { name: 'Toggle Instagram collections for @same', exact: true });
+  const folders = page.getByRole('list', { name: 'Instagram collections for @same', exact: true });
+  const otherFolders = page.getByRole('list', { name: 'Instagram collections for @other', exact: true });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('[data-instagram-collection="11"]').click();
+  expect(await visibleIds(page)).toEqual([501]);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(folders).toBeHidden(); await expect(otherFolders).toBeVisible();
+  expect(await visibleIds(page)).toEqual([501]);
+  await page.reload();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false'); await expect(folders).toBeHidden();
+  await toggle.focus(); await page.keyboard.press('Space');
+  await expect(folders).toBeVisible(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await toggle.click(); await expect(folders).toBeHidden();
+  await toggle.click(); await expect(folders).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});

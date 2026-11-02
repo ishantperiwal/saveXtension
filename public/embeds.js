@@ -52,6 +52,9 @@ export function mountEmbeds(root = document, eager = false) {
   root.querySelectorAll('.native-embed').forEach(holder => {
     if (holders.has(holder)) return;
     holders.set(holder, { frame: null, timer: null });
+    holder.addEventListener('error', event => {
+      if (event.target.matches?.('.embed-capture-image')) event.target.hidden = true;
+    }, true);
     holder.querySelector('[data-embed-retry]').onclick = () => load(holder);
     if (eager) load(holder); else observer.observe(holder);
   });

@@ -37,6 +37,7 @@ const paths = {
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/><path d="m8 11 3 3 5-5"/>',
   logout: '<path d="M10 4H4v16h6M13 8l4 4-4 4M9 12h12"/>',
   file: '<path d="M14 2H5v20h14V7zM14 2v6h5M8 13h8M8 17h6"/>',
+  copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
   pencil: '<path d="M21.17 6.83a2.83 2.83 0 0 0-4-4L3.5 16.5 2 22l5.5-1.5ZM15 5l4 4"/>',
   trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><path d="m3 17 6-6 4 4 3-3 5 5"/>'
@@ -63,9 +64,11 @@ const relative = date => {
   const days = Math.floor((Date.now() - Date.parse(date)) / 86400000);
   return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 7 ? `${days} days ago` : new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
+const collapsedInstagramAccounts = new Set();
+try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-instagram')); if (Array.isArray(saved)) for (const account of saved) if (typeof account === 'string') collapsedInstagramAccounts.add(account); } catch { /* Start with collections expanded. */ }
 let storedSyncAccounts = null;
 try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
-const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
+const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
 let toastTimer, searchTimer, updatePoll, collectionVersion = 0;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
 let dismissedSyncJobs = new Set();
@@ -98,14 +101,14 @@ function showModal(content, wide = false) {
   closeSelect();
   flushActiveNote();
   disposeEmbeds(modal);
-  state.pendingTargets = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions;
+  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions;
   $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false');
   modal.innerHTML = `<button class="icon-button modal-close" aria-label="Close dialog">${icon('close')}</button>${content}`;
   modal.className = wide ? 'wide' : ''; if (!modal.open) modal.showModal();
   $('.modal-close', modal).onclick = () => modal.close();
 }
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
-modal.addEventListener('close', () => { closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false'); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; });
+modal.addEventListener('close', () => { closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false'); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; });
 
 modal.addEventListener('close', () => clearInterval(updatePoll));
 
@@ -140,14 +143,15 @@ function renderAccountNavigation() {
   const signature = JSON.stringify([accounts, collections, [...counts]]);
   for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram']]) {
     const root = $(selector); if (!root || root.dataset.signature === signature) continue;
-    const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection } : null;
+    const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection, toggle: document.activeElement.dataset.collectionsAccount } : null;
     root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
       const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
       const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}`) : [];
-      return `<div class="source-account-group"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<ul class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}">${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
+      const expanded = !collapsedInstagramAccounts.has(account.value), listId = `instagram-collections-${encodeURIComponent(account.value)}`;
+      return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle Instagram collections for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} collections">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
     }).join('');
     root.dataset.signature = signature;
-    if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
+    if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : focused.toggle ? button.dataset.collectionsAccount === focused.toggle : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
   }
 }
 function updateSidebarSelection() {
@@ -170,17 +174,39 @@ function renderSidebarMarkers() {
   const sidebar = $('.sidebar'), marks = $('.sidebar-selection-marks');
   if (!sidebar || !marks) return;
   const bounds = sidebar.getBoundingClientRect();
-  const selected = [...sidebar.querySelectorAll('[data-filter].active, [data-nav-account].active, .archive-nav.active')].filter(item => {
+  const instagramOwners = navigationAccounts().filter(account => account.platform === 'instagram');
+  const selected = [...sidebar.querySelectorAll('[data-nav-account].active, [data-filter="chrome"].active')].filter(item => {
+    // Instagram currently syncs the signed-in account. Do not imply account
+    // switching when a library contains more than one Instagram owner.
+    if (item.dataset.navAccount?.startsWith('instagram:') && instagramOwners.length !== 1) return false;
     if (!item.getClientRects().length) return false;
     const rect = item.getBoundingClientRect(), clip = item.closest('nav').getBoundingClientRect();
     return rect.top + rect.height / 2 >= clip.top && rect.top + rect.height / 2 <= clip.bottom && rect.left + rect.width / 2 >= clip.left && rect.left + rect.width / 2 <= clip.right;
   });
-  marks.replaceChildren(...selected.map(item => {
-    const rect = item.getBoundingClientRect(), mark = document.createElement('span');
-    mark.style.top = `${rect.top - bounds.top - sidebar.clientTop + sidebar.scrollTop + (rect.height - 16) / 2}px`;
-    return mark;
-  }));
+  const previous = new Map([...marks.children].map(button => [button.dataset.syncAccount, button]));
+  const busyJob = ['queued', 'running'].includes(state.sync?.job?.status) ? state.sync.job : null;
+  const syncing = state.syncChecking ? state.checkingSyncRequest : busyJob;
+  const buttons = selected.map(item => {
+    const value = item.dataset.navAccount || 'chrome:*';
+    const [platform, handle] = value.split(':');
+    const label = platform === 'x' && handle.startsWith('@') ? `X ${handle}` : platformName(platform);
+    const rect = item.getBoundingClientRect();
+    let button = previous.get(value);
+    if (!button) {
+      button = document.createElement('button'); button.type = 'button';
+      button.className = 'sidebar-account-refresh'; button.dataset.action = 'refresh-account'; button.dataset.syncAccount = value;
+      button.innerHTML = icon('refresh');
+    }
+    const isSyncing = !!syncing?.targets?.includes(platform) && (platform !== 'x' || syncing.xAccount === 'all' || syncing.xAccount === handle || Array.isArray(syncing.xAccount) && syncing.xAccount.includes(handle) || syncing.xAccount === 'current' && (handle === '*' || handle === '' || state.sync?.xAccounts?.active?.toLowerCase() === handle));
+    button.setAttribute('aria-label', `Refresh ${label}`); button.title = `Refresh ${label}`;
+    button.setAttribute('aria-busy', String(isSyncing)); button.disabled = !!busyJob || state.syncChecking;
+    button.style.top = `${rect.top - bounds.top - sidebar.clientTop + sidebar.scrollTop + rect.height / 2 - 10}px`;
+    return button;
+  });
+  // Preserve the focused/hovered control across sync-status polling.
+  if (buttons.length !== marks.children.length || buttons.some((button, index) => button !== marks.children[index])) marks.replaceChildren(...buttons);
 }
+
 const sidebarObserver = new ResizeObserver(renderSidebarMarkers);
 function render() {
   closeSelect();
@@ -201,7 +227,7 @@ function render() {
           <div id="instagram-navigation"></div>
         </div>
       </nav>
-      <div class="sidebar-selection-marks" aria-hidden="true"></div>
+      <div class="sidebar-selection-marks"></div>
     </aside>
     <main class="main">
       <div class="page-content">
@@ -299,10 +325,20 @@ function bookmarkPreview(p, full = false) {
   const folders = (p.folders || []).filter(f => full || !/^(Other bookmarks|Bookmarks bar|Mobile bookmarks)$/i.test(f));
   return `<div class="bookmark-preview"><span class="bookmark-host">${esc(u.hostname.replace(/^www\./, ''))}</span><a class="bookmark-title" href="${esc(p.url)}" title="${esc(p.bookmarkTitle || p.title || p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.bookmarkTitle || u.hostname)}</a></div><div class="bookmark-folders">${folders.map(f => `<span title="${esc(f)}">${esc(f)}</span>`).join('')}</div>`;
 }
+function embedMetadata(p, full = false) {
+  const handle = p.author ? `@${String(p.author).replace(/^@+/, '')}` : '';
+  const name = p.authorName || handle || platformName(p.platform);
+  const caption = p.text || (p.title !== p.authorName ? p.title : '') || '';
+  const image = p.thumbnail || p.media?.[0];
+  const published = Number.isFinite(Date.parse(p.publishedAt));
+  const date = published ? p.publishedAt : p.savedAt;
+  const dated = Number.isFinite(Date.parse(date));
+  return `<div class="embed-placeholder ${full ? 'is-full' : ''}"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><strong>${esc(name)}</strong>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div></div>${image ? `<img class="embed-capture-image" src="${esc(image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Saved '}${esc(relative(date))}</time>` : ''}</div>`;
+}
 function nativePreview(p, full = false) {
   if (p.platform === 'chrome') return bookmarkPreview(p, full);
   const supported = !!embedTarget(p.url);
-  return `<section class="native-embed" data-post-url="${esc(p.url)}" data-embed-state="${supported ? 'pending' : 'failed'}"><div class="embed-stage"><div class="embed-placeholder" role="status"><span>Loading post…</span></div></div><div class="embed-error" ${supported ? 'hidden' : ''}><p>This post can’t be loaded right now.</p><div><button type="button" class="text-button" data-embed-retry>Retry</button><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open original</a></div></div></section>`;
+  return `<section class="native-embed" data-post-url="${esc(p.url)}" data-embed-state="${supported ? 'pending' : 'failed'}"><div class="embed-stage">${embedMetadata(p, full)}</div><div class="embed-error" ${supported ? 'hidden' : ''}><p>This post can’t be loaded right now.</p><div><button type="button" class="text-button" data-embed-retry>Retry</button><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open original</a></div></div></section>`;
 }
 function card(p) {
   const native = p.platform !== 'chrome' && !!embedTarget(p.url);
@@ -328,7 +364,7 @@ function reconcileCards(posts) {
       const template = document.createElement('template'); template.innerHTML = card(post); el = template.content.firstElementChild;
     } else if (cardVersions.get(el) !== version) {
       const template = document.createElement('template'); template.innerHTML = card(post); const next = template.content.firstElementChild;
-      for (const selector of ['.card-metadata', '.card-footer']) el.querySelector(selector)?.replaceWith(next.querySelector(selector));
+      for (const selector of ['.card-metadata', '.card-footer', '.embed-placeholder']) el.querySelector(selector)?.replaceWith(next.querySelector(selector));
       if (post.platform === 'chrome') { el.querySelector('.bookmark-preview')?.replaceWith(next.querySelector('.bookmark-preview')); el.querySelector('.bookmark-folders')?.replaceWith(next.querySelector('.bookmark-folders')); }
     }
     cardVersions.set(el, version);
@@ -381,12 +417,12 @@ function downloadExtension() {
   const link = document.createElement('a'); link.href = '/extension.zip'; link.download = 'savextension.zip';
   document.body.append(link); link.click(); link.remove(); sessionStorage.setItem('savex-extension-downloaded', 'true');
 }
-function setupDialog(mode, targets, download = false, syncMode = 'quick') {
+function setupDialog(mode, targets, download = false, syncMode = 'quick', request = { targets, xAccount: selectedSyncRequest().xAccount }) {
   const missing = mode === 'missing', offline = mode === 'offline', chromeBookmarks = targets.includes('chrome');
   const title = missing ? 'Install once. Then just Sync.' : offline ? 'Open Chrome to sync.' : chromeBookmarks ? 'Allow Chrome bookmarks once.' : 'Allow background access once.';
   const intro = missing ? window.saveXDesktop ? 'The desktop app includes a browser helper. Install it once in Chrome or Edge to use your existing social logins.' : 'The extension wasn’t detected. Your download contains the browser helper that brings your saves here.' : offline ? 'Your Chrome helper was connected before, but it isn’t responding right now. Open Chrome with the profile where you installed saveXtension.' : chromeBookmarks ? 'Chrome needs your permission to read bookmark titles, links and folders from this profile and save them in your local library.' : 'Your extension is installed. Chrome needs your permission to read saved posts in background tabs.';
   showModal(`<div class="sync-setup"><span class="dialog-kicker">${missing ? 'One-time setup' : 'Almost ready'}</span><h2>${title}</h2><p>${intro}</p>${missing ? `<ol class="setup-steps"><li><strong>Unzip the download</strong><p>Keep the extracted folder somewhere permanent.</p></li><li><strong>Open Chrome’s extensions page</strong><p>Enter <code>chrome://extensions</code> in Chrome’s address bar. For Edge, use <code>edge://extensions</code>.</p><button class="text-button" id="copy-extensions">Copy Chrome address</button></li><li><strong>Load the extension folder</strong><p>Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and choose the extracted <code>extension</code> folder.</p></li><li><strong>Allow your selected sources</strong><p>Open saveXtension once and click <b>${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}</b>. Approve Chrome’s permission request.</p></li></ol><div class="button-row"><a class="secondary" href="/extension.zip" download="savextension.zip">${icon('download')} Download again</a><button class="primary" id="check-extension">Check installation</button></div>` : offline ? `<p>Leave Chrome open. We’ll start your sync as soon as it reconnects.</p><div class="button-row"><button class="primary" id="check-extension">Check connection</button><button class="text-button" id="reinstall-extension">Reinstall extension</button></div><p class="fine-print">If the extension is disabled, enable it at <code>chrome://extensions</code>. If you recently reloaded it, refresh the library in Chrome.</p>` : `<p>Click below to open setup in Chrome, then click <b>${chromeBookmarks ? 'Allow Chrome bookmarks' : 'Enable background sync'}</b>${targets.length > 1 && chromeBookmarks ? ' and enable background sync for your social saves' : ''}. Your sync starts automatically after you approve access.</p><button class="primary" id="open-extension-setup">Open setup in Chrome</button><p class="fine-print">If setup doesn’t open, click the saveXtension extension icon in Chrome and choose ${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}.</p>`}<p class="setup-status" id="setup-status" role="status">${missing ? 'Waiting for installation. Your sync will start automatically when ready.' : offline ? 'Waiting for Chrome…' : 'Waiting for permission…'}</p></div>`);
-  modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingMode = syncMode;
+  modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingSyncRequest = request; state.pendingMode = syncMode;
   if (missing && window.saveXDesktop) {
     $('.setup-steps', modal).innerHTML = `<li><strong>Open Chrome or Edge extensions</strong><p>Turn on <b>Developer mode</b>. If you have an older saveXtension copy, disable it before loading this one.</p><button class="text-button" id="desktop-open-extensions">Open extensions</button></li><li><strong>Load the included helper</strong><p>Click <b>Load unpacked</b> and choose the extension folder shown below. The desktop app keeps this folder updated.</p><div class="button-row"><button class="secondary" id="desktop-show-helper">Show helper folder</button><button class="text-button" id="desktop-copy-helper">Copy folder path</button></div><p class="fine-print" id="desktop-helper-path"></p></li><li><strong>Allow your sources</strong><p>Open the saveXtension helper in Chrome or Edge and approve access to your selected sources. Sign in to X and Instagram in that browser as usual.</p></li>`;
     const zip = $('a[download="savextension.zip"]', modal); if (zip) zip.remove();
@@ -397,7 +433,7 @@ function setupDialog(mode, targets, download = false, syncMode = 'quick') {
   } else if (missing && download && sessionStorage.getItem('savex-extension-downloaded') !== 'true') downloadExtension();
   if ($('#copy-extensions')) $('#copy-extensions').onclick = async () => { try { await navigator.clipboard.writeText('chrome://extensions'); $('#copy-extensions').textContent = 'Copied'; } catch { $('#setup-status').textContent = 'Enter chrome://extensions in Chrome’s address bar.'; } };
   if ($('#check-extension')) $('#check-extension').onclick = checkSetup;
-  if ($('#reinstall-extension')) $('#reinstall-extension').onclick = () => { setupDialog('missing', targets, false, syncMode); if (!window.saveXDesktop) downloadExtension(); };
+  if ($('#reinstall-extension')) $('#reinstall-extension').onclick = () => { setupDialog('missing', targets, false, syncMode, request); if (!window.saveXDesktop) downloadExtension(); };
   if ($('#open-extension-setup')) $('#open-extension-setup').onclick = async e => {
     e.target.disabled = true;
     try {
@@ -533,8 +569,8 @@ function renderSyncToast(job, busy, message) {
   $('#sync-toast-details', el).textContent = message;
   el.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(el.dataset.expanded === 'true'));
 }
-async function queueSync(targets, mode = 'quick') {
-  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: selectedSyncRequest().xAccount, mode } });
+async function queueSync(targets, mode = 'quick', request = selectedSyncRequest()) {
+  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: request.xAccount, mode } });
   state.sync = { ...state.sync, job }; renderSync(); wakeExtension();
 }
 let statusLoading = false;
@@ -544,10 +580,10 @@ async function syncStatus() {
   try {
     state.sync = await api('/sync'); renderSync();
     if (state.pendingTargets && modal.open && modal.dataset.syncSetup && !state.syncChecking) {
-      const availability = currentAvailability(), targets = state.pendingTargets, mode = state.pendingMode;
+      const availability = currentAvailability(), targets = state.pendingTargets, mode = state.pendingMode, request = state.pendingSyncRequest;
       if (availability === 'ready') {
-        state.pendingTargets = null; modal.close(); await queueSync(targets, mode);
-      } else if (availability === 'permissions' && modal.dataset.syncSetup !== 'permissions') setupDialog('permissions', targets, false, mode);
+        state.pendingTargets = null; modal.close(); await queueSync(targets, mode, request);
+      } else if (availability === 'permissions' && modal.dataset.syncSetup !== 'permissions') setupDialog('permissions', targets, false, mode, request);
     }
   } catch { /* The reconnect screen handles server downtime. */ }
   finally { statusLoading = false; }
@@ -556,21 +592,21 @@ function wakeExtension() {
   if (window.saveXDesktop) { void window.saveXDesktop.connect('WAKE_SYNC').catch(error => toast(error.message, true)); return; }
   window.postMessage({ source: 'savex-library', type: 'WAKE_SYNC' }, location.origin);
 }
-async function startSync(mode = 'quick') {
-  if (state.syncChecking || !sourceTargets().length) return;
+async function startSync(mode = 'quick', request = selectedSyncRequest()) {
+  if (state.syncChecking || ['queued', 'running'].includes(state.sync?.job?.status) || !request.targets.length) return;
   const fromOptions = modal.open && modal.dataset.syncOptions === 'true';
   if (state.demo) { state.demo = false; render(); }
-  state.syncChecking = true; renderSync();
+  state.syncChecking = true; state.checkingSyncRequest = request; renderSync();
   try {
-    const targets = sourceTargets();
+    const targets = request.targets;
     // Probe the current browser, then fall back to Chrome's server-side heartbeat.
     await bridgeRequest();
     state.sync = await api('/sync');
     if (fromOptions && (!modal.open || modal.dataset.syncOptions !== 'true')) return;
-    const availability = currentAvailability();
-    if (availability === 'ready') { await queueSync(targets, mode); if (fromOptions && modal.dataset.syncOptions) modal.close(); }
-    else setupDialog(availability, targets, availability === 'missing', mode);
-  } finally { state.syncChecking = false; renderSync(); }
+    const availability = currentAvailability(targets);
+    if (availability === 'ready') { await queueSync(targets, mode, request); if (fromOptions && modal.dataset.syncOptions) modal.close(); }
+    else setupDialog(availability, targets, availability === 'missing', mode, request);
+  } finally { state.syncChecking = false; state.checkingSyncRequest = null; renderSync(); }
 }
 async function details(id) {
   const p = allPosts().find(p => p.id === Number(id)); if (!p) return;
@@ -733,6 +769,20 @@ document.addEventListener('click', async e => {
     else if (button.dataset.open) await details(button.dataset.open);
     else if (button.dataset.revoke) { if (confirm('Disconnect this browser? Its next sync will require pairing again.')) { await api(`/devices/${button.dataset.revoke}`, { method: 'DELETE' }); await settingsDialog(); } }
     else switch (button.dataset.action) {
+      case 'toggle-collections': {
+        const account = button.dataset.collectionsAccount, expanded = button.getAttribute('aria-expanded') !== 'true';
+        if (expanded) collapsedInstagramAccounts.delete(account); else collapsedInstagramAccounts.add(account);
+        button.setAttribute('aria-expanded', String(expanded)); button.title = `${expanded ? 'Collapse' : 'Expand'} collections`;
+        document.getElementById(button.getAttribute('aria-controls')).hidden = !expanded;
+        try { localStorage.setItem('savex-collapsed-instagram', JSON.stringify([...collapsedInstagramAccounts])); } catch { /* Keep the current session choice. */ }
+        renderSidebarMarkers();
+        break;
+      }
+      case 'refresh-account': {
+        const [platform, handle] = button.dataset.syncAccount.split(':');
+        await startSync('quick', { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current' });
+        break;
+      }
       case 'sync-options': syncOptionsDialog(); break;
       case 'sync': await startSync(); break;
       case 'deep-sync': await startSync('deep'); break;

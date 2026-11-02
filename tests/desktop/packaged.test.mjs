@@ -23,6 +23,7 @@ test('packaged desktop runs from its own runtime and resources and persists its 
     await expect(page.getByText(`Installed version ${info.version}`, { exact: true })).toBeVisible();
     await page.getByRole('switch', { name: 'Enable MCP server' }).check();
     const mcpUrl = await page.getByRole('textbox', { name: 'MCP server URL' }).inputValue();
+    await expect(page.getByRole('group', { name: 'Copy a connection prompt' }).getByRole('button')).toHaveCount(4);
     const mcpClient = new Client({ name: 'packaged-verification', version: '1' });
     try {
       await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
@@ -36,10 +37,13 @@ test('packaged desktop runs from its own runtime and resources and persists its 
     await access(join(helper.path, 'manifest.json')); assert(helper.path.startsWith(dir));
     await page.route('https://platform.twitter.com/**', route => route.abort());
     await page.evaluate(async () => {
-      const response = await fetch('/api/posts/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posts: [{ url: 'https://x.com/writer/status/981000099', notes: 'A note saved by the packaged app' }] }) });
+      const response = await fetch('/api/posts/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posts: [{ url: 'https://x.com/writer/status/981000099', text: 'Captured caption available while X loads', author: 'writer', authorName: 'Example writer', notes: 'A note saved by the packaged app' }] }) });
       if (!response.ok) throw new Error('Packaged API import failed.');
     });
     await page.reload(); await expect(page.locator('.save-card')).toHaveCount(1);
+    await expect(page.locator('.save-card .embed-capture-text')).toHaveText('Captured caption available while X loads');
+    await expect(page.locator('.save-card .embed-capture-author')).toContainText('Example writer');
+    await expect(page.getByText('Loading post…', { exact: true })).toHaveCount(0);
     await mkdir(resolve('test-results'), { recursive: true }); await page.screenshot({ path: resolve('test-results/desktop-packaged.png') });
     await desktop.close();
     desktop = await _electron.launch({ executablePath, env });
