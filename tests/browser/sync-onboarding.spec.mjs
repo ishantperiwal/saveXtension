@@ -1,4 +1,4 @@
-import { chooseSelect } from './select-helper.mjs';
+import { chooseSelect, startQuickSync, openSyncOptions } from './select-helper.mjs';
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -22,7 +22,7 @@ async function mockHelper(page, browser = null) {
 test('missing helper downloads once, shows installation steps, and resumes the original source automatically', async ({ page }) => {
   const state = await mockHelper(page);
   await chooseSelect(page, 'Sync source', 'instagram');
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Sync', exact: true }).click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), startQuickSync(page)]);
   expect(download.suggestedFilename()).toBe('savextension.zip');
   expect((await readFile(await download.path())).subarray(0, 2).toString()).toBe('PK');
   await expect(page.getByRole('heading', { name: 'Install once. Then just Sync.' })).toBeVisible();
@@ -43,22 +43,22 @@ test('missing helper downloads once, shows installation steps, and resumes the o
 
 test('disconnected Chrome never triggers a download and closing setup cancels pending sync', async ({ page }) => {
   const state = await mockHelper(page, { online: false, ready: true, name: 'Chrome' });
-  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await startQuickSync(page);
   await expect(page.getByRole('heading', { name: 'Open Chrome to sync.' })).toBeVisible();
   await page.getByRole('button', { name: 'Check connection' }).click();
   expect(state.downloads).toBe(0); expect(state.queued).toHaveLength(0);
   await page.getByRole('button', { name: 'Close dialog' }).click();
   state.browser = { online: true, ready: true, name: 'Chrome' };
   await expect(page.locator('#sync-status')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await openSyncOptions(page);
+  await startQuickSync(page);
   await expect.poll(() => state.queued.length).toBe(1);
   expect(state.downloads).toBe(0); await expect(page.locator('#modal')).not.toBeVisible();
 });
 
 test('permission setup opens through Chrome and approval resumes sync without another Sync click', async ({ page }) => {
   const state = await mockHelper(page, { online: true, ready: false, name: 'Chrome' });
-  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await startQuickSync(page);
   await expect(page.getByRole('heading', { name: 'Allow background access once.' })).toBeVisible();
   await page.getByRole('button', { name: 'Open setup in Chrome' }).click();
   await expect.poll(() => state.setupRequests).toBe(1);
@@ -71,7 +71,7 @@ test('permission setup opens through Chrome and approval resumes sync without an
 test('Chrome bookmark permission is separate from social access and resumes the requested import', async ({ page }) => {
   const state = await mockHelper(page, { online: true, ready: true, bookmarksSupported: true, bookmarksReady: false });
   await chooseSelect(page, 'Sync source', 'chrome');
-  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await startQuickSync(page);
   await expect(page.getByRole('heading', { name: 'Allow Chrome bookmarks once.' })).toBeVisible();
   await expect(page.locator('#modal')).toContainText('bookmark titles, links and folders');
   expect(state.downloads).toBe(0); expect(state.queued).toHaveLength(0);

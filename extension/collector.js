@@ -2,6 +2,7 @@
   if (globalThis.__saveXCollectorInstalled) return;
   globalThis.__saveXCollectorInstalled = true;
   let running = false, stopped = false;
+  const QUICK_KNOWN_BOUNDARY = 7;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const send = message => chrome.runtime.sendMessage(message);
   function scroller() {
@@ -40,28 +41,49 @@
     try {
       if (!info.valid || info.platform !== options.platform) throw new Error('Keep your Saved or Bookmarks page open during sync.');
       if (options.collectionExternalId && info.collectionId !== options.collectionExternalId) throw new Error('The selected Instagram collection did not open.');
-      // Capture the current page before going to the top, so an explicitly opened collection works too.
+      // A restored source tab may start halfway down a virtualized list. Reset
+      // before assigning positions, otherwise the newest prefix is recorded last.
+      const firstScroller=scroller();
+      if(firstScroller.scrollTop>50){
+        firstScroller.scrollTo({top:0,behavior:'instant'});
+        firstScroller.dispatchEvent(new Event('scroll',{bubbles:true}));window.dispatchEvent(new Event('scroll'));
+        await sleep(1400);
+      }
+      let initialSignature='', initialSamples=0, initialWaits=0;
       while (!stopped && Date.now() < deadline && seen.size < options.maxPosts) {
         const blocked = restriction(); if (blocked) throw new Error(blocked);
         const current = SaveXExtractors.pageInfo(document, location);
         if (!current.valid || current.platform !== info.platform || (info.account && current.account !== info.account)) throw new Error('The page or account changed. Start a new sync for this account.');
         if (current.collectionId !== info.collectionId) throw new Error('The saved collection changed. Start another sync.');
+        const extracted=SaveXExtractors.extract(document, info.platform);
+        if(!seen.size){
+          // The shell can be ready before its first posts hydrate. Never scroll
+          // an empty/loading first viewport and accidentally skip the newest saves.
+          if(++initialWaits>50){message='The top of the saved list did not finish loading. Try refreshing again.';break;}
+          const target=scroller();
+          if(target.scrollTop>50){target.scrollTo({top:0,behavior:'instant'});target.dispatchEvent(new Event('scroll',{bubbles:true}));window.dispatchEvent(new Event('scroll'));initialSignature='';initialSamples=0;await sleep(500);continue;}
+          const signature=extracted.slice(0,5).map(post=>postId(post)||post.url).join(',');
+          initialSamples=signature&&signature===initialSignature?initialSamples+1:0;initialSignature=signature;
+          if(!signature||initialSamples<2){await sleep(500);continue;}
+        }
         let added = 0;
-        for (const post of SaveXExtractors.extract(document, info.platform)) {
+        for (const post of extracted) {
           const key = postId(post) || post.url.split('?')[0];
           if (!seen.has(key) && seen.size < options.maxPosts) {
             seen.add(key); added++;
             if (known.has(key)) familiar++;
             else familiar = 0;
-            // A deep scan checks the whole exposed list. Quick checks only import new IDs.
-            if (deep || !known.has(key)) pending.push(post);
+            // X also records the familiar prefix: an existing bookmark may have
+            // moved to the top. The quick boundary still limits traversal.
+            if (deep || info.platform === 'x' || !known.has(key)) pending.push(post);
           }
         }
         if (pending.length >= 20 || passes % 2 === 0) await flush();
         await send({ type: 'SYNC_PROGRESS', runId: options.runId, seen: seen.size, message: `${deep ? 'Deep scan' : 'Quick check'} · ${seen.size} posts checked` });
-        // Only count distinct IDs from the snapshot taken before this run. Repeated viewport
-        // content and posts just imported in this run must never create a false boundary.
-        if (!deep && familiar >= 20) {
+        // Inspect the entire loaded viewport before stopping: a new post below
+        // familiar ones still resets the boundary without another scroll/load.
+        // Only distinct IDs known before this run can count toward the boundary.
+        if (!deep && familiar >= QUICK_KNOWN_BOUNDARY) {
           await flush(); status = 'completed';
           message = 'Quick check finished at previously saved posts. Older history was not checked; use Deep scan to check it.';
           break;
@@ -73,8 +95,7 @@
           status = 'partial'; break;
         }
         const target = scroller();
-        if (passes === 0 && target.scrollTop > 50) target.scrollTo({ top: 0, behavior: 'instant' });
-        else target.scrollBy({ top: Math.max(500, Math.floor(target.clientHeight * .8)), behavior: 'instant' });
+        target.scrollBy({ top: Math.max(500, Math.floor(target.clientHeight * .8)), behavior: 'instant' });
         // Hidden tabs may defer native scroll events until a paint. Notify the
         // list's scroll listeners after moving our own viewport so virtualized
         // feeds can load the next batch without activating the tab.

@@ -34,6 +34,11 @@ test('MCP library queries paginate, combine filters, expose full original refere
     assert.equal(api.search({collectionIds:[store.instagramCollections()[0].id]}).total,1);
     assert.equal(api.search({folder:'References/Design',hasNotes:true}).total,1);
     assert.equal(api.search({publishedAfter:'2026-01-01T00:00:00Z'}).total,0);
+    const chrome=posts.find(p=>p.platform==='chrome');
+    store.db.prepare('UPDATE posts SET added_at=? WHERE id=?').run('2026-11-03T00:00:00.000Z',chrome.id);
+    const added=api.search({addedAfter:'2026-11-03T00:00:00Z',addedBefore:'2026-11-04T00:00:00Z',platforms:['chrome'],orderBy:'addedAt'});
+    assert.equal(added.total,1);assert.equal(added.saves[0].addedAt,'2026-11-03T00:00:00.000Z');assert.equal(added.saves[0].savedAt,'2026-10-03T00:00:00.000Z');
+    assert.throws(()=>api.search({addedAfter:'2026-11-04T00:00:00Z',addedBefore:'2026-11-03T00:00:00Z'}),/later/);
     assert.throws(()=>api.search({savedAfter:'2026-10-03T00:00:00Z',savedBefore:'2026-10-02T00:00:00Z'}),/later/);
     assert.throws(()=>api.getSave(posts.find(p=>p.archived).id),/unavailable/);
     const overview=JSON.stringify(api.overview());assert(!overview.includes('hidden'));assert(!overview.includes('SECRET'));

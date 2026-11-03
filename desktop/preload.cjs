@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('saveXDesktop', Object.freeze({
   helperInfo: () => ipcRenderer.invoke('savex-desktop', { action: 'helperInfo' }),
   showHelper: () => ipcRenderer.invoke('savex-desktop', { action: 'showHelper' }),
   copyHelperPath: () => ipcRenderer.invoke('savex-desktop', { action: 'copyHelperPath' }),
+  copyText: text => ipcRenderer.invoke('savex-desktop', { action: 'copyText', text }),
   openExtensions: () => ipcRenderer.invoke('savex-desktop', { action: 'openExtensions' }),
   updateStatus: () => ipcRenderer.invoke('savex-desktop', { action: 'updateStatus' }),
   checkForUpdates: () => ipcRenderer.invoke('savex-desktop', { action: 'checkForUpdates' }),

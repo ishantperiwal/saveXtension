@@ -1,9 +1,12 @@
+import { createWorkTab, closeWorkTab, cleanWorkTabs, adoptConnectionTab } from './work-tabs.js';
+import { performUnsave } from './unsave-worker.js';
 import { bookmarkPosts } from './bookmarks.js';
 
 const DEFAULT_ORIGIN = 'http://localhost:3210';
 const SOCIAL_ORIGINS = ['https://x.com/*', 'https://www.instagram.com/*'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-let working = false, checking = false;
+let working = false, checking = false, unsaving = false;
+let queuePoll;
 const get = async key => (await chrome.storage.local.get(key))[key];
 const setRun = syncState => chrome.storage.local.set({ syncState });
 const localOrigin = value => {
@@ -30,7 +33,7 @@ async function progress(message) {
 }
 async function closeOwned() {
   const owned = (await get('job'))?.ownedTabs || [];
-  for (const tabId of owned) await chrome.tabs.remove(tabId).catch(() => {});
+  for (const tabId of owned) await closeWorkTab(tabId).catch(() => {});
 }
 async function stopped() {
   return (await get('cancelRequested')) === true;
@@ -123,7 +126,7 @@ async function discoverXAccounts() {
     const previous = await get('xAccountCatalog');
     await publishAccounts({ accounts: previous?.accounts || [], active: previous?.active || '', busy: true, checkedAt: Date.now() });
     try {
-      tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+      tab = await createWorkTab('accounts');
       await chrome.storage.local.set({ accountScanTabId: tab.id });
       await chrome.tabs.update(tab.id, { muted: true, autoDiscardable: false, url: 'https://x.com/i/bookmarks#savex-sync' });
       await sleep(400); await loaded(tab.id);
@@ -135,7 +138,7 @@ async function discoverXAccounts() {
     } catch (error) {
       await publishAccounts({ accounts: previous?.accounts || [], active: previous?.active || '', checkedAt: Date.now(), busy: false, error: error.message });
       throw error;
-    } finally { if (tab) await chrome.tabs.remove(tab.id).catch(() => {}); await chrome.storage.local.remove('accountScanTabId'); }
+    } finally { if (tab) await closeWorkTab(tab.id).catch(() => {}); await chrome.storage.local.remove('accountScanTabId'); }
   })();
   try { return await accountScanPromise; } finally { accountScanPromise = null; }
 }
@@ -203,7 +206,7 @@ async function syncChromeBookmarks() {
 }
 async function startSource(platform, selectedAccount = null, collection = null) {
   let job = await get('job');
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  const tab = await createWorkTab('sync');
   job.ownedTabs.push(tab.id); job.sourceTabId = tab.id; job.phase = 'loading'; await chrome.storage.local.set({ job });
   await chrome.tabs.update(tab.id, { autoDiscardable: false, muted: true });
   await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : 'https://www.instagram.com/' });
@@ -214,17 +217,27 @@ async function startSource(platform, selectedAccount = null, collection = null) 
     if (collection) url = collection.url;
     else {
       url = await instagramUrl(tab.id);
+      const account = '@' + decodeURIComponent(new URL(url).pathname.split('/')[1]);
+      if (job.instagramScope?.account && job.instagramScope.account !== 'current' && account.toLowerCase() !== job.instagramScope.account.toLowerCase()) throw new Error(`Sign into Instagram as ${job.instagramScope.account} before refreshing this account. No posts were imported.`);
+      const selected = job.instagramScope?.selections?.[account.toLowerCase()];
       let collections = [];
       try { collections = await discoverInstagramCollections(tab.id, url); }
       catch (error) {
-        if (await stopped()) throw error;
+        if (await stopped() || Array.isArray(selected)) throw error;
         job = await get('job'); job.instagramCollectionWarning = 'Instagram collections could not be read this time. Existing folders are kept; try another sync.';
         await chrome.storage.local.set({ job });
       }
       job = await get('job');
       if (!job.plan[job.index].collectionsDiscovered) {
-        job.plan.splice(job.index + 1, 0, ...collections.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
-        job.plan[job.index].collectionsDiscovered = true;
+        if (Array.isArray(selected)) {
+          const chosen = collections.filter(item => selected.includes(item.id));
+          if (!chosen.length || chosen.length !== selected.length) throw new Error('Some selected Instagram collections could not be found. Customize your save list and try again.');
+          job.plan.splice(job.index, 1, ...chosen.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
+          collection = chosen[0]; url = collection.url;
+        } else {
+          job.plan.splice(job.index + 1, 0, ...collections.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
+          job.plan[job.index].collectionsDiscovered = true;
+        }
         await chrome.storage.local.set({ job });
       }
     }
@@ -360,15 +373,30 @@ async function advanceJob() {
 }
 async function checkJobs() {
   if (checking) return; checking = true;
+  clearTimeout(queuePoll);let reachedLibrary=false;
   try {
-    const job = await get('job'); const allowed = await ready(), bookmarkAccess = await bookmarksReady();
+    const orphan=await get('unsaveWork');
+    if(orphan&&!unsaving){
+      await request(`/unsaves/${orphan.id}/finish`,{instance:await instanceId(),status:'uncertain',message:'The browser helper restarted. Check the original post before trying again.'}).catch(()=>{});
+      if(orphan.tabId)await closeWorkTab(orphan.tabId).catch(()=>{});
+      await chrome.storage.local.remove('unsaveWork');
+    }
+    const job = await get('job');
+    if(!working&&!unsaving&&!accountScanPromise)await cleanWorkTabs(job?.ownedTabs || [],true);
+    const allowed = await ready(), bookmarkAccess = await bookmarksReady();
     if (allowed && !(await chrome.scripting.getRegisteredContentScripts({ ids: ['savex-background-layout'] })).length) {
       await chrome.scripting.registerContentScripts([{ id: 'savex-background-layout', matches: SOCIAL_ORIGINS, js: ['background-render.js'], world: 'MAIN', runAt: 'document_start' }]);
     }
-    const response = await request('/jobs', { instance: await instanceId(), name: 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise, jobId: job?.id });
+    const response = await request('/jobs', { instance: await instanceId(), name: 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
+    reachedLibrary=true;
     if (response.scanAccountsRequested) await chrome.storage.local.set({ accountScanRequested: true });
     if (response.setupRequested && !allowed) await chrome.runtime.openOptionsPage();
     if (response.bookmarkSetupRequested && !bookmarkAccess) await chrome.runtime.openOptionsPage();
+    if(response.claimedUnsave){
+      unsaving=true;
+      void performUnsave(response.claimedUnsave,{request,instance:await instanceId(),switchXAccount,instagramUrl,loaded,sleep}).finally(()=>{unsaving=false;void checkJobs();});
+      return;
+    }
     if (job) {
       if (!response.job || response.job.id !== job.id || ['completed', 'partial', 'failed'].includes(response.job.status)) {
         await closeOwned(); await chrome.storage.local.remove(['job', 'cancelRequested']); return;
@@ -388,7 +416,7 @@ async function checkJobs() {
       void advanceJob();
     } else if (response.claimed) {
       await chrome.storage.local.set({ job: { ...response.claimed, index: 0, ownedTabs: [], phase: 'next', results: [], detailIndex: 0 }, cancelRequested: false }); void advanceJob();
-    } else if (allowed && !accountScanPromise) {
+    } else if (allowed && !accountScanPromise && !unsaving && !response.unsave?.status?.match(/^(queued|running)$/)) {
       const catalog = await get('xAccountCatalog');
       if (await get('accountScanRequested') || !catalog || Date.now() - catalog.checkedAt > 5 * 60000) {
         await chrome.storage.local.remove('accountScanRequested');
@@ -396,7 +424,12 @@ async function checkJobs() {
       }
     }
   } catch { /* The local server may be stopped. Retry when it is available. */ }
-  finally { checking = false; }
+  finally {
+    checking = false;
+    // Pick up desktop actions without opening a browser connection tab.
+    // Back off when the local app is closed; alarms still wake a suspended worker.
+    queuePoll=setTimeout(()=>void checkJobs(),reachedLibrary?2000:30000);
+  }
 }
 async function handle(message, sender) {
   if (sender.id !== chrome.runtime.id) throw new Error('Unknown sender.');
@@ -404,12 +437,14 @@ async function handle(message, sender) {
   if (message.type === 'CLOSE_DESKTOP_CONNECT' && sender.tab) {
     const url = new URL(sender.url);
     if (localOrigin(url.origin) !== await origin() || url.pathname !== '/desktop-connect.html' || url.searchParams.get('desktop') !== '1') throw new Error('Only the desktop connection tab can close itself.');
-    await chrome.tabs.remove(sender.tab.id); return {};
+    await adoptConnectionTab(sender.tab.id);await closeWorkTab(sender.tab.id); return {};
   }
   if (['CHECK_JOBS', 'OPEN_SETUP', 'OPEN_BOOKMARK_SETUP'].includes(message.type) && sender.tab && localOrigin(new URL(sender.url).origin)) {
     const address = localOrigin(message.origin);
     if (!address || address !== new URL(sender.url).origin) throw new Error('Unexpected library address.');
     await chrome.storage.local.set({ libraryOrigin: address });
+    const connection=new URL(sender.url);
+    if(connection.pathname==='/desktop-connect.html'&&connection.searchParams.get('desktop')==='1')await adoptConnectionTab(sender.tab.id);
     if (['OPEN_SETUP', 'OPEN_BOOKMARK_SETUP'].includes(message.type)) await chrome.runtime.openOptionsPage();
     await checkJobs(); return { ready: await ready(), bookmarksReady: await bookmarksReady(), bookmarksSupported: true, version: chrome.runtime.getManifest().version };
   }
@@ -443,7 +478,8 @@ async function handle(message, sender) {
 }
 async function initialize() {
   if (initialized) return; initialized = true;
-  const orphan = await get('accountScanTabId'); if (orphan) { await chrome.tabs.remove(orphan).catch(() => {}); await chrome.storage.local.remove('accountScanTabId'); }
+  const orphan = await get('accountScanTabId'); if (orphan) { await closeWorkTab(orphan).catch(() => {}); await chrome.storage.local.remove('accountScanTabId'); }
+  await cleanWorkTabs((await get('job'))?.ownedTabs || []);
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   await chrome.alarms.create('savex-sync', { periodInMinutes: 0.5 }); await checkJobs();
 }

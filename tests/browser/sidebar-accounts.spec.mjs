@@ -65,8 +65,39 @@ test('Instagram chevrons toggle each owner independently and remember the choice
   await toggle.focus(); await page.keyboard.press('Space');
   await expect(folders).toBeVisible(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(toggle).toBeFocused();
+  const account = row(page, 'instagram:@same');
+  await account.locator('.nav-label-text').click();
+  await expect(folders).toBeHidden(); await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(account).toHaveAttribute('aria-expanded', 'false');
+  await expect(otherFolders).toBeVisible();
+  expect(await visibleIds(page)).toEqual([503, 501]);
+  await account.focus(); await page.keyboard.press('Space');
+  await expect(folders).toBeVisible(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(account).toHaveAttribute('aria-expanded', 'true'); await expect(account).toBeFocused();
   await page.setViewportSize({ width: 390, height: 844 });
   await toggle.click(); await expect(folders).toBeHidden();
   await toggle.click(); await expect(folders).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
+test('long handles truncate and collection chevrons sit after the handle and before the count', async ({ page }) => {
+  const handle = '@this_is_a_very_long_instagram_handle';
+  await page.route('**/api/posts?scope=all', route => route.fulfill({ json: {
+    posts: [{ ...common, id: 601, platform: 'instagram', accounts: [handle], url: 'https://www.instagram.com/p/LongHandle/' }], runs: [],
+    instagramCollections: [{ id: 21, account: handle, name: 'Design references' }]
+  } }));
+  await page.reload();
+  const account = row(page, `instagram:${handle}`), label = account.locator('.nav-label-text');
+  const toggle = page.getByRole('button', { name: `Toggle Instagram collections for ${handle}`, exact: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const l = await label.boundingBox(), t = await toggle.boundingBox(), c = await account.locator('.nav-count').boundingBox();
+    expect(t.x).toBeGreaterThanOrEqual(l.x + l.width - 1); expect(t.x - l.x - l.width).toBeLessThan(8);
+    expect(t.x + t.width).toBeLessThanOrEqual(c.x);
+    expect(await label.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+    await expect(account).toHaveAttribute('title', `Instagram ${handle}`);
+    await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  }
+  await page.screenshot({ path: 'test-results/sidebar-handle-chevron-mobile.png', animations: 'disabled' });
 });

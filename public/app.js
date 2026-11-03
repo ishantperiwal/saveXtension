@@ -1,18 +1,28 @@
+import { unsaveDialog } from './unsave.js';
+import { orderLibraryPosts, xSequenceAccount } from './source-order.js';
+import { openCollectionPicker, closeCollectionPicker } from './collection-picker.js';
+import { instagramSaveList, visibleInstagramSaves } from './instagram-save-lists.js';
+import { openAccountMenu, closeAccountMenu } from './account-menu.js';
 import { syncAvailability, lastSyncTime, syncAge } from './sync-state.js';
 import { syncAccountOptions, legacySyncSelection, syncSelectionRequest } from './sync-selection.js';
 import { sidebarAccounts } from './sidebar-accounts.js';
 import { embedTarget } from './embed-target.js';
-import { mountEmbeds, disposeEmbeds, configureEmbeds } from './embeds.js';
-import { layoutCards, disposeCardLayout } from './masonry.js';
+import { mountEmbeds, disposeEmbeds, configureEmbeds, retryEmbed } from './embeds.js';
+import { layoutCards, disposeCardLayout, setCardView } from './masonry.js';
 import { createNoteAutosave } from './notes.js';
+import { animateEmbedStage, setNoteVisibility, finishNoteAnimation } from './motion.js';
+import { addedTimeGroup, addedTimeKey, libraryAddedAt } from './saved-time.js';
 import { applyFilters, defaultFilters, dateBounds, filterChips, accountOptions } from './filters.js';
 import { mountDateRange } from './date-range.js';
 import { enhanceSelects, closeSelect } from './select.js';
 import { mountMcpSettings } from './mcp-settings.js';
 const $ = (selector, root = document) => root.querySelector(selector);
-const app = $('#app'), modal = $('#modal');
+const app = $('#app'), modal = $('#modal'), toastHome = $('#toast').parentElement;
 const paths = {
+  folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  unsave: '<path d="M6 4h12v17l-6-4-6 4zM9 9h6"/>',
   bookmark: '<path d="M6 4h12v17l-6-4-6 4z"/>',
+  feed: '<rect x="5" y="3" width="14" height="7" rx="2"/><rect x="5" y="14" width="14" height="7" rx="2"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   star: '<path d="m12 3 2.8 5.8 6.4.9-4.6 4.5 1.1 6.4-5.7-3-5.7 3 1.1-6.4L2.8 9.7l6.4-.9z"/>',
@@ -66,21 +76,48 @@ const relative = date => {
 };
 const collapsedInstagramAccounts = new Set();
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-instagram')); if (Array.isArray(saved)) for (const account of saved) if (typeof account === 'string') collapsedInstagramAccounts.add(account); } catch { /* Start with collections expanded. */ }
+const collapsedTimeGroups = new Set();
+try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-time-groups')); if (Array.isArray(saved)) for (const key of saved) if (['added-today', 'added-earlier'].includes(key)) collapsedTimeGroups.add(key); } catch { /* Start with time groups expanded. */ }
 let storedSyncAccounts = null;
 try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
-const state = { syncAccounts: storedSyncAccounts, instagramCollections: [], topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
-let toastTimer, searchTimer, updatePoll, collectionVersion = 0;
+const state = { cardView: localStorage.getItem('savex-card-view') === 'grid' ? 'grid' : 'feed', sidebarView: localStorage.getItem('savex-sidebar-view') === 'collections' ? 'collections' : 'accounts', syncAccounts: storedSyncAccounts, instagramCollections: [], instagramSaveLists: {}, topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
+let toastTimer, searchTimer, updatePoll, collectionVersion = 0, searchReturnView = null;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
 let dismissedSyncJobs = new Set();
 try { dismissedSyncJobs = new Set(JSON.parse(sessionStorage.getItem('savex-dismissed-sync-jobs') || '[]')); } catch { /* First notification in this tab. */ }
-function toast(message, error = false) { const el = $('#toast'); el.textContent = message; el.className = `visible ${error ? 'error' : ''}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.className = '', 4200); }
+function restoreModalToast() {
+  const el = $('#toast');
+  if (el?.parentElement !== modal) return;
+  if (el.matches(':popover-open')) el.hidePopover();
+  el.removeAttribute('popover'); el.className = ''; toastHome.append(el); clearTimeout(toastTimer);
+}
+function toast(message, error = false, position = '', detail = '') {
+  const el = $('#toast');
+  if (el.matches(':popover-open')) el.hidePopover();
+  el.removeAttribute('popover');
+  const host = position === 'bottom-center' && modal.open ? modal : toastHome;
+  if (el.parentElement !== host) host.append(el);
+  el.textContent = message; el.className = `visible ${error ? 'error' : ''} ${position} ${detail ? 'with-detail' : ''}`;
+  if (detail) {
+    const description = document.createElement('span');
+    description.className = 'toast-detail'; description.textContent = detail; el.append(description);
+  }
+  // Centered feedback must remain visible above a modal's top layer.
+  if (position === 'bottom-center' && el.showPopover) { el.setAttribute('popover', 'manual'); el.showPopover(); }
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => {
+    if (el.matches(':popover-open')) el.hidePopover();
+    el.removeAttribute('popover'); el.className = ''; if (el.parentElement !== toastHome) toastHome.append(el);
+  }, 4200);
+}
 async function api(path, { method = 'GET', body, keepalive = false } = {}) {
   const res = await fetch(`/api${path}`, { method, credentials: 'same-origin', keepalive, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const result = await res.json();
   if (!res.ok) { if (res.status === 401 && !['/login', '/setup'].includes(path)) boot(); throw new Error(result.error || 'Request failed.'); }
   return result;
 }
-let activeNote = null;
+let activeNote = null, activeNoteScope = null;
+const openNoteIds = new Set(), expandedNoteIds = new Set(), noteStates = new Map();
+const noteKey = post => `${post.id}:${post.url}`;
 const notes = createNoteAutosave({
   storage: localStorage,
   save: (id, value) => api(`/posts/${id}`, { method: 'PATCH', body: { notes: value }, keepalive: true }),
@@ -89,26 +126,27 @@ const notes = createNoteAutosave({
     updateCollection();
   },
   onState: (post, status) => {
-    if (activeNote?.id !== post.id || activeNote?.url !== post.url) return;
-    const label = $('#note-status'); if (!label) return;
-    label.textContent = status === 'saved' ? 'Saved' : status === 'error' ? 'Not saved yet · retrying' : 'Saving…';
-    label.dataset.state = status;
+    noteStates.set(noteKey(post), status);
+    const current = allPosts().find(p => p.id === post.id && p.url === post.url);
+    const card = document.querySelector(`.save-card[data-post-id="${post.id}"]`);
+    if (current && card) syncCardNote(card, current);
   }
 });
-function flushActiveNote() { if (activeNote) { void notes.flush(activeNote); activeNote = null; } }
+function flushActiveNote() { if (activeNote) { void notes.flush(activeNote); activeNote = null; activeNoteScope = null; } }
 function showModal(content, wide = false) {
+  restoreModalToast();
   clearInterval(updatePoll);
-  closeSelect();
+  closeSelect(); closeAccountMenu(); closeCollectionPicker();
   flushActiveNote();
   disposeEmbeds(modal);
-  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions;
-  $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false');
+  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan;
+  document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   modal.innerHTML = `<button class="icon-button modal-close" aria-label="Close dialog">${icon('close')}</button>${content}`;
   modal.className = wide ? 'wide' : ''; if (!modal.open) modal.showModal();
   $('.modal-close', modal).onclick = () => modal.close();
 }
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
-modal.addEventListener('close', () => { closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); $('[data-action="sync-options"]')?.setAttribute('aria-expanded', 'false'); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; });
+modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; });
 
 modal.addEventListener('close', () => clearInterval(updatePoll));
 
@@ -116,7 +154,7 @@ async function boot() {
   try {
     const session = await api('/session'); state.name = session.name; state.localMode = session.localMode; configureEmbeds(session.embedOrigin);
     if (!session.authenticated) return authScreen(session.setupRequired);
-    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.demo = false; render(); void notes.resume(data.posts); if (state.localMode) await syncStatus();
+    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
 }
 function authScreen(setup) {
@@ -127,36 +165,138 @@ function authScreen(setup) {
     catch (error) { $('#auth-error').textContent = error.message; button.disabled = false; }
   };
 }
-function allPosts() { return state.demo ? demoPosts : state.posts; }
-function scopedPosts() { return allPosts().filter(post => !!post.archived === state.archive); }
-function filteredPosts() { return applyFilters(scopedPosts(), state.filters, { query: state.query }); }
+function allPosts() { return state.demo ? demoPosts : visibleInstagramSaves(state.posts, state.instagramSaveLists); }
+function scopedPosts() { return visibleInstagramSaves(allPosts(), state.instagramSaveLists, state.filters.accounts).filter(post => !!post.archived === state.archive); }
+function resultsScopeKey() { return JSON.stringify([state.archive, state.demo, state.query, state.filters, state.instagramSaveLists]); }
+function filteredPosts() {
+  const posts = scopedPosts(), result = applyFilters(posts, state.filters, { query: state.query });
+  // Keep the card under the cursor while its edited note changes a search match.
+  if (activeNote && activeNoteScope === resultsScopeKey() && !result.some(post => post.id === activeNote.id)) {
+    const editing = posts.find(post => post.id === activeNote.id && post.url === activeNote.url);
+    if (editing) { result.push(editing); return orderLibraryPosts(result, state.filters); }
+  }
+  return result;
+}
 function selectedSource() { return state.filters.sources.length === 1 ? state.filters.sources[0] : 'all'; }
+const savesLabel = count => `${count} ${count === 1 ? 'save' : 'saves'}`;
+function savesNavigation(count) {
+  return `<div class="saves-nav-row"><button class="nav-item" data-filter="all" aria-label="${savesLabel(count)}" title="Browse all saves">${icon('grid')}<span class="nav-label-text">${savesLabel(count)}</span></button><button class="icon-button saves-refresh" data-action="scan-options" aria-label="Refresh all sources" title="Refresh all sources" aria-haspopup="dialog" aria-controls="modal" aria-expanded="false">${icon('refresh')}</button></div>`;
+}
 function navItem(filter, label, symbol, count) {
   return `<button class="nav-item ${(filter === 'all' ? !state.filters.sources.length : state.filters.sources.length === 1 && state.filters.sources[0] === filter) ? 'active' : ''}" data-filter="${filter}" data-nav-label="${label}" aria-label="${label} ${count}" title="${label}">${sourceIcon(filter)}<span class="nav-label-text">${filter === 'chrome' ? 'Chrome' : label}</span><span class="nav-count">${count}</span></button>`;
 }
-function navigationAccounts() { return sidebarAccounts(allPosts(), state.sync?.xAccounts?.accounts || [], state.demo ? [] : state.instagramCollections || []); }
+function navigationAccounts() { return sidebarAccounts(allPosts(), state.sync?.xAccounts?.accounts || [], state.demo ? [] : state.instagramCollections || [], state.demo ? {} : state.instagramSaveLists); }
 function selectedAccountLabel() { return state.filters.accounts.length === 1 ? navigationAccounts().find(account => account.value === state.filters.accounts[0])?.label || '' : ''; }
 function renderAccountNavigation() {
   const accounts = navigationAccounts(), collections = state.demo ? [] : state.instagramCollections || [];
   const counts = new Map();
   for (const post of allPosts().filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(collection => collection.id))) counts.set(id, (counts.get(id) || 0) + 1);
-  const signature = JSON.stringify([accounts, collections, [...counts]]);
+  const signature = JSON.stringify([accounts, collections, [...counts], state.instagramSaveLists]);
   for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram']]) {
     const root = $(selector); if (!root || root.dataset.signature === signature) continue;
     const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection, toggle: document.activeElement.dataset.collectionsAccount } : null;
     root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
       const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
-      const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}`) : [];
+      const selection = instagramSaveList(account.value, state.instagramSaveLists), selected = selection.collectionIds;
+      const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}` && (selected === null || selected.includes(collection.id))) : [];
       const expanded = !collapsedInstagramAccounts.has(account.value), listId = `instagram-collections-${encodeURIComponent(account.value)}`;
-      return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle Instagram collections for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} collections">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
+      return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" ${folders.length ? `aria-expanded="${expanded}" aria-controls="${listId}"` : ''} title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle Instagram collections for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} collections">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
     }).join('');
     root.dataset.signature = signature;
     if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : focused.toggle ? button.dataset.collectionsAccount === focused.toggle : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
   }
 }
+function accountRefreshRequest(value) {
+  const [platform, handle] = value.split(':');
+  return { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current', ...(platform === 'instagram' && handle.startsWith('@') ? { instagramAccount: handle } : {}) };
+}
+function accountMenu(trigger, point) {
+  if (trigger.dataset.instagramCollection) return collectionRefreshMenu(trigger,point);
+  const value = trigger.dataset.navAccount || 'chrome:*';
+  const refresh = mode => { void startSync(mode, accountRefreshRequest(value)).catch(error => toast(error.message, true)); };
+  const busy = state.syncChecking || ['queued', 'running'].includes(state.sync?.job?.status);
+  const items = [{ label: 'Quick scan and refresh', disabled: busy, run: () => refresh('quick') }, { label: 'Deep scan and refresh', disabled: busy, run: () => refresh('deep') }];
+  if (value.startsWith('instagram:')) items.push({ label: 'Customize save list', run: () => instagramSaveListDialog(value) });
+  closeSelect(); closeCollectionPicker(); openAccountMenu(trigger, items, point);
+}
+function collectionRefreshRequest(id) {
+  const collection=state.instagramCollections.find(item=>String(item.id)===String(id));
+  return collection ? {targets:['instagram'],xAccount:'current',instagramAccount:collection.account,instagramCollectionId:collection.id} : null;
+}
+function collectionRefreshMenu(trigger,point) {
+  const request=collectionRefreshRequest(trigger.dataset.instagramCollection);if(!request)return;
+  const busy=state.syncChecking||['queued','running'].includes(state.sync?.job?.status)||['queued','running'].includes(state.sync?.unsave?.status);
+  const refresh=mode=>{void startSync(mode,request).catch(error=>toast(error.message,true));};
+  closeSelect();closeCollectionPicker();
+  openAccountMenu(trigger,[{label:'Quick scan and refresh',disabled:busy,run:()=>refresh('quick')},{label:'Deep scan and refresh',disabled:busy,run:()=>refresh('deep')}],point,'Collection options');
+}
+function instagramSaveListDialog(value) {
+  const account = navigationAccounts().find(item => item.value === value);
+  if (!account) return;
+  const folders = state.instagramCollections.filter(item => value === `instagram:${item.account.toLowerCase()}`);
+  const selection = instagramSaveList(value, state.instagramSaveLists), selected = selection.collectionIds ?? folders.map(folder => folder.id);
+  const counts = new Map();
+  for (const post of state.posts.filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(item => item.id))) counts.set(id, (counts.get(id) || 0) + 1);
+  showModal(`<h2>Customize save list</h2><p class="save-list-account">${sourceIcon('instagram')}${esc(account.label)}</p><p class="fine-print">All includes every save. Collections choose the shortcuts below your account.</p><form id="instagram-save-list-form"><div class="save-list-choices" role="group" aria-label="Instagram save list"><label class="filter-choice"><input type="checkbox" name="collection" value="all" ${selection.all ? 'checked' : ''}><span>All</span></label>${folders.map(folder => `<label class="filter-choice"><input type="checkbox" name="collection" value="${folder.id}" ${selected.includes(folder.id) ? 'checked' : ''}><span><span>${esc(folder.name)}</span><span class="sync-account-count">${counts.get(folder.id) || 0}</span></span></label>`).join('')}</div>${!folders.length ? '<p class="fine-print">Refresh Instagram to discover its collections.</p>' : ''}<p id="save-list-error" class="form-error" role="alert"></p><div class="save-list-actions"><button type="button" class="secondary" id="cancel-save-list">Cancel</button><button type="submit" class="primary" id="apply-save-list">Apply</button></div></form>`);
+  const form = $('#instagram-save-list-form'), apply = $('#apply-save-list');
+  const inputs = [...form.querySelectorAll('[name="collection"]')], all = inputs.find(input => input.value === 'all');
+  form.onchange = event => {
+    apply.disabled = !inputs.some(input => input.checked);
+    $('#save-list-error').textContent = '';
+  };
+  $('#cancel-save-list').onclick = () => modal.close();
+  form.onsubmit = async event => {
+    event.preventDefault(); apply.disabled = true;
+    try {
+      const collectionIds = inputs.filter(input => input !== all && input.checked).map(input => Number(input.value));
+      const result = await api('/instagram-save-list', { method: 'POST', body: { account: value.slice('instagram:'.length), all: all.checked, collectionIds } });
+      collectionVersion++; state.instagramSaveLists = result.instagramSaveLists;
+      state.archive = false; state.filters = { ...defaultFilters(), sources: ['instagram'], accounts: [value] };
+      modal.close(); updateCollection();
+    } catch (error) { $('#save-list-error').textContent = error.message; apply.disabled = false; }
+  };
+}
+function toggleInstagramCollections(account) {
+  const toggle = [...document.querySelectorAll('[data-collections-account]')].find(button => button.dataset.collectionsAccount === account);
+  if (!toggle) return;
+  const expanded = collapsedInstagramAccounts.has(account);
+  if (expanded) collapsedInstagramAccounts.delete(account); else collapsedInstagramAccounts.add(account);
+  toggle.setAttribute('aria-expanded', String(expanded)); toggle.title = `${expanded ? 'Collapse' : 'Expand'} collections`;
+  const row = [...document.querySelectorAll('[data-nav-account]')].find(button => button.dataset.navAccount === account);
+  row?.setAttribute('aria-expanded', String(expanded));
+  const list = document.getElementById(toggle.getAttribute('aria-controls')); if (list) list.hidden = !expanded;
+  try { localStorage.setItem('savex-collapsed-instagram', JSON.stringify([...collapsedInstagramAccounts])); } catch { /* Keep the current session choice. */ }
+  renderSidebarMarkers();
+}
+function renderTopicNavigation() {
+  const root = $('#topic-navigation'); if (!root) return;
+  const groups = new Map((state.demo ? [] : state.topicCatalog).map(topic => [topic.name, { name: topic.name, description: topic.description || '', count: 0 }]));
+  for (const post of allPosts().filter(post => !post.archived)) for (const name of new Set(post.topics || [])) {
+    if (!groups.has(name)) groups.set(name, { name, description: '', count: 0 });
+    groups.get(name).count++;
+  }
+  const topics = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const signature = JSON.stringify(topics); if (root.dataset.signature === signature) return;
+  const focused = root.contains(document.activeElement) ? document.activeElement.dataset.navTopic : null;
+  root.innerHTML = topics.length ? topics.map(topic => `<button class="nav-item topic-nav-item" data-nav-topic="${esc(topic.name)}" aria-label="${esc(topic.name)} · ${topic.count} saves" aria-pressed="false" title="${esc(topic.description || topic.name)}">${icon('folder')}<span class="nav-label-text">${esc(topic.name)}</span><span class="nav-count">${topic.count}</span></button>`).join('') : '<p class="sidebar-empty">No collections yet.</p>';
+  root.dataset.signature = signature;
+  if (focused) [...root.querySelectorAll('[data-nav-topic]')].find(button => button.dataset.navTopic === focused)?.focus({ preventScroll: true });
+}
+function selectSidebarView(view, focus = false) {
+  state.sidebarView = view === 'collections' ? 'collections' : 'accounts';
+  for (const button of document.querySelectorAll('[data-sidebar-view]')) {
+    const selected = button.dataset.sidebarView === state.sidebarView;
+    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus({ preventScroll: true });
+  }
+  $('#sidebar-accounts-panel').hidden = state.sidebarView !== 'accounts';
+  $('#sidebar-collections-panel').hidden = state.sidebarView !== 'collections';
+  try { localStorage.setItem('savex-sidebar-view', state.sidebarView); } catch { /* Keep the session's view. */ }
+  renderSidebarMarkers();
+}
 function updateSidebarSelection() {
   document.querySelectorAll('[data-filter]').forEach(button => {
-    const active = !state.archive && (button.dataset.filter === 'all' ? !state.filters.sources.length : state.filters.sources.length === 1 && state.filters.sources[0] === button.dataset.filter);
+    const active = !state.archive && (button.dataset.filter === 'all' ? !state.filters.sources.length && !state.filters.accounts.length && !state.filters.topics.length && !state.filters.collection : state.filters.sources.length === 1 && state.filters.sources[0] === button.dataset.filter);
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', active);
   });
   document.querySelectorAll('[data-nav-account]').forEach(button => {
@@ -168,6 +308,10 @@ function updateSidebarSelection() {
     const active = !state.archive && String(state.filters.collection) === button.dataset.instagramCollection;
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', active);
   });
+  document.querySelectorAll('[data-nav-topic]').forEach(button => {
+    const active = !state.archive && state.filters.topics.includes(button.dataset.navTopic);
+    button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+  });
   const archive = $('.archive-nav'); if (archive) { archive.classList.toggle('active', state.archive); archive.setAttribute('aria-pressed', state.archive); }
 }
 function renderSidebarMarkers() {
@@ -175,10 +319,11 @@ function renderSidebarMarkers() {
   if (!sidebar || !marks) return;
   const bounds = sidebar.getBoundingClientRect();
   const instagramOwners = navigationAccounts().filter(account => account.platform === 'instagram');
-  const selected = [...sidebar.querySelectorAll('[data-nav-account].active, [data-filter="chrome"].active')].filter(item => {
+  const selected = [...sidebar.querySelectorAll('[data-nav-account].active, [data-filter="chrome"].active, [data-instagram-collection].active')].filter(item => {
     // Instagram currently syncs the signed-in account. Do not imply account
     // switching when a library contains more than one Instagram owner.
     if (item.dataset.navAccount?.startsWith('instagram:') && instagramOwners.length !== 1) return false;
+    if (item.dataset.navAccount?.startsWith('instagram:') && state.filters.collection) return false;
     if (!item.getClientRects().length) return false;
     const rect = item.getBoundingClientRect(), clip = item.closest('nav').getBoundingClientRect();
     return rect.top + rect.height / 2 >= clip.top && rect.top + rect.height / 2 <= clip.bottom && rect.left + rect.width / 2 >= clip.left && rect.left + rect.width / 2 <= clip.right;
@@ -187,14 +332,16 @@ function renderSidebarMarkers() {
   const busyJob = ['queued', 'running'].includes(state.sync?.job?.status) ? state.sync.job : null;
   const syncing = state.syncChecking ? state.checkingSyncRequest : busyJob;
   const buttons = selected.map(item => {
-    const value = item.dataset.navAccount || 'chrome:*';
-    const [platform, handle] = value.split(':');
-    const label = platform === 'x' && handle.startsWith('@') ? `X ${handle}` : platformName(platform);
+    const collection=state.instagramCollections.find(collection=>String(collection.id)===item.dataset.instagramCollection);
+    const value = collection ? `instagram-collection:${collection.id}` : item.dataset.navAccount || 'chrome:*';
+    const [platform, handle] = collection ? ['instagram',collection.account] : value.split(':');
+    const label = collection ? `Instagram ${collection.account} · ${collection.name}` : platform === 'x' && handle.startsWith('@') ? `X ${handle}` : platformName(platform);
     const rect = item.getBoundingClientRect();
     let button = previous.get(value);
     if (!button) {
       button = document.createElement('button'); button.type = 'button';
-      button.className = 'sidebar-account-refresh'; button.dataset.action = 'refresh-account'; button.dataset.syncAccount = value;
+      button.className = 'sidebar-account-refresh'; button.dataset.action = collection ? 'refresh-collection' : 'refresh-account'; button.dataset.syncAccount = value;
+      if(collection)button.dataset.syncCollection=collection.id;
       button.innerHTML = icon('refresh');
     }
     const isSyncing = !!syncing?.targets?.includes(platform) && (platform !== 'x' || syncing.xAccount === 'all' || syncing.xAccount === handle || Array.isArray(syncing.xAccount) && syncing.xAccount.includes(handle) || syncing.xAccount === 'current' && (handle === '*' || handle === '' || state.sync?.xAccounts?.active?.toLowerCase() === handle));
@@ -217,14 +364,20 @@ function render() {
   app.innerHTML = `<div class="workspace">
     <aside class="sidebar">
       <div class="sidebar-header"><a href="/" class="brand">${icon('bookmark')}<span>save<span class="accent">X</span>tension</span></a><button class="icon-button settings-button" data-action="settings" aria-label="Settings & backups" title="Settings & backups">${icon('settings')}</button></div>
-      <div class="sidebar-sync-group"><button class="sidebar-sync" data-action="sync" aria-label="Sync" aria-describedby="last-sync-label">${icon('refresh')}<span id="last-sync-label">Sync saves</span></button><button class="sidebar-sync-options" data-action="sync-options" aria-label="Sync options" title="Sources, accounts and deep scan" aria-haspopup="dialog" aria-controls="modal" aria-expanded="false">${icon('chevron')}</button></div>
       <nav aria-label="Library">
-        ${navItem('all', 'All saves', 'grid', live.length)}
         <div class="source-nav">
+          ${savesNavigation(live.length)}
+          <div class="sidebar-tabs" role="tablist" aria-label="Browse saves by">
+            <button type="button" id="sidebar-accounts-tab" role="tab" data-action="sidebar-view" data-sidebar-view="accounts" aria-controls="sidebar-accounts-panel" aria-selected="${state.sidebarView === 'accounts'}" tabindex="${state.sidebarView === 'accounts' ? 0 : -1}">Accounts</button>
+            <button type="button" id="sidebar-collections-tab" role="tab" data-action="sidebar-view" data-sidebar-view="collections" aria-controls="sidebar-collections-panel" aria-selected="${state.sidebarView === 'collections'}" tabindex="${state.sidebarView === 'collections' ? 0 : -1}">Collections</button>
+          </div>
+          <div id="sidebar-accounts-panel" role="tabpanel" aria-labelledby="sidebar-accounts-tab" ${state.sidebarView === 'accounts' ? '' : 'hidden'}>
           <div id="account-navigation"></div>
           ${navItem('chrome', 'Chrome bookmarks', 'bookmark', live.filter(p => p.platform === 'chrome').length)}
           <button class="nav-item archive-nav" data-action="archive-view" aria-label="Archive ${posts.length - live.length}" aria-pressed="false" title="Archive">${icon('archive')}<span class="nav-label-text">Archive</span><span class="nav-count">${posts.length - live.length}</span></button>
           <div id="instagram-navigation"></div>
+          </div>
+          <div id="sidebar-collections-panel" role="tabpanel" aria-labelledby="sidebar-collections-tab" ${state.sidebarView === 'collections' ? '' : 'hidden'}><div id="topic-navigation"></div></div>
         </div>
       </nav>
       <div class="sidebar-selection-marks"></div>
@@ -232,28 +385,51 @@ function render() {
     <main class="main">
       <div class="page-content">
         <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
+        <div class="search-tools"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label>
+        <div class="view-toggle" role="group" aria-label="Post layout">${['feed', 'grid'].map(view => `<button type="button" data-action="card-view" data-card-view="${view}" aria-label="${view === 'feed' ? 'Feed' : 'Grid'} view" title="${view === 'feed' ? 'Feed' : 'Grid'} view" aria-pressed="${state.cardView === view}">${icon(view)}</button>`).join('')}</div></div>
         <div class="collection-tools">
           <div class="browse-controls"><button class="filter-button" id="open-filters" data-action="filters" aria-label="Filters" aria-haspopup="dialog" aria-expanded="false">${icon('filter')}<span>Filters</span><span class="filter-count" hidden></span></button><div id="active-filters" class="active-filters" hidden></div></div>
-          <label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label>
         </div>
         ${state.demo ? '<div class="demo-banner"><span>Sample saves</span><button data-action="exit-demo">Close</button></div>' : ''}
         <div id="results"></div>
       </div>
     </main>
   </div>`;
-  $('#search').oninput = e => { state.query = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(renderResults, 100); };
+  const search = $('#search');
+  search.onpointerdown = () => rememberSearchView();
+  search.onfocus = e => { if (!state.query && (!searchReturnView || searchReturnView.scope !== resultsScopeKey())) rememberSearchView(e.relatedTarget); };
+  search.onblur = () => { if (!state.query) searchReturnView = null; };
+  search.oninput = e => {
+    if (e.target.value && !state.query && !searchReturnView) rememberSearchView();
+    state.query = e.target.value;
+    if (!state.query) searchReturnView = null;
+    clearTimeout(searchTimer); searchTimer = setTimeout(renderResults, 100);
+  };
   renderAccountNavigation();
   renderResults();
   renderSync();
+  $('.sidebar-tabs').onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || !event.target.matches('[role=tab]')) return;
+    event.preventDefault();
+    const view = event.key === 'Home' ? 'accounts' : event.key === 'End' ? 'collections' : state.sidebarView === 'accounts' ? 'collections' : 'accounts';
+    selectSidebarView(view, true);
+  };
   $('.sidebar nav')?.addEventListener('scroll', renderSidebarMarkers, { passive: true });
-  ['.sidebar', '.sidebar-header', '.sidebar-sync-group', '.sidebar nav'].forEach(selector => { const element = $(selector); if (element) sidebarObserver.observe(element); });
+  ['.sidebar', '.sidebar-header', '.sidebar nav'].forEach(selector => { const element = $(selector); if (element) sidebarObserver.observe(element); });
   if (focusId && document.getElementById(focusId)) { const next = document.getElementById(focusId); next.focus({ preventScroll: true }); if (typeof selection === 'number' && next.type === 'text') next.setSelectionRange(selection, selection); }
 }
-function renderResults() {
+function renderResults(restoreView) {
   if (!$('#results')) return;
   renderFilterUI();
   const posts = filteredPosts();
+  const pageKey = resultsScopeKey();
+  const pageChanged = pageKey !== resultsPageKey;
+  if (pageChanged) { resultsPageKey = pageKey; resultsLimits.clear(); }
+  const restoring = restoreView?.scope === pageKey;
+  if (restoring) { resultsLimits.clear(); for (const [key, limit] of restoreView.limits) resultsLimits.set(key, limit); }
+  resultsPosts = posts;
   if (!posts.length) {
+    moreResultsObserver.disconnect();
     disposeCardLayout();
     const emptyLibrary = !scopedPosts().length;
     $('#results').innerHTML = emptyLibrary
@@ -261,14 +437,65 @@ function renderResults() {
       : `<section class="no-results"><p>${state.query ? 'No matches' : 'No saves here yet'}</p><button class="text-button" data-action="clear">Clear filters</button></section>`;
     disposeEmbeds(); return;
   }
-  reconcileCards(posts);
+  renderResultsPage(!pageChanged && !restoring);
+}
+const CARD_BATCH_SIZE = 24;
+const resultsLimits = new Map();
+let resultsPageKey, resultsPosts = [], resultsTimeKey = '';
+function rememberSearchView(focus = document.activeElement) {
+  if (state.query || !$('#results')) return;
+  const visible = [...document.querySelectorAll('#results .save-card:not([hidden])')].map(card => ({ id: card.dataset.postId, rect: card.getBoundingClientRect() })).filter(({rect}) => rect.height && rect.bottom > 0 && rect.top < innerHeight).sort((a,b) => Math.abs(a.rect.top) - Math.abs(b.rect.top));
+  searchReturnView = { scope: resultsScopeKey(), limits: [...resultsLimits], x: scrollX, y: scrollY, anchor: visible[0] ? { id: visible[0].id, top: visible[0].rect.top } : null, focus: focus === $('#search') ? null : focus };
+}
+function dismissSearch() {
+  const previous = searchReturnView, search = $('#search');
+  clearTimeout(searchTimer); state.query = ''; search.value = ''; searchReturnView = null;
+  search.blur();
+  const restore = previous?.scope === resultsScopeKey() ? previous : null;
+  const grid = $('#results > .cards'); grid?.classList.add('restoring-search');
+  renderResults(restore);
+  if (restore) {
+    const anchor = restore.anchor && document.querySelector(`.save-card[data-post-id="${restore.anchor.id}"]`);
+    const top = anchor && !anchor.hidden ? scrollY + anchor.getBoundingClientRect().top - restore.anchor.top : restore.y;
+    if (restore.focus?.isConnected) restore.focus.focus?.({preventScroll:true});
+    window.scrollTo({left:restore.x,top,behavior:'instant'});
+  }
+  // Commit restored positions before re-enabling normal card movement.
+  grid?.getBoundingClientRect(); requestAnimationFrame(() => grid?.classList.remove('restoring-search'));
+}
+const moreResultsObserver = new IntersectionObserver(entries => {
+  let changed = false;
+  for (const entry of entries) {
+    const key = entry.target.dataset.moreGroup;
+    if (!entry.isIntersecting || !entry.target.isConnected || collapsedTimeGroups.has(key)) continue;
+    resultsLimits.set(key, (resultsLimits.get(key) || CARD_BATCH_SIZE) + CARD_BATCH_SIZE); changed = true;
+  }
+  if (changed) renderResultsPage();
+}, { rootMargin: '200px 0px' });
+function renderResultsPage(preservePlayers = true) {
+  if (!$('#results')) return;
+  moreResultsObserver.disconnect();
+  const now = Date.now(), groups = new Map();
+  const sequenceAccount = xSequenceAccount(state.filters);
+  const displayed = new Set(preservePlayers ? [...document.querySelectorAll('#results .save-card')].map(card => card.dataset.postId) : []);
+  resultsTimeKey = addedTimeKey(resultsPosts, now);
+  for (const post of resultsPosts) {
+    const group = sequenceAccount ? {key:'source-sequence',label:''} : addedTimeGroup(libraryAddedAt(post), now);
+    if (!groups.has(group.key)) groups.set(group.key, { ...group, posts: [] });
+    const section = groups.get(group.key); section.posts.push(post);
+    // New saves and moving time boundaries must not evict mounted players.
+    if (displayed.has(String(post.id))) resultsLimits.set(group.key, Math.max(resultsLimits.get(group.key) || CARD_BATCH_SIZE, section.posts.length));
+  }
+  const sections = [...groups.values()].map(group => ({ ...group, collapsed: !!group.label && collapsedTimeGroups.has(group.key), limit: resultsLimits.get(group.key) || CARD_BATCH_SIZE }));
+  reconcileCards(sections);
+  document.querySelectorAll('#results .more-saves').forEach(more => moreResultsObserver.observe(more));
 }
 function renderFilterUI() {
   if (state.filters.collection) {
     const collection = (state.instagramCollections || []).find(c => String(c.id) === String(state.filters.collection));
     if (collection) state.filters.collectionName = collection.name;
   }
-  renderAccountNavigation();
+  renderAccountNavigation(); renderTopicNavigation();
   const chips = filterChips(state.filters), button = $('#open-filters'), badge = $('.filter-count');
   if (badge) { badge.hidden = !chips.length; badge.textContent = chips.length; }
   button?.classList.toggle('has-filters', !!chips.length);
@@ -282,14 +509,14 @@ function renderFilterUI() {
   renderSidebarMarkers();
 }
 function filterDialog() {
-  const current = state.filters, posts = scopedPosts();
+  const current = state.filters, posts = allPosts().filter(post => !!post.archived === state.archive);
   const topics = [...new Set([...posts.flatMap(p => p.topics), ...(state.archive || state.demo ? [] : state.topicCatalog.map(t => t.name))])].sort();
   const accounts = accountOptions(posts, state.sync?.xAccounts?.accounts || []);
   const accountName = value => value.platform === 'chrome' ? 'Chrome bookmarks' : value.label === platformName(value.platform) ? value.label : `${platformName(value.platform)} ${value.label}`;
   const folders = [...new Set(posts.filter(p => p.platform === 'chrome').flatMap(p => p.folders || []))].sort();
   const chosen = value => current.accounts.length ? current.accounts.includes(value.value) || current.accounts.includes(`${value.platform}:*`) : current.sources.includes(value.platform);
   showModal(`<div class="filter-heading"><h2>Filters</h2></div><form id="filters-form"><div class="filter-fields">
-    <fieldset class="filter-section"><legend title="Instagram and X use the date they were first synced">Saved date</legend><div id="date-range"></div></fieldset>
+    <fieldset class="filter-section"><legend title="When each post first entered saveXtension">Date added</legend><div id="date-range"></div></fieldset>
     <fieldset class="filter-section"><legend>Accounts</legend><div class="filter-choices"><label class="filter-choice"><input type="checkbox" id="all-filter-sources" ${!current.sources.length && !current.accounts.length ? 'checked' : ''}><span>All</span></label>${accounts.map(value => `<label class="filter-choice account-choice" title="${esc(accountName(value))}"><input type="checkbox" name="accounts" value="${esc(value.value)}" aria-label="${esc(accountName(value))}" ${chosen(value) ? 'checked' : ''}><span>${sourceIcon(value.platform)}<span class="${value.label.startsWith('@') ? 'account-handle' : ''}">${esc(value.label)}</span></span></label>`).join('')}</div></fieldset>
     ${topics.length ? `<fieldset class="filter-section"><legend>Topics</legend><div class="filter-choices">${topics.map(t => `<label class="filter-choice"><input type="checkbox" name="topics" value="${esc(t)}" ${current.topics.includes(t) ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</div></fieldset>` : ''}
     <label id="filter-folder-group" hidden>Chrome folder<select id="bookmark-folder" name="folder" aria-label="Bookmark folder"><option value="">All bookmark folders</option>${folders.map(f => `<option value="${esc(f)}" ${current.folder === f ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
@@ -307,7 +534,7 @@ function filterDialog() {
     const sources = [...form.querySelectorAll('[name="accounts"]:checked')].map(el => el.value.split(':')[0]), chromeOnly = sources.length === 1 && sources[0] === 'chrome';
     $('#filter-folder-group').hidden = !chromeOnly; $('#bookmark-folder').disabled = !chromeOnly;
     $('#all-filter-sources').checked = !sources.length;
-    const selected = draft(), bounds = dateBounds(selected), count = applyFilters(scopedPosts(), selected, { query: state.query }).length;
+    const selected = draft(), bounds = dateBounds(selected), count = applyFilters(visibleInstagramSaves(posts, state.instagramSaveLists, selected.accounts), selected, { query: state.query }).length;
     $('#filter-error').textContent = bounds.error || ''; $('#show-filtered-saves').disabled = !!bounds.error;
     $('#show-filtered-saves').textContent = `Show ${count} ${count === 1 ? 'save' : 'saves'}`;
     styleSelects(form);
@@ -331,61 +558,277 @@ function embedMetadata(p, full = false) {
   const caption = p.text || (p.title !== p.authorName ? p.title : '') || '';
   const image = p.thumbnail || p.media?.[0];
   const published = Number.isFinite(Date.parse(p.publishedAt));
-  const date = published ? p.publishedAt : p.savedAt;
+  const date = published ? p.publishedAt : libraryAddedAt(p);
   const dated = Number.isFinite(Date.parse(date));
-  return `<div class="embed-placeholder ${full ? 'is-full' : ''}"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><strong>${esc(name)}</strong>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div></div>${image ? `<img class="embed-capture-image" src="${esc(image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Saved '}${esc(relative(date))}</time>` : ''}</div>`;
+  return `<div class="embed-placeholder ${full ? 'is-full' : ''}"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><strong>${esc(name)}</strong>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div></div>${image ? `<img class="embed-capture-image" src="${esc(image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Added '}${esc(relative(date))}</time>` : ''}<div class="embed-loading" role="status"><span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading preview…</span></div></div>`;
 }
 function nativePreview(p, full = false) {
   if (p.platform === 'chrome') return bookmarkPreview(p, full);
   const supported = !!embedTarget(p.url);
-  return `<section class="native-embed" data-post-url="${esc(p.url)}" data-embed-state="${supported ? 'pending' : 'failed'}"><div class="embed-stage">${embedMetadata(p, full)}</div><div class="embed-error" ${supported ? 'hidden' : ''}><p>This post can’t be loaded right now.</p><div><button type="button" class="text-button" data-embed-retry>Retry</button><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open original</a></div></div></section>`;
+  return `<section class="native-embed" data-post-url="${esc(p.url)}" data-embed-state="${supported ? 'pending' : 'failed'}" aria-busy="${supported}"><div class="embed-stage">${embedMetadata(p, full)}</div><div class="embed-error" ${supported ? 'hidden' : ''}><p>This post can’t be loaded right now.</p><div><button type="button" class="text-button" data-embed-retry>Retry</button><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open original</a></div></div></section>`;
 }
+function noteOpen(post) {
+  const status = noteStates.get(noteKey(post));
+  return state.cardView === 'feed' || openNoteIds.has(post.id) || !!notes.value(post).trim() || status === 'error' || status === 'saving' || status === 'pending';
+}
+function instagramCollectionLabel(post) {
+  if (post.platform !== 'instagram' || state.archive || state.filters.collection || state.filters.topics.length) return '';
+  const accounts = state.filters.accounts.filter(value => value.startsWith('instagram:'));
+  const names = (post.collections || []).map(item => ({ ...state.instagramCollections.find(collection => String(collection.id) === String(item.id)), ...item }))
+    .filter(collection => typeof collection.name === 'string' && collection.name.trim() && (!accounts.length || accounts.includes('instagram:*') || accounts.includes(`instagram:${collection.account?.toLowerCase()}`)))
+    .map(collection => collection.name);
+  return [...new Set(names)].sort((a,b) => a.localeCompare(b)).join(', ');
+}
+function cardPlatform(post, collections = instagramCollectionLabel(post)) {
+  const label = platformName(post.platform);
+  return `<span class="card-source" data-collections="${esc(collections)}" data-platform="${esc(post.platform)}">${collections ? `<span class="card-source-collection" title="${esc(collections)}">${esc(collections)}</span>` : ''}<span class="card-platform" role="img" aria-label="${esc(label)}" title="${esc(label)}">${sourceIcon(post.platform)}</span></span>`;
+}
+function feedSourceLabel(post) {
+  const selected = state.filters.accounts.filter(value => value.startsWith(`${post.platform}:`));
+  const memberships = (post.collections || []).map(item => ({ ...state.instagramCollections.find(collection => String(collection.id) === String(item.id)), ...item }));
+  const owners = [...new Map((post.accounts || []).filter(account => account.startsWith('@') && (!selected.length || selected.includes(`${post.platform}:*`) || selected.includes(`${post.platform}:${account.toLowerCase()}`))).map(account => [account.toLowerCase(),account])).values()];
+  return owners.map(account => {
+    const collections = post.platform === 'instagram' ? [...new Set(memberships.filter(collection => collection.account?.toLowerCase() === account.toLowerCase() && (!state.filters.collection || String(collection.id) === String(state.filters.collection))).map(collection => collection.name).filter(Boolean))].sort((a,b) => a.localeCompare(b)) : [];
+    return [account, ...collections].join(' · ');
+  }).join(' · ') || platformName(post.platform);
+}
+function feedCardSource(post) {
+  const label = feedSourceLabel(post);
+  return `<span class="feed-source-pill" data-label="${esc(label)}" title="${esc(`${platformName(post.platform)} · ${label}`)}"><span class="card-platform" role="img" aria-label="${esc(platformName(post.platform))}">${sourceIcon(post.platform)}</span><span class="feed-source-label">${esc(label)}</span></span>`;
+}
+
 function card(p) {
-  const native = p.platform !== 'chrome' && !!embedTarget(p.url);
-  return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}">
-    <div class="card-metadata" ${!p.notes ? 'hidden' : ''}>${p.notes ? `<p class="card-note">${esc(p.notes.slice(0, 220))}</p>` : ''}</div>
-    ${nativePreview(p)}
-    <footer class="card-footer"><div class="card-tags">${[...new Set(p.topics)].slice(0, 3).map(t => `<button class="tag" data-topic="${esc(t)}">${esc(t)}</button>`).join('')}</div><div class="card-actions"><button class="icon-button" data-archive="${p.id}" aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button><button class="icon-button" data-open="${p.id}" aria-label="Edit note" title="Edit note">${icon('pencil')}</button><a class="icon-button" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open original post" title="Open original">${icon('arrow')}</a></div></footer>
-  </article>`;
+  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.accounts || []).some(account => /^@[\w.]+$/.test(account));
+  return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}"><div class="card-content">
+    <div class="card-body">
+    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button>${native ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
+    <div class="card-layout">${feedCardSource(p)}<section class="card-note" id="note-section-${p.id}" ${showNote ? '' : 'hidden'}><label class="sr-only" for="note-${p.id}">Note</label><textarea class="note-input" id="note-${p.id}" name="notes" rows="3" maxlength="10000" placeholder="${state.cardView === 'feed' ? 'No notes added yet.' : 'Add a note…'}" ${state.demo ? 'readonly' : ''}>${esc(notes.value(p))}</textarea><button type="button" class="note-more" data-action="toggle-note-preview" aria-expanded="false" aria-controls="note-${p.id}" hidden>Read more</button><span class="note-status" role="status" aria-live="polite"></span></section>
+    <div class="card-preview">${nativePreview(p)}</div>
+    <footer class="card-footer"><button type="button" class="collection-add" data-action="add-collection" aria-label="Add to collection" title="Add to collection" aria-haspopup="dialog" aria-controls="collection-picker" aria-expanded="false" ${state.demo ? 'disabled' : ''}>${icon('plus')}</button><div class="card-tags">${[...new Set(p.topics)].map(t => `<button class="tag" data-topic="${esc(t)}">${esc(t)}</button>`).join('')}</div></footer></div>
+    </div>
+  </div></article>`;
 }
+function addCollection(button) {
+  const id=Number(button.closest('.save-card').dataset.postId), post=allPosts().find(post=>post.id===id);
+  if (!post||state.demo) return;
+  closeSelect(); closeAccountMenu();
+  openCollectionPicker({
+    trigger:button, post, topics:state.topicCatalog,
+    restoreFocus:()=>document.querySelector(`.save-card[data-post-id="${id}"] .collection-add`)?.focus({preventScroll:true}),
+    onAdd:async selection=>{
+      const result=await api(`/posts/${id}/collections`,{method:'POST',body:selection});
+      collectionVersion++;
+      state.posts=notes.overlay(state.posts.map(post=>post.id===id?{...post,...result.post}:post));
+      state.topicCatalog=result.topics; updateCollection();
+    }
+  });
+}
+function postReference(post) {
+  const localSave = !state.demo && Number.isInteger(post.id) && post.id > 0;
+  const heading = localSave ? `saveXtension save #${post.id}` : 'saveXtension sample save';
+  const context = !localSave ? 'Sample preview; not part of the MCP library.' : post.archived
+    ? 'Archived; restore this save in saveXtension before reading it through MCP.'
+    : `Read its metadata and my note with saveXtension MCP get_saves: ${JSON.stringify({postIds:[post.id]})}`;
+  return `${heading}\n${post.url}\n${context}`;
+}
+async function copyPostReference(button) {
+  const id = Number(button.closest('.save-card')?.dataset.postId), post = allPosts().find(post => post.id === id);
+  if (!post) return;
+  const reference = postReference(post);
+  try {
+    if (window.saveXDesktop?.copyText) await window.saveXDesktop.copyText(reference);
+    else {
+      try { await navigator.clipboard.writeText(reference); }
+      catch {
+        const focused = document.activeElement, field = document.createElement('textarea');
+        field.value = reference; field.tabIndex = -1; field.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+        document.body.append(field);
+        try { field.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
+        finally { field.remove(); focused?.focus({preventScroll:true}); }
+      }
+    }
+    toast('Reference copied', false, 'bottom-center');
+  } catch { toast('Couldn’t copy reference. Try again.', true, 'bottom-center'); }
+}
+function sizeNote(field) {
+  if (CSS.supports('field-sizing','content') || !field.getClientRects().length) return;
+  field.style.height = '0px'; field.style.height = `${Math.max(document.activeElement === field ? 66 : 22,field.scrollHeight)}px`;
+}
+function syncNotePreview(field) {
+  if (!field.isConnected) return;
+  const button = field.closest('.card-note').querySelector('.note-more');
+  const expanded = expandedNoteIds.has(Number(field.closest('.save-card').dataset.postId));
+  field.dataset.expanded = String(expanded);
+  sizeNote(field);
+  const focused = document.activeElement === field;
+  if (!expanded && !focused) field.scrollTop = 0;
+  const overflow = field.scrollHeight > parseFloat(getComputedStyle(field).lineHeight) * 6 + 1;
+  button.hidden = focused || (!expanded && !overflow);
+  const label = expanded ? 'Show less' : 'Read more';
+  if (button.textContent !== label) button.textContent = label;
+  button.setAttribute('aria-expanded', String(expanded));
+}
+const observedNotes = new Set();
+const notePreviewObserver = new ResizeObserver(entries => { for (const {target} of entries) syncNotePreview(target); });
+function observeNotePreviews(root) {
+  for (const field of observedNotes) if (!field.isConnected) { notePreviewObserver.unobserve(field); observedNotes.delete(field); }
+  for (const field of root.querySelectorAll('.note-input')) {
+    if (!observedNotes.has(field)) { observedNotes.add(field); notePreviewObserver.observe(field); }
+    syncNotePreview(field);
+  }
+}
+function syncCardNote(card, post, immediate = false) {
+  const section = $('.card-note',card), field = $('.note-input',card), label = $('.note-status',card);
+  if (!field) return;
+  const status = noteStates.get(noteKey(post)), focused = document.activeElement === field;
+  if (!focused && !notes.value(post).trim() && status !== 'pending' && status !== 'saving' && status !== 'error') openNoteIds.delete(post.id);
+  if (!focused && field.value !== notes.value(post)) field.value = notes.value(post);
+  const shown = noteOpen(post);
+  field.placeholder = state.cardView === 'feed' ? 'No notes added yet.' : 'Add a note…';
+  if (immediate) { finishNoteAnimation(section); section.hidden = !shown; section.dataset.noteOpen = String(shown); }
+  else setNoteVisibility(section, shown);
+  section.onclick = event => { if (state.cardView === 'feed' && event.target !== field && !event.target.closest('button')) field.focus({preventScroll:true}); };
+  $('.note-button',card)?.setAttribute('aria-expanded',String(shown));
+  label.textContent = status === 'error' ? 'Not saved yet · retrying' : status === 'pending' || status === 'saving' ? 'Saving…' : '';
+  label.dataset.state = status || '';
+  syncNotePreview(field);
+  field.onfocus = () => { openNoteIds.add(post.id); activeNote = post; activeNoteScope = resultsScopeKey(); syncNotePreview(field); };
+  field.oninput = () => {
+    if (state.demo) return;
+    finishNoteAnimation(section);
+    notes.edit(post,field.value); state.posts = notes.overlay(state.posts); syncNotePreview(field);
+  };
+  field.onblur = event => {
+    if (activeNote?.id === post.id) flushActiveNote();
+    if (event.relatedTarget === $('.note-button',card)) return;
+    const current = allPosts().find(p => p.id === post.id && p.url === post.url);
+    if (current) syncCardNote(card,current);
+  };
+}
+function editNote(id) {
+  const post = allPosts().find(p => p.id === Number(id)), card = document.querySelector(`.save-card[data-post-id="${id}"]`);
+  if (!post || !card) return;
+  const field = $('.note-input',card), section = $('.card-note',card), button = $('.note-button',card);
+  const shown = section.dataset.noteOpen === 'true';
+  if (shown && !field.value.trim()) {
+    openNoteIds.delete(post.id); expandedNoteIds.delete(post.id);
+    if (activeNote?.id === post.id) flushActiveNote();
+    button.setAttribute('aria-expanded','false'); setNoteVisibility(section,false);
+    button.focus({preventScroll:true}); return;
+  }
+  openNoteIds.add(post.id); button.setAttribute('aria-expanded','true');
+  setNoteVisibility(section,true,() => { sizeNote(field); field.focus({preventScroll:true}); });
+}
+window.addEventListener('resize', () => { if (!CSS.supports('field-sizing','content')) document.querySelectorAll('.note-input').forEach(sizeNote); }, {passive:true});
 // Preserve the iframe itself while background sync refreshes metadata around it.
 const cardVersions = new WeakMap();
-function reconcileCards(posts) {
+function reconcileCards(sections) {
   let cards = $('#results > .cards');
   if (!cards) { $('#results').innerHTML = '<div class="cards"></div>'; cards = $('#results > .cards'); }
   cards.classList.add('cards');
-  const previous = new Map([...cards.children].map(el => [el.dataset.postId, el]));
-  const wanted = new Set(posts.map(p => String(p.id)));
+  const previous = new Map([...cards.querySelectorAll(':scope > .save-card')].map(el => [el.dataset.postId, el]));
+  const headings = new Map([...cards.querySelectorAll(':scope > .save-time-separator')].map(el => [el.dataset.saveGroup, el]));
+  const sentinels = new Map([...cards.querySelectorAll(':scope > .more-saves')].map(el => [el.dataset.moreGroup, el]));
+  const groups = new Set(sections.map(section => section.key));
+  for (const [key, heading] of headings) if (!groups.has(key)) { heading.remove(); headings.delete(key); }
+  for (const [key, more] of sentinels) if (!sections.some(section => section.key === key && !section.collapsed && section.posts.length > section.limit)) { more.remove(); sentinels.delete(key); }
+  const wanted = new Set(sections.flatMap(section => section.posts.slice(0, section.limit)).map(post => String(post.id)));
   for (const [key, el] of previous) if (!wanted.has(key)) { el.remove(); previous.delete(key); }
-  posts.forEach((post, index) => {
-    const key = String(post.id), version = JSON.stringify(post);
-    let el = previous.get(key); previous.delete(key);
-    if (!el) {
-      const template = document.createElement('template'); template.innerHTML = card(post); el = template.content.firstElementChild;
-    } else if (cardVersions.get(el) !== version) {
-      const template = document.createElement('template'); template.innerHTML = card(post); const next = template.content.firstElementChild;
-      for (const selector of ['.card-metadata', '.card-footer', '.embed-placeholder']) el.querySelector(selector)?.replaceWith(next.querySelector(selector));
-      if (post.platform === 'chrome') { el.querySelector('.bookmark-preview')?.replaceWith(next.querySelector('.bookmark-preview')); el.querySelector('.bookmark-folders')?.replaceWith(next.querySelector('.bookmark-folders')); }
+  let cursor = cards.firstElementChild;
+  // Insert headings and new cards around existing players without moving them.
+  const place = el => { if (el === cursor) cursor = cursor.nextElementSibling; else if (el.parentElement === cards && cards.moveBefore) cards.moveBefore(el, cursor); else cards.insertBefore(el, cursor); };
+  for (const group of sections) {
+    let heading = headings.get(group.key);
+    if (group.label && !heading) {
+      heading = document.createElement('h2'); heading.className = 'save-time-separator'; heading.dataset.saveGroup = group.key;
+      heading.innerHTML = `<button type="button" data-action="toggle-time-group" data-time-group="${group.key}"><span class="save-time-pill"><span>${group.label}</span>${icon('chevron')}</span><span class="save-time-rule" aria-hidden="true"></span></button>`;
+      headings.set(group.key, heading);
     }
-    cardVersions.set(el, version);
-    if (cards.children[index] !== el) cards.insertBefore(el, cards.children[index] || null);
-  });
+    if (heading) {
+      const toggle = heading.querySelector('button');
+      toggle.setAttribute('aria-expanded', String(!group.collapsed)); toggle.title = `${group.collapsed ? 'Expand' : 'Collapse'} · ${group.description}`;
+      place(heading);
+    }
+    group.posts.slice(0, group.limit).forEach(post => {
+      const key = String(post.id), version = JSON.stringify(post);
+      let el = previous.get(key); previous.delete(key);
+      if (!el) {
+        if (group.collapsed) return;
+        const template = document.createElement('template'); template.innerHTML = card(post); el = template.content.firstElementChild;
+      } else if (cardVersions.get(el) !== version) {
+        const template = document.createElement('template'); template.innerHTML = card(post); const next = template.content.firstElementChild;
+        const replaceMetadata = () => { for (const selector of ['.card-actions', '.card-footer', '.embed-placeholder']) { const current = el.querySelector(selector), replacement = next.querySelector(selector); if (current && replacement && current.outerHTML !== replacement.outerHTML) current.replaceWith(replacement); } };
+        const holder = el.querySelector('.native-embed');
+        if (holder) animateEmbedStage(holder, replaceMetadata); else replaceMetadata();
+        if (post.platform === 'chrome') { el.querySelector('.bookmark-preview')?.replaceWith(next.querySelector('.bookmark-preview')); el.querySelector('.bookmark-folders')?.replaceWith(next.querySelector('.bookmark-folders')); }
+      }
+      cardVersions.set(el, version);
+      const source = el.querySelector('.card-source'), collections = instagramCollectionLabel(post);
+      if (source.dataset.collections !== collections || source.dataset.platform !== post.platform) {
+        const template = document.createElement('template'); template.innerHTML = cardPlatform(post, collections); source.replaceWith(template.content.firstElementChild);
+      }
+      const feedSource = el.querySelector('.feed-source-pill');
+      if (feedSource.dataset.label !== feedSourceLabel(post)) {
+        const template = document.createElement('template'); template.innerHTML = feedCardSource(post); feedSource.replaceWith(template.content.firstElementChild);
+      }
+      el.hidden = group.collapsed; el.dataset.savedGroup = group.key; place(el); syncCardNote(el,post);
+    });
+    if (!group.collapsed && group.posts.length > group.limit) {
+      let more = sentinels.get(group.key);
+      if (!more) {
+        more = document.createElement('div'); more.className = 'more-saves'; more.dataset.moreGroup = group.key; more.setAttribute('role','status');
+        more.innerHTML = '<span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading more saves…</span>';
+      }
+      place(more);
+    }
+  }
   for (const el of previous.values()) el.remove();
-  layoutCards(cards); mountEmbeds(cards);
+  cards.dataset.view = state.cardView;
+  layoutCards(cards); observeNotePreviews(cards); mountEmbeds(cards);
 }
 function updateCollection() {
   if (!$('#results')) return render();
   const posts = allPosts(), live = posts.filter(p => !p.archived);
   const counts = { all: live.length, x: live.filter(p => p.platform === 'x').length, instagram: live.filter(p => p.platform === 'instagram').length, chrome: live.filter(p => p.platform === 'chrome').length };
-  document.querySelectorAll('[data-filter]').forEach(button => { const count = button.querySelector('.nav-count'); if (count) { count.textContent = counts[button.dataset.filter]; button.setAttribute('aria-label', `${button.dataset.navLabel} ${counts[button.dataset.filter]}`); } });
+  document.querySelectorAll('[data-filter]').forEach(button => { if (button.dataset.filter === 'all') { $('.nav-label-text', button).textContent = savesLabel(counts.all); button.setAttribute('aria-label', savesLabel(counts.all)); return; } const count = button.querySelector('.nav-count'); if (count) { count.textContent = counts[button.dataset.filter]; button.setAttribute('aria-label', `${button.dataset.navLabel} ${counts[button.dataset.filter]}`); } });
   const archive = $('.archive-nav'); if (archive) { const count = posts.length - live.length; $('.nav-count', archive).textContent = count; archive.setAttribute('aria-label', `Archive ${count}`); }
   renderResults();
 }
 async function refresh(silent = false) {
   if (state.demo) return;
   const version = collectionVersion;
-  try { const data = await api('/posts?scope=all'); if (version !== collectionVersion) return; if (data.embedOrigin) configureEmbeds(data.embedOrigin); const changed = JSON.stringify(state.posts) !== JSON.stringify(data.posts) || JSON.stringify(state.instagramCollections) !== JSON.stringify(data.instagramCollections || []); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; if (changed || !silent) updateCollection(); }
+  try { const data = await api('/posts?scope=all'); if (version !== collectionVersion) return; if (data.embedOrigin) configureEmbeds(data.embedOrigin); const changed = JSON.stringify(state.posts) !== JSON.stringify(data.posts) || JSON.stringify(state.instagramCollections) !== JSON.stringify(data.instagramCollections || []) || JSON.stringify(state.topicCatalog) !== JSON.stringify(data.topics || []) || JSON.stringify(state.instagramSaveLists) !== JSON.stringify(data.instagramSaveLists || {}); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; if (changed || !silent) updateCollection(); else if ($('#results > .cards') && resultsTimeKey !== addedTimeKey(resultsPosts)) renderResults(); }
   catch (e) { if (!silent) toast(e.message, true); }
+}
+let handlingUnsave = false;
+const noticedUnsaves = new Set();
+async function handleUnsaveStatus(job) {
+  if(!job || ['queued','running'].includes(job.status) || handlingUnsave)return;
+  handlingUnsave=true;
+  try{
+    if(!noticedUnsaves.has(job.id)){
+      noticedUnsaves.add(job.id);
+      if(job.status==='succeeded'){
+        const post=state.posts.find(post=>post.id===job.post_id);
+        if(job.deleted){
+          notes.forget(post || {id:job.post_id,url:job.url});openNoteIds.delete(job.post_id);expandedNoteIds.delete(job.post_id);
+          if(activeNote?.id===job.post_id)activeNote=null;
+          state.posts=state.posts.filter(post=>post.id!==job.post_id);
+        }else state.posts=state.posts.map(post=>post.id===job.post_id?{...post,accounts:post.accounts.filter(account=>account.toLowerCase()!==job.account.toLowerCase()),collections:(post.collections||[]).filter(collection=>collection.account?.toLowerCase()!==job.account.toLowerCase())}:post);
+        collectionVersion++;updateCollection();await refresh(true);
+        toast(`Unsaved on ${platformName(job.platform)}.`,false,'bottom-center');
+      }else toast(job.message||'Couldn’t verify the unsave. Check the original post.',true,'bottom-center');
+    }
+    await api(`/unsave/${job.id}/ack`,{method:'POST',body:{}});
+    if(state.sync?.unsave?.id===job.id)state.sync.unsave=null;
+  }catch{ /* Retry acknowledging the result on the next heartbeat. */ }
+  finally{handlingUnsave=false;}
+}
+async function openUnsave(button) {
+  const post=allPosts().find(post=>post.id===Number(button.closest('.save-card').dataset.postId));if(!post||state.demo)return;
+  await unsaveDialog(post,{api,showModal,modal,esc,icon,sourceIcon,onQueued:job=>{
+    state.sync={...state.sync,unsave:job};renderSync();toast(`Unsaving on ${platformName(job.platform)}…`,false,'bottom-center');wakeExtension();
+  }});
 }
 async function connectDialog() { await startSync(); }
 function bridgeRequest(type = 'PROBE_EXTENSION', timeout = 1400) {
@@ -455,6 +898,11 @@ function saveSyncAccounts(selected) {
   state.syncAccounts = [...new Set(selected)];
   localStorage.setItem('savex-sync-accounts', JSON.stringify(state.syncAccounts));
 }
+function allSourcesScanDialog() {
+  showModal(`<h2>Refresh all sources</h2><div class="scan-source-summary" role="img" aria-label="X, Instagram and Chrome">${sourceIcon('x')}${sourceIcon('instagram')}${sourceIcon('chrome')}</div><div class="scan-choices"><button class="scan-choice" data-action="scan-all" data-scan-mode="quick" aria-label="Quick scan" aria-describedby="quick-scan-description"><strong>Quick scan</strong><span id="quick-scan-description">New saves</span></button><button class="scan-choice" data-action="scan-all" data-scan-mode="deep" aria-label="Deep scan" aria-describedby="deep-scan-description"><strong>Deep scan</strong><span id="deep-scan-description">Full history · takes longer</span></button></div>`);
+  modal.dataset.syncOptions = 'true'; modal.dataset.allSourcesScan = 'true'; modal.classList.add('all-sources-scan-dialog');
+  $('[data-action="scan-options"]')?.setAttribute('aria-expanded', 'true'); renderSync();
+}
 function syncOptionsDialog() {
   showModal(`<h2 id="sync-options-heading">Sync accounts</h2><fieldset class="sync-account-fieldset"><legend>Accounts</legend><div class="filter-choices" id="sync-account-choices"></div></fieldset><div class="sync-options-actions"><div class="deep-scan-control" id="deep-scan-control"><button class="secondary" data-action="deep-sync">Deep scan</button><button type="button" class="icon-button deep-scan-info" aria-label="About deep scans" aria-describedby="deep-scan-tooltip">${icon('info')}</button><span class="deep-scan-tooltip" id="deep-scan-tooltip" role="tooltip">Checks older saves across your selected accounts. Large libraries can take a while; you can keep browsing while it runs.</span></div><button class="primary" data-action="sync">${icon('refresh')} Sync now</button></div>`);
   modal.classList.add('sync-options-dialog'); modal.dataset.syncOptions = 'true';
@@ -495,17 +943,20 @@ function renderSync() {
   renderSyncAccounts(); renderAccountNavigation(); updateSidebarSelection();
   const job = state.sync?.job, browser = state.sync?.browser;
   const busy = job && ['queued', 'running'].includes(job.status);
+  const unsaveBusy = ['queued','running'].includes(state.sync?.unsave?.status);
+  document.querySelectorAll('[data-action="unsave"]').forEach(button=>{button.disabled=!!busy||unsaveBusy||state.syncChecking;button.setAttribute('aria-busy',String(unsaveBusy&&Number(button.closest('.save-card').dataset.postId)===state.sync.unsave.post_id));});
   styleSelects(app); if (modal.dataset.syncOptions) styleSelects(modal);
   const options = $('[data-action="sync-options"]'); if (options) options.disabled = !!busy || state.syncChecking;
+  const allRefresh = $('[data-action="scan-options"]'); if (allRefresh) { allRefresh.disabled = !!busy || unsaveBusy || state.syncChecking; allRefresh.setAttribute('aria-busy', String(!!busy || unsaveBusy || state.syncChecking)); }
   const timestamp = lastSyncTime(state.sync, state.runs), age = syncAge(timestamp);
-  document.querySelectorAll('[data-action="sync"],[data-action="deep-sync"]').forEach(button => {
-    button.disabled = !!busy || state.syncChecking || !sourceTargets().length;
+  document.querySelectorAll('[data-action="sync"],[data-action="deep-sync"],[data-action="scan-all"]').forEach(button => {
+    button.disabled = !!busy || state.syncChecking || (button.dataset.action !== 'scan-all' && !sourceTargets().length);
     button.setAttribute('aria-busy', String(!!busy || state.syncChecking));
     if (button.dataset.action === 'deep-sync') { button.hidden = !sourceTargets().some(target => target !== 'chrome'); $('#deep-scan-control').hidden = button.hidden; return; }
-    button.title = timestamp ? `Last synced ${new Date(timestamp).toLocaleString()} · Click to sync` : 'Sync your saves';
+    if (button.dataset.action !== 'scan-all') button.title = timestamp ? `Last synced ${new Date(timestamp).toLocaleString()} · Click to sync` : 'Sync your saves';
   });
   const label = $('#last-sync-label');
-  if (label) label.textContent = state.syncChecking ? 'Checking…' : busy ? job.status === 'queued' ? 'Sync queued…' : job.mode === 'deep' ? 'Deep scanning…' : 'Syncing…' : age ? `Synced ${age}` : 'Sync saves';
+  if (label) label.textContent = state.syncChecking ? 'Checking…' : busy ? job.status === 'queued' ? 'Sync queued…' : job.mode === 'deep' ? 'Deep scanning…' : 'Syncing…' : age ? `Synced ${age}` : 'Not synced yet';
   const heading = $('#sync-options-heading'); if (heading) heading.textContent = timestamp ? `Last synced ${syncAge(timestamp, Date.now(), { long: true })}` : 'Sync accounts';
   renderSidebarMarkers();
   let message = state.syncChecking ? 'Checking Chrome…' : job?.message || 'Syncing in the background…';
@@ -519,6 +970,7 @@ function renderSync() {
     if (job.targets?.includes('chrome') && browser?.online && !browser.bookmarksSupported) message = 'Reload the extension to import Chrome bookmarks';
     if (job.mode === 'deep' && browser?.online && !browser.syncModes) message = 'Reload the extension to use manual deep scans';
     if (job.targets?.includes('instagram') && browser?.online && !browser.instagramCollections) message = 'Reload the extension to import Instagram collections';
+    if (job.instagramScope && browser?.online && !browser.instagramSaveLists) message = 'Reload the extension to refresh selected Instagram collections';
   }
   renderSyncToast(job, busy, message);
 }
@@ -570,7 +1022,7 @@ function renderSyncToast(job, busy, message) {
   el.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(el.dataset.expanded === 'true'));
 }
 async function queueSync(targets, mode = 'quick', request = selectedSyncRequest()) {
-  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: request.xAccount, mode } });
+  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: request.xAccount, instagramAccount: request.instagramAccount, instagramCollectionId: request.instagramCollectionId, mode } });
   state.sync = { ...state.sync, job }; renderSync(); wakeExtension();
 }
 let statusLoading = false;
@@ -578,7 +1030,7 @@ async function syncStatus() {
   if (!state.localMode || statusLoading) return;
   statusLoading = true;
   try {
-    state.sync = await api('/sync'); renderSync();
+    state.sync = await api('/sync'); renderSync(); void handleUnsaveStatus(state.sync.unsave);
     if (state.pendingTargets && modal.open && modal.dataset.syncSetup && !state.syncChecking) {
       const availability = currentAvailability(), targets = state.pendingTargets, mode = state.pendingMode, request = state.pendingSyncRequest;
       if (availability === 'ready') {
@@ -608,27 +1060,6 @@ async function startSync(mode = 'quick', request = selectedSyncRequest()) {
     else setupDialog(availability, targets, availability === 'missing', mode, request);
   } finally { state.syncChecking = false; state.checkingSyncRequest = null; renderSync(); }
 }
-async function details(id) {
-  const p = allPosts().find(p => p.id === Number(id)); if (!p) return;
-  showModal(`<div class="detail-source">${icon(p.platform)} ${platformName(p.platform)} <span title="${esc(p.accounts.join(', '))}">${relative(p.savedAt)}</span></div><section class="detail-edit"><div class="note-heading"><label for="note">Note</label><span id="note-status" class="note-status" role="status" aria-live="polite"></span></div><textarea id="note" name="notes" rows="4" maxlength="10000" ${state.demo ? 'readonly' : ''}>${esc(notes.value(p))}</textarea></section>${nativePreview(p, true)}<a class="secondary" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open original ${icon('arrow')}</a><div class="detail-actions"><button class="text-button danger" id="delete-post">${icon('trash')} Delete</button><button class="secondary" data-archive="${p.id}" aria-label="${p.archived ? 'Restore save' : 'Archive save'}">${icon(p.archived ? 'restore' : 'archive')} ${p.archived ? 'Restore to saves' : 'Archive'}</button></div>`);
-  modal.dataset.postId = String(p.id);
-  activeNote = state.demo ? null : p;
-  mountEmbeds(modal, true);
-  const field = $('#note');
-  field.oninput = () => {
-    if (state.demo) return;
-    notes.edit(p, field.value);
-    state.posts = notes.overlay(state.posts);
-  };
-  field.onblur = () => { if (!state.demo) void notes.flush(p); };
-  if (!state.demo) void notes.flush(p);
-  field.focus();
-  $('#delete-post').onclick = async () => {
-    if (state.demo) return toast('Sample saves can’t be deleted.');
-    if (!confirm('Delete this save and its notes? This cannot be undone.')) return;
-    try { await notes.flush(p); await api(`/posts/${p.id}`, { method: 'DELETE' }); notes.forget(p); modal.close(); await refresh(); toast('Save deleted.'); } catch (e) { toast(e.message, true); }
-  };
-}
 const archivePending = new Set();
 async function toggleArchive(id) {
   const post = allPosts().find(p => p.id === Number(id));
@@ -652,14 +1083,17 @@ async function toggleArchive(id) {
 }
 function mountUpdateSettings() {
   if (!window.saveXDesktop?.updateStatus) return;
-  $('#library-form').insertAdjacentHTML('afterend', '<section class="app-updates" aria-labelledby="app-update-heading"><h3 class="section-gap" id="app-update-heading">App updates</h3><p class="fine-print" id="app-update-version"></p><p id="app-update-status" role="status" aria-live="polite">Checking update status…</p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button></section>');
+  $('#library-form').insertAdjacentHTML('afterend', '<section class="app-updates" aria-labelledby="app-update-heading"><div class="app-update-heading section-gap"><h3 id="app-update-heading">App updates</h3><span class="fine-print" id="app-update-version"></span></div><p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button></section>');
   const section = $('.app-updates'), button = $('#app-update-button'), progress = $('#app-update-progress');
   let latest, reading = false;
   function render(status) {
     if (!section.isConnected || !modal.open) return;
     latest = status;
-    $('#app-update-version', section).textContent = `Installed version ${status.currentVersion}`;
-    $('#app-update-status', section).textContent = status.message;
+    $('#app-update-version', section).textContent = status.currentVersion ? `· ${status.currentVersion}` : '';
+    const statusLabel = $('#app-update-status', section);
+    const messages = { checking: 'Checking…', current: 'Up to date.', unpublished: 'No updates available.', error: 'Couldn’t check for updates. Try again.' };
+    statusLabel.textContent = messages[status.phase] || ''; statusLabel.hidden = !statusLabel.textContent;
+    button.hidden = status.phase === 'development';
     const downloading = status.phase === 'downloading';
     progress.hidden = !downloading; progress.value = status.percent || 0;
     progress.setAttribute('aria-valuetext', `${status.percent || 0}% downloaded`);
@@ -670,7 +1104,7 @@ function mountUpdateSettings() {
     if (reading || !section.isConnected || !modal.open) return;
     reading = true;
     try { render(await window.saveXDesktop.updateStatus()); }
-    catch (error) { if (section.isConnected) $('#app-update-status', section).textContent = error.message; }
+    catch { if (section.isConnected) { const label = $('#app-update-status', section); label.textContent = 'Couldn’t check for updates. Try again.'; label.hidden = false; } }
     finally { reading = false; }
   }
   button.onclick = async () => {
@@ -690,7 +1124,7 @@ async function settingsDialog() {
     const mcpSection = document.createElement('section'); mcpSection.className = 'mcp-settings section-gap';
     $('#library-form').insertAdjacentElement('afterend', mcpSection);
     void mountMcpSettings(mcpSection, { api, toast, esc, icon });
-    mountUpdateSettings(); return;
+    mountUpdateSettings(); renderSync(); return;
   }
   showModal('<h2>Settings</h2><p>Loading settings…</p>');
   try {
@@ -747,14 +1181,27 @@ export function parseImport(content, name = '') {
   return [...found.values()];
 }
 
+function accountMenuTrigger(target) {
+  return target.closest('[data-instagram-collection]') || target.closest('.source-account-group')?.querySelector('[data-nav-account]') || target.closest('[data-filter="chrome"]');
+}
+document.addEventListener('contextmenu', event => {
+  const trigger = accountMenuTrigger(event.target); if (!trigger) return;
+  event.preventDefault(); accountMenu(trigger, { x: event.clientX, y: event.clientY });
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+  const trigger = accountMenuTrigger(event.target); if (!trigger) return;
+  event.preventDefault(); accountMenu(trigger);
+});
 document.addEventListener('click', async e => {
-  const button = e.target.closest('[data-filter],[data-nav-account],[data-instagram-collection],[data-topic],[data-action],[data-open],[data-archive],[data-remove-filter],[data-revoke]'); if (!button) return;
+  const button = e.target.closest('[data-filter],[data-nav-account],[data-instagram-collection],[data-nav-topic],[data-topic],[data-action],[data-open],[data-archive],[data-remove-filter],[data-revoke]'); if (!button) return;
   try {
-    if (button.dataset.filter) { if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; } state.filters.sources = button.dataset.filter === 'all' ? [] : [button.dataset.filter]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.accounts = []; updateCollection(); renderSync(); }
+    if (button.dataset.filter) { if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; } state.filters.sources = button.dataset.filter === 'all' ? [] : [button.dataset.filter]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.accounts = []; state.filters.topics = []; updateCollection(); renderSync(); }
     else if (button.dataset.navAccount) {
       if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; }
       const value = button.dataset.navAccount;
-      state.filters.sources = [value.split(':')[0]]; state.filters.accounts = [value]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = '';
+      if (value.startsWith('instagram:')) toggleInstagramCollections(value);
+      state.filters.sources = [value.split(':')[0]]; state.filters.accounts = [value]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.topics = [];
       updateCollection();
     }
     else if (button.dataset.instagramCollection) {
@@ -763,26 +1210,58 @@ document.addEventListener('click', async e => {
       state.archive = false; state.filters = { ...defaultFilters(), sources: ['instagram'], accounts: [`instagram:${collection.account.toLowerCase()}`], collection: String(collection.id), collectionName: collection.name };
       state.query = ''; $('#search').value = ''; updateCollection();
     }
+    else if (button.dataset.navTopic) {
+      state.archive = false; state.filters = { ...defaultFilters(), topics: [button.dataset.navTopic] };
+      state.query = ''; $('#search').value = ''; updateCollection();
+    }
     else if (button.dataset.topic) { const t = button.dataset.topic; state.filters.topics = state.filters.topics.includes(t) ? state.filters.topics.filter(v => v !== t) : [...state.filters.topics, t]; renderResults(); }
     else if (button.dataset.removeFilter) { const key = button.dataset.removeFilter; if (key.startsWith('account:')) { state.filters.accounts = state.filters.accounts.filter(value => value !== key.slice(8)); state.filters.sources = [...new Set(state.filters.accounts.map(value => value.split(':')[0]))]; if (!state.filters.sources.includes('chrome')) state.filters.folder = ''; } else if (key === 'date') { state.filters.date = 'any'; state.filters.start = 'all'; state.filters.end = 'now'; state.filters.from = ''; state.filters.to = ''; } else { state.filters[key] = defaultFilters()[key]; if (key === 'collection') state.filters.collectionName = ''; if (key === 'sources') state.filters.folder = ''; } renderResults(); }
     else if (button.dataset.archive) await toggleArchive(button.dataset.archive);
-    else if (button.dataset.open) await details(button.dataset.open);
+    else if (button.dataset.open) editNote(button.dataset.open);
     else if (button.dataset.revoke) { if (confirm('Disconnect this browser? Its next sync will require pairing again.')) { await api(`/devices/${button.dataset.revoke}`, { method: 'DELETE' }); await settingsDialog(); } }
     else switch (button.dataset.action) {
-      case 'toggle-collections': {
-        const account = button.dataset.collectionsAccount, expanded = button.getAttribute('aria-expanded') !== 'true';
-        if (expanded) collapsedInstagramAccounts.delete(account); else collapsedInstagramAccounts.add(account);
-        button.setAttribute('aria-expanded', String(expanded)); button.title = `${expanded ? 'Collapse' : 'Expand'} collections`;
-        document.getElementById(button.getAttribute('aria-controls')).hidden = !expanded;
-        try { localStorage.setItem('savex-collapsed-instagram', JSON.stringify([...collapsedInstagramAccounts])); } catch { /* Keep the current session choice. */ }
-        renderSidebarMarkers();
+      case 'unsave': await openUnsave(button); break;
+      case 'sidebar-view': selectSidebarView(button.dataset.sidebarView); break;
+      case 'card-view': {
+        const view = button.dataset.cardView;
+        if (view === state.cardView) break;
+        state.cardView = view; localStorage.setItem('savex-card-view', view);
+        document.querySelectorAll('[data-action="card-view"]').forEach(control => control.setAttribute('aria-pressed', String(control.dataset.cardView === view)));
+        const cards = $('#results .cards');
+        if (cards) {
+          const posts = new Map(allPosts().map(post => [String(post.id), post]));
+          setCardView(cards, view, () => {
+            for (const card of cards.querySelectorAll('.save-card')) { const post = posts.get(card.dataset.postId); if (post) syncCardNote(card, post, true); }
+          });
+          observeNotePreviews(cards);
+        }
         break;
+      }
+      case 'add-collection': addCollection(button); break;
+      case 'copy-post': await copyPostReference(button); break;
+      case 'retry-preview': retryEmbed(button.closest('.save-card')?.querySelector('.native-embed') || $('#modal .native-embed')); break;
+      case 'toggle-note-preview': {
+        const card = button.closest('.save-card'), id = Number(card.dataset.postId);
+        if (expandedNoteIds.has(id)) expandedNoteIds.delete(id); else expandedNoteIds.add(id);
+        syncNotePreview($('.note-input',card)); break;
+      }
+      case 'toggle-collections': toggleInstagramCollections(button.dataset.collectionsAccount); break;
+      case 'toggle-time-group': {
+        const key = button.dataset.timeGroup;
+        if (collapsedTimeGroups.has(key)) collapsedTimeGroups.delete(key); else collapsedTimeGroups.add(key);
+        try { localStorage.setItem('savex-collapsed-time-groups', JSON.stringify([...collapsedTimeGroups])); } catch { /* Keep the session choice. */ }
+        renderResultsPage(); break;
       }
       case 'refresh-account': {
-        const [platform, handle] = button.dataset.syncAccount.split(':');
-        await startSync('quick', { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current' });
+        await startSync('quick', accountRefreshRequest(button.dataset.syncAccount));
         break;
       }
+      case 'refresh-collection': {
+        const request=collectionRefreshRequest(button.dataset.syncCollection);if(request)await startSync('quick',request);
+        break;
+      }
+      case 'scan-options': allSourcesScanDialog(); break;
+      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: ['chrome', 'x', 'instagram'], xAccount: 'all' }); break;
       case 'sync-options': syncOptionsDialog(); break;
       case 'sync': await startSync(); break;
       case 'deep-sync': await startSync('deep'); break;
@@ -803,12 +1282,18 @@ document.addEventListener('click', async e => {
   } catch (error) { toast(error.message, true); }
 });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const search = $('#search'), editing = e.target.closest?.('input,textarea,select,[contenteditable="true"],[contenteditable=""]');
+    if (e.defaultPrevented || e.isComposing || modal.open || !state.query || !search || editing && editing !== search) return;
+    e.preventDefault(); dismissSearch(); return;
+  }
   const modifier = macKeyboard ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (e.key.toLowerCase() !== 'f' || !modifier || e.altKey || e.shiftKey || e.isComposing) return;
   const search = $('#search'); if (!search) return;
   e.preventDefault();
-  closeSelect();
+  closeSelect(); closeCollectionPicker();
   if (modal.open) { flushActiveNote(); modal.close(); }
+  rememberSearchView();
   search.focus(); search.select();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) void notes.flushAll(); else if ($('#results')) refresh(true); });

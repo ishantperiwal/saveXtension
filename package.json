@@ -1,6 +1,6 @@
 {
   "name": "savextension",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Your Instagram saves and X bookmarks, together. A local-first library and browser extension.",

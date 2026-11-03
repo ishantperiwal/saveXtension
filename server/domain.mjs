@@ -74,6 +74,7 @@ export function cleanPost(input) {
     sourceAccount: text(input.sourceAccount, 100), accounts: Array.isArray(input.accounts) ? input.accounts.map(a => text(a, 100)).filter(Boolean).slice(0, 50) : [],
     notes: noteText(input.notes), favorite: input.favorite === true, archived: input.archived === true,
     savedAt: Number.isFinite(Date.parse(input.savedAt)) ? new Date(input.savedAt).toISOString() : null,
+    addedAt: input.addedAt === null ? null : Number.isFinite(Date.parse(input.addedAt)) ? new Date(input.addedAt).toISOString() : undefined,
     publishedAt: Number.isFinite(Date.parse(input.publishedAt)) ? new Date(input.publishedAt).toISOString() : null
   };
 }

@@ -51,6 +51,9 @@ async function start() {
       case 'helperInfo': return { path: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version };
       case 'showHelper': { const error = await shell.openPath(library.helperPath); if (error) throw new Error(error); return true; }
       case 'copyHelperPath': clipboard.writeText(library.helperPath); return true;
+      case 'copyText':
+        if (typeof message.text !== 'string' || message.text.length > 100000) throw new Error('Invalid clipboard text.');
+        clipboard.writeText(message.text); return true;
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
       case 'connect': return connect(message.type);
       case 'updateStatus': return updater.status();
@@ -91,11 +94,11 @@ async function connect(type = 'PROBE_EXTENSION') {
   const permission = type === 'OPEN_SETUP' || type === 'OPEN_BOOKMARK_SETUP';
   if (permission) await api('/sync/setup', { kind: type === 'OPEN_BOOKMARK_SETUP' ? 'chrome' : 'social' });
   const current = (await api('/sync')).browser;
-  if (type === 'PROBE_EXTENSION' && current?.online) return current;
+  if (!permission && current?.online) return current;
   if (connecting) return connecting;
   connecting = (async () => {
     const query = new URLSearchParams({ desktop: '1', action: type });
-    await openSyncBrowser(`${library.origin}/desktop-connect.html?${query}`);
+    await openSyncBrowser(`${library.origin}/desktop-connect.html?${query}`, { background: !permission });
     const deadline = Date.now() + 7000;
     while (Date.now() < deadline && !quitting) {
       const browser = (await api('/sync')).browser;

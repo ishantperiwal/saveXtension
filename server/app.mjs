@@ -1,3 +1,4 @@
+import { unsaveQueue } from './unsave.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname, extname, sep } from 'node:path';
@@ -5,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
 import { previewServer } from './embeds.mjs';
+import { instagramSaveLists, setInstagramSaveList } from './instagram-save-lists.mjs';
 import { syncQueue } from './sync.mjs';
 import { HttpError, text, canonicalPost } from './domain.mjs';
 import { createLibraryMcp } from './mcp.mjs';
-import { topicCatalog, importTopicCatalog } from './topics.mjs';
+import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf' };
@@ -17,7 +19,8 @@ const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value |
 export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token() } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
-  const sync = syncQueue(store);
+  const sync = syncQueue(store), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync);
+  const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, 'Wait for the current unsave to finish.'); return sync.enqueue(...args); };
   // Discard the generated image cache; previews are served by the platforms.
   store.db.exec('DROP TABLE IF EXISTS media_cache');
   const preview = previewServer(new URL(origin).origin);
@@ -124,15 +127,18 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         const d = device(req);
         if (localMode && path === '/api/extension/jobs' && req.method === 'POST') {
           const input = await body(req); sync.heartbeat(input);
-          return json(res, { ...sync.status(), scanAccountsRequested: input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+          const claimedUnsave = input.claim && input.ready ? unsaves.claim(text(input.instance,100),input.unsave===true) : null;
+          return json(res, { ...sync.status(), unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
         }
-        if (localMode && path === '/api/extension/queue' && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.enqueue(input.targets, input.xAccount, input.mode) }); }
+        if (localMode && path === '/api/extension/queue' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId) }); }
         if (localMode && path === '/api/extension/accounts' && req.method === 'POST') return json(res, { xAccounts: sync.setAccounts(await body(req)) });
         if (localMode && path === '/api/extension/instagram-collections' && req.method === 'POST') {
           const input = await body(req);
           return json(res, { collections: store.upsertInstagramCollections(input.account, input.collections) });
         }
         if (localMode && path === '/api/extension/stop' && req.method === 'POST') return json(res, { job: sync.cancel() });
+        const unsavePath = path.match(/^\/api\/extension\/unsaves\/([a-f0-9]+)\/(act|finish)$/);
+        if(localMode && unsavePath && req.method==='POST') {const input=await body(req);return json(res,unsavePath[2]==='act'?unsaves.act(unsavePath[1],text(input.instance,100)):unsaves.finish(unsavePath[1],text(input.instance,100),input));}
         const jobPath = path.match(/^\/api\/extension\/jobs\/([a-f0-9]+)$/);
         if (localMode && jobPath && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.update(jobPath[1], input.instance, input) }); }
         if (localMode && path === '/api/extension/details' && req.method === 'GET') {
@@ -149,7 +155,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/extension/known' && req.method === 'GET') {
           const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
           if (!['x', 'instagram'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
-          return json(res, { ids: store.knownPostIds(platform, account, query.get('collectionId')) });
+          return json(res, { ids: store.scanKnownPostIds(platform, account, query.get('collectionId')) });
         }
         if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
         if (path === '/api/extension/runs' && req.method === 'POST') {
@@ -204,6 +210,10 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       }
       if (path.startsWith('/api/')) {
         session(req);
+        const unsaveAck=path.match(/^\/api\/unsave\/([a-f0-9]+)\/ack$/);
+        if(localMode && unsaveAck && req.method==='POST'){await body(req);return json(res,unsaves.acknowledge(unsaveAck[1]));}
+        const unsavePost = path.match(/^\/api\/posts\/(\d+)\/unsave(?:\/(prepare))?$/);
+        if(localMode && unsavePost && req.method==='POST') {const input=await body(req);return json(res,unsavePost[2]?unsaves.prepare(Number(unsavePost[1])):unsaves.confirm(Number(unsavePost[1]),input));}
         if (path === '/api/mcp' && req.method === 'GET') return json(res, mcp.status());
         if (path === '/api/mcp' && req.method === 'POST') return json(res, await mcp.setEnabled((await body(req)).enabled));
         if (path === '/api/topics' && req.method === 'GET') return json(res, { topics: topicCatalog(store.db) });
@@ -211,20 +221,27 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const input = await body(req); store.set('name', text(input.name, 50) || 'My saves');
           return json(res, { name: store.get('name') });
         }
-        if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, sync.status());
+        if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, {...sync.status(),unsave:unsaves.status()});
         if (localMode && path === '/api/sync/setup' && req.method === 'POST') return json(res, sync.requestSetup((await body(req)).kind));
         if (localMode && path === '/api/sync/accounts' && req.method === 'POST') return json(res, sync.requestAccountScan());
-        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.enqueue(input.targets, input.xAccount, input.mode) }); }
+        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId) }); }
         if (localMode && path === '/api/sync/stop' && req.method === 'POST') return json(res, { job: sync.cancel() });
+        if (path === '/api/instagram-save-list' && req.method === 'POST') return json(res, { instagramSaveLists: setInstagramSaveList(store, await body(req)) });
         if (path === '/api/posts' && req.method === 'GET') {
           const scope = new URL(req.url, appOrigin).searchParams.get('scope') || 'active';
-          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db) });
+          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections(), instagramSaveLists: instagramSaveLists(store), topics: topicCatalog(store.db) });
         }
         if (path === '/api/posts/import' && req.method === 'POST') {
           const input = await body(req);
           if (!Array.isArray(input.posts) || (!input.posts.length && !input.topics?.length) || input.posts.length > 200) throw new HttpError(400, 'Import up to 200 posts at a time, or a topic catalog.');
           if (input.topics !== undefined) importTopicCatalog(store.db, input.topics);
           return json(res, store.importPosts(input.posts));
+        }
+        const collectionPost = path.match(/^\/api\/posts\/(\d+)\/collections$/);
+        if (collectionPost && req.method === 'POST') {
+          const input = await body(req);
+          const result = topicLibrary.addToCollection({ postId: Number(collectionPost[1]), topicId: input.topicId, name: input.name }, { allowArchived: true });
+          return json(res, { ...result, topics: topicCatalog(store.db) });
         }
         const post = path.match(/^\/api\/posts\/(\d+)$/);
         if (post && req.method === 'PATCH') return json(res, store.updatePost(Number(post[1]), await body(req)));

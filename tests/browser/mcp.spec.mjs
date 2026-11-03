@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
-test('Settings enables local MCP, copies client setup, reflects LLM topic edits and blocks archived saves',async({page,context,request})=>{
+test('Settings enables local MCP, copies a universal connection prompt, reflects LLM topic edits and blocks archived saves',async({page,context,request})=>{
   const origin='http://localhost:3211';
   const post=async(path,data)=>request.post(`${origin}${path}`,{headers:{Origin:origin},data});
   await post('/api/mcp',{enabled:false});
@@ -10,29 +10,32 @@ test('Settings enables local MCP, copies client setup, reflects LLM topic edits 
   await page.goto('/');
   await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
   const toggle=page.getByRole('switch',{name:'Enable MCP server'});
-  await expect(toggle).not.toBeChecked();await expect(page.getByRole('textbox',{name:'MCP server URL'})).toBeHidden();
-  await toggle.check();await expect(page.getByRole('textbox',{name:'MCP server URL'})).toHaveValue(`${origin}/mcp`);
+  await expect(toggle).not.toBeChecked();await expect(page.getByRole('group',{name:'Copy a connection prompt'})).toBeHidden();
+  await toggle.check();await expect(page.getByRole('group',{name:'Copy a connection prompt'})).toBeVisible();
+  await expect(page.getByRole('textbox',{name:'MCP server URL'})).toHaveCount(0);
   await context.grantPermissions(['clipboard-read','clipboard-write']);
-  await page.getByRole('button',{name:'Copy URL',exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(`${origin}/mcp`);
   await expect(page.getByRole('group', { name:'Copy a connection prompt' })).toBeVisible();
-  for (const client of ['OpenCode','Claude Code','Codex','VS Code']) {
-    const chip = page.getByRole('button', {name:`Copy ${client} connection prompt`,exact:true});
-    await chip.click();
-    await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toContain(`Connect ${client}`);
-    const prompt = await page.evaluate(()=>navigator.clipboard.readText());
-    expect(prompt).toContain(`${origin}/mcp`); expect(prompt).toContain('library_overview');
-    expect(prompt).toContain('Do not modify my saves, topics or notes');
-    expect(prompt).toContain('preserving all other MCP servers');
-    if (client === 'OpenCode') { expect(prompt).toContain('Detect my OpenCode version'); expect(prompt).toContain('mcp.servers.savextension'); expect(prompt).toContain('DeepSeek'); }
-    await expect(chip).toHaveClass(/is-copied/); await expect(chip).toContainText(client);
-  }
-  await expect(page.locator('.mcp-client-chip.is-copied')).toHaveCount(0);
-  await page.screenshot({path:'test-results/mcp-prompt-chips-desktop.png'});
-  await page.getByText('Manual setup',{exact:true}).click();
-  await page.getByRole('combobox',{name:'MCP client'}).click();await page.getByRole('option',{name:'Codex',exact:true}).click();
-  await expect(page.locator('#mcp-client-config')).toHaveText(`codex mcp add savextension --url ${origin}/mcp`);
-  await page.getByRole('button',{name:'Copy setup',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(`codex mcp add savextension --url ${origin}/mcp`);
+  const copyButton = page.getByRole('button', {name:'Copy connection prompt',exact:true});
+  await expect(page.getByRole('group', { name:'Copy a connection prompt' }).getByRole('button')).toHaveCount(1);
+  await expect(page.locator('#mcp-details')).not.toContainText('Paste into');
+  await copyButton.click();
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toContain('Connect this AI app');
+  const prompt = await page.evaluate(()=>navigator.clipboard.readText());
+  expect(prompt).toContain(`${origin}/mcp`); expect(prompt).toContain('library_overview');
+  expect(prompt).toContain('Streamable HTTP');
+  expect(prompt).toContain('Do not modify my saves, topics or notes');
+  expect(prompt).toContain('preserving all other MCP servers');
+  expect(prompt).toContain('installed version'); expect(prompt).toContain('DeepSeek');
+  expect(prompt).toContain('my selected model does not need to change');
+  expect(prompt).toContain('If you cannot edit its configuration');
+  await expect(copyButton).not.toHaveClass(/is-copied/);
+  await expect(copyButton).toHaveText('Copy connection prompt');
+  await expect(page.locator('#toast')).toContainText('Connection copied');
+  await expect(page.locator('#toast .toast-detail')).toHaveText('Paste into any MCP-compatible AI app on this computer.');
+  await expect(page.locator('#toast')).toHaveClass(/bottom-center/);
+  expect(await page.locator('#toast').evaluate(el=>{const r=el.getBoundingClientRect();return el.matches(':popover-open')&&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===el;})).toBe(true);
+  await expect(page.getByText('Manual setup',{exact:true})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Copy URL',exact:true})).toHaveCount(0);
   await page.screenshot({path:'test-results/mcp-settings-desktop.png'});
   await page.setViewportSize({width:390,height:844});await expect(toggle).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();await page.screenshot({path:'test-results/mcp-settings-mobile.png'});
@@ -50,27 +53,39 @@ test('Settings enables local MCP, copies client setup, reflects LLM topic edits 
     await page.locator(`.save-card[data-post-id="${id}"]`).getByRole('button',{name:'Archive save'}).click();
     const hidden=await client.callTool({name:'get_saves',arguments:{postIds:[id]}});expect(hidden.isError).toBeTruthy();
     await page.getByRole('button',{name:'Settings & backups',exact:true}).click();await expect(toggle).toBeChecked();await page.reload();
-    await page.getByRole('button',{name:'Settings & backups',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(page.getByRole('textbox',{name:'MCP server URL'})).toBeHidden();
+    await page.getByRole('button',{name:'Settings & backups',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(page.getByRole('group',{name:'Copy a connection prompt'})).toBeHidden();
   }finally{await client.close();await post('/api/mcp',{enabled:false});}
 });
 
 
-test('copy prompt chips stay visible without manual setup and expose selectable text if clipboard access fails',async({page})=>{
+test('clipboard fallback copies prompts without exposing configuration, and failures use a bottom toast',async({page,context})=>{
   await page.route('**/api/posts?scope=all',route=>route.fulfill({json:{posts:[],runs:[]}}));
   await page.route('**/api/mcp',route=>route.fulfill({json:{available:true,enabled:true,url:'http://localhost:4567/mcp'}}));
-  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('Clipboard unavailable');}}}));
-  await page.goto('/'); await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
-  const group=page.getByRole('group',{name:'Copy a connection prompt'});
-  await expect(group.getByRole('button')).toHaveCount(4);
-  await expect(page.locator('.mcp-setup')).not.toHaveAttribute('open','');
-  await group.getByRole('button',{name:'Copy OpenCode connection prompt',exact:true}).click();
-  const field=page.getByRole('textbox',{name:'Connection prompt',exact:true});
-  await expect(field).toBeVisible(); await expect(field).toBeFocused();
-  await expect(field).toHaveValue(/http:\/\/localhost:4567\/mcp/);
-  const selection=await field.evaluate(el=>({start:el.selectionStart,end:el.selectionEnd,length:el.value.length}));
-  expect(selection).toEqual({start:0,end:selection.length,length:selection.length});
-  await expect(page.locator('#mcp-error')).toContainText('Copy the selected prompt');
+  await context.grantPermissions(['clipboard-read','clipboard-write']);
+  await page.addInitScript(()=>{navigator.clipboard.writeText=async()=>{throw new Error('Clipboard unavailable');};window.readCopied=()=>navigator.clipboard.readText();});
+  await page.goto('/');await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
+  const chip=page.getByRole('button',{name:'Copy connection prompt',exact:true});
+  await chip.click();
+  await expect.poll(()=>page.evaluate(()=>window.readCopied())).toContain('http://localhost:4567/mcp');
+  await expect(page.locator('#toast')).toContainText('Connection copied');
+  await expect(page.locator('#toast .toast-detail')).toHaveText('Paste into any MCP-compatible AI app on this computer.');
+  await expect(page.locator('#modal textarea,#modal pre,#modal #mcp-url')).toHaveCount(0);
+  await page.evaluate(()=>document.execCommand=()=>false);
+  await chip.click();await expect(page.locator('#toast')).toHaveText('Couldn’t copy. Try again.');
+  await expect(page.locator('#toast')).toHaveClass(/error.*bottom-center/);
+  await expect(page.locator('#toast .toast-detail')).toHaveCount(0);
+  await expect(page.locator('#modal textarea,#modal pre')).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
-  await page.screenshot({path:'test-results/mcp-prompt-fallback-mobile.png'});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('desktop connection button uses native clipboard and keeps feedback in the toast',async({page})=>{
+  await page.addInitScript(()=>{window.saveXDesktop={copyText:async value=>{window.copiedPrompt=value;}};});
+  await page.route('**/api/mcp',r=>r.fulfill({json:{available:true,enabled:true,url:'http://localhost:3211/mcp'}}));
+  await page.goto('/');await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
+  await page.getByRole('button',{name:'Copy connection prompt',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.copiedPrompt)).toContain('Connect this AI app');
+  await expect(page.locator('#toast')).toContainText('Connection copied');
+  await expect(page.locator('#toast .toast-detail')).toHaveText('Paste into any MCP-compatible AI app on this computer.');
+  await expect(page.getByRole('button',{name:'Copy connection prompt',exact:true})).not.toHaveClass(/is-copied/);
 });

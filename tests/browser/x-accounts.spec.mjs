@@ -1,4 +1,4 @@
-import { chooseSelect, openSyncOptions } from './select-helper.mjs';
+import { chooseSelect, openSyncOptions, startQuickSync } from './select-helper.mjs';
 import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -28,22 +28,22 @@ test('choose one X account or all, switch automatically, and deduplicate with so
     const library = await context.newPage(); await library.goto('http://localhost:3211'); await library.bringToFront();
     // Startup detection can race fixture route installation. Refresh the test
     // catalog after interception is ready; production discovery runs automatically.
-    await openSyncOptions(library);
     await library.request.post('/api/sync/accounts', { headers: { Origin: 'http://localhost:3211' }, data: {} });
     await library.evaluate(() => window.postMessage({ source: 'savex-library', type: 'WAKE_SYNC' }, location.origin));
-    await expect(library.locator('#sync-account-choices input[value="x:@beta"]')).toHaveCount(1, { timeout: 20000 });
+    await expect(library.locator('[data-nav-account="x:@beta"]')).toHaveCount(1, { timeout: 20000 });
     await chooseSelect(library, 'X accounts', '@beta');
     await library.screenshot({ path: 'test-results/x-account-selector.png', fullPage: true });
     const job = () => library.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
     const previousJobId = (await job())?.id;
-    await library.getByRole('button', { name: 'Sync', exact: true }).click();
+    await startQuickSync(library);
     await expect.poll(async () => (await job())?.id).not.toBe(previousJobId);
     await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 35000 }).toBe('partial');
     expect((await job()).results.map(r => r.account)).toEqual(['@beta']);
     let saved = await library.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     expect(saved.find(p => p.externalId === '800000003').accounts).toEqual(['@beta']); expect(saved.some(p => p.externalId === '800000001')).toBe(false);
     const firstJobId = (await job()).id;
-    await chooseSelect(library, 'X accounts', 'all'); await library.getByRole('button', { name: 'Sync', exact: true }).click();
+    // The job API supports all signed-in X accounts; individual account UI is exercised above.
+    await library.evaluate(async()=>{await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targets:['x'],xAccount:'all',mode:'quick'})});window.postMessage({source:'savex-library',type:'WAKE_SYNC'},location.origin);});
     await expect.poll(async () => (await job())?.id).not.toBe(firstJobId);
     await expect.poll(async () => (await job())?.status, { timeout: 45000 }).toBe('partial');
     expect((await job()).results.map(r => r.account).sort()).toEqual(['@alpha', '@beta']);

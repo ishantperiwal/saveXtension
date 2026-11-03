@@ -6,8 +6,8 @@ export function mountDateRange(root, filters, now = new Date()) {
   let end = filters.date === 'timeline' ? stops.findIndex(s => s.key === filters.end) : last;
   if (end <= start) { start = 0; end = last; }
   root.innerHTML = `<div class="time-slider"><div class="time-rail"><div class="time-selection"></div></div>
-    <input class="time-input" type="range" min="0" max="${last}" step="1" aria-label="Saved since" value="${start}">
-    <input class="time-input" type="range" min="0" max="${last}" step="1" aria-label="Saved until" value="${end}"></div>
+    <input class="time-input" type="range" min="0" max="${last}" step="1" aria-label="Added since" value="${start}">
+    <input class="time-input" type="range" min="0" max="${last}" step="1" aria-label="Added until" value="${end}"></div>
     <div class="time-ticks" aria-hidden="true">${[...stops].reverse().map(stop => `<span><span class="time-tick-full">${stop.label}</span><span class="time-tick-short">${stop.short}</span></span>`).join('')}</div>`;
   const [from, until] = root.querySelectorAll('input'), slider = root.querySelector('.time-slider');
   const value = () => ({ date: start === 0 && end === last ? 'any' : 'timeline', start: stops[start].key, end: stops[end].key });

@@ -1,11 +1,11 @@
 import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { openSyncOptions } from './select-helper.mjs';
+import { openSyncOptions, startQuickSync, startDeepSync, chooseSelect } from './select-helper.mjs';
 import { tmpdir } from 'node:os';
 
 test('deep scans are explicit and the selected mode survives helper setup', async ({ page }) => {
-  let browser = { online: false, ready: true }, job = null; const queued = [];
+  let browser = { online: false, ready: true, bookmarksSupported:true, bookmarksReady:true }, job = null; const queued = [];
   await page.route('**/api/sync', async route => {
     if (route.request().method() === 'POST') {
       const input = route.request().postDataJSON(); queued.push(input);
@@ -19,14 +19,14 @@ test('deep scans are explicit and the selected mode survives helper setup', asyn
   await openSyncOptions(page);
   await page.getByRole('button', { name: 'Deep scan', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Open Chrome to sync.' })).toBeVisible();
-  browser = { online: true, ready: true, syncModes: true };
+  browser = { online: true, ready: true, syncModes: true, bookmarksSupported:true, bookmarksReady:true };
   await expect.poll(() => queued.length, { timeout: 8000 }).toBe(1);
   expect(queued[0].mode).toBe('deep');
-  await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Refresh all sources', exact: true })).toBeDisabled();
   job = { ...job, status: 'partial', message: 'Deep scan is incomplete; saved batches are kept.' };
   await expect(page.locator('#sync-status')).toContainText('Deep scan is incomplete', { timeout: 6000 });
-  await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await openSyncOptions(page);
+  await startQuickSync(page);
   await expect.poll(() => queued.length).toBe(2);
   expect(queued[1].mode).toBe('quick');
   job = { ...job, status: 'completed' };
@@ -64,12 +64,18 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     let [worker] = context.serviceWorkers(); if (!worker) worker = await context.waitForEvent('serviceworker');
     const page = await context.newPage(); await page.goto(`${baseURL}/`);
     await page.evaluate(async ids => {
-      await fetch('/api/posts/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posts: ids.map(id => ({ url: `https://x.com/writer/status/${id}`, accounts: ['@sync_modes'], text: 'Already captured', author: 'writer' })) }) });
+      // Seed an observed source traversal, not a legacy import that deliberately
+      // triggers the first-run ordering repair before the quick boundary applies.
+      const headers={'Content-Type':'application/json'};
+      const {runId}=await (await fetch('/api/extension/runs',{method:'POST',headers,body:JSON.stringify({platform:'x',account:'@sync_modes',mode:'quick'})})).json();
+      await fetch(`/api/extension/runs/${runId}`,{method:'POST',headers,body:JSON.stringify({posts:ids.map(id=>({url:`https://x.com/writer/status/${id}`,text:'Already captured',author:'writer'}))})});
+      await fetch(`/api/extension/runs/${runId}/finish`,{method:'POST',headers,body:JSON.stringify({status:'completed'})});
     }, [...known, unsaved, unknown]);
     const status = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
     const posts = () => page.evaluate(async () => (await (await fetch('/api/posts?scope=all')).json()).posts);
     const previousQuick = (await status())?.id;
-    await page.getByRole('button', { name: 'Sync', exact: true }).click();
+    await chooseSelect(page,'X accounts','@sync_modes');
+    await startQuickSync(page);
     await expect.poll(async () => (await status())?.id).not.toBe(previousQuick);
     await expect.poll(async () => (await status())?.status, { timeout: 25000 }).toBe('completed');
     expect((await status()).mode).toBe('quick');
@@ -78,11 +84,10 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     expect(saved.some(p => p.externalId === gap)).toBe(false);
     expect(saved.some(p => p.externalId === unsaved)).toBe(true);
     expect(detailVisits).toHaveLength(0);
-    await expect(page.getByRole('button', { name: 'Sync options', exact: true })).toBeEnabled({ timeout: 6000 });
     await openSyncOptions(page);
     await expect(page.getByRole('button', { name: 'Deep scan', exact: true })).toBeEnabled();
     const previous = (await status()).id;
-    await page.getByRole('button', { name: 'Deep scan', exact: true }).click();
+    await startDeepSync(page);
     await expect.poll(async () => (await status())?.id).not.toBe(previous);
     await expect.poll(async () => (await status())?.status, { timeout: 55000 }).toBe('partial');
     saved = await posts();
@@ -95,7 +100,6 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     expect(foreground).toBe(`${baseURL}/`);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-    await expect(page.getByRole('button', { name: 'Sync options', exact: true })).toBeEnabled({ timeout: 6000 });
     await openSyncOptions(page);
     await expect(page.getByRole('button', { name: 'Deep scan', exact: true })).toBeEnabled();
     await expect(page.locator('.sidebar')).toHaveCount(1);

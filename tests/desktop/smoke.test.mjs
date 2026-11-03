@@ -1,3 +1,4 @@
+import { startQuickSync } from '../browser/select-helper.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _electron, chromium } from 'playwright';
@@ -25,13 +26,13 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
   let desktop, chrome, pumping = false, pump;
   try {
     desktop = await _electron.launch({ executablePath, args: [appPath], env });
-    let page = await desktop.firstWindow(); await page.waitForSelector('[data-action="sync"]');
+    let page = await desktop.firstWindow(); await page.waitForSelector('[data-action="settings"]');
     const origin = new URL(page.url()).origin;
     const security = await desktop.evaluate(({ BrowserWindow }) => { const prefs = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences(); return { nodeIntegration: prefs.nodeIntegration, contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox }; });
     assert.deepEqual(security, { nodeIntegration: false, contextIsolation: true, sandbox: true });
     await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'App updates', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     const helper = join(dataDir, 'browser-helper', 'extension');
     const manifestPath = join(helper, 'manifest.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -48,7 +49,8 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
       }
     })();
     await page.route('https://platform.twitter.com/**', route => route.abort());
-    await page.getByRole('button', { name: 'Sync', exact: true }).click();
+    await page.evaluate(()=>localStorage.setItem('savex-sync-accounts',JSON.stringify(['x:current'])));
+    await startQuickSync(page);
     const status = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
     await expect.poll(async () => (await status())?.status, { timeout: 75000 }).toBe('partial');
     const firstJob = await status(); assert.equal(firstJob.mode, 'quick');
@@ -56,15 +58,15 @@ test('desktop launches, syncs with its Chrome helper, preserves notes, and quick
     // Browser setup can move focus away; the library refreshes when foregrounded.
     await page.bringToFront();
     await expect(page.locator('.save-card')).toHaveCount(2, { timeout: 7000 });
-    await page.locator('.save-card').first().getByRole('button', { name: 'Edit note', exact: true }).click();
-    await page.getByLabel('Note', { exact: true }).fill('Saved in the desktop app');
-    await expect(page.locator('#note-status')).toHaveText('Saved');
-    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+    await expect(page.locator('.save-card').first().getByLabel('Note',{exact:true})).toBeVisible();
+    await page.locator('.save-card').first().getByLabel('Note', { exact: true }).fill('Saved in the desktop app');
+    await expect(page.locator('.save-card').first().locator('.note-status')).toHaveAttribute('data-state','saved');
+    await page.getByRole('searchbox').focus();
     await mkdir(resolve('test-results'), { recursive: true });
     await page.screenshot({ path: resolve('test-results/desktop-library.png') });
     await desktop.close();
     desktop = await _electron.launch({ executablePath, args: [appPath], env });
-    page = await desktop.firstWindow(); await page.waitForSelector('[data-action="sync"]');
+    page = await desktop.firstWindow(); await page.waitForSelector('[data-action="settings"]');
     assert.equal(new URL(page.url()).origin, origin);
     await page.route('https://platform.twitter.com/**', route => route.abort());
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);

@@ -13,10 +13,10 @@ async function launch(path, url) {
   await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
 }
 
-export async function openSyncBrowser(url) {
+export async function openSyncBrowser(url, { background = false } = {}) {
   if (process.platform === 'darwin') {
     for (const name of ['Google Chrome', 'Microsoft Edge']) {
-      try { await execute('/usr/bin/open', ['-a', name, url]); return; } catch { /* Try the other supported browser. */ }
+      try { await execute('/usr/bin/open', [...(background ? ['-g'] : []), '-a', name, url]); return; } catch { /* Try the other supported browser. */ }
     }
   } else if (process.platform === 'win32') {
     for (const path of windowsBrowsers()) {

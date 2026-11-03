@@ -1,6 +1,6 @@
 const DRAFT_KEY = 'savex-note-drafts';
 
-// One write at a time per save. Drafts survive a closed dialog, reload or outage.
+// One write at a time per save. Drafts survive a hidden editor, reload or outage.
 export function createNoteAutosave({ save, storage, delay = 350, retryDelay = 2000, onState = () => {}, onSaved = () => {} }) {
   const drafts = new Map();
   const keyFor = post => `${post.id}:${post.url}`;

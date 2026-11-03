@@ -1,3 +1,5 @@
+import { orderLibraryPosts } from './source-order.js';
+import { libraryAddedAt } from './saved-time.js';
 export const datePresets = [
   ['any', 'Any time'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['last7', 'Last 7 days'],
   ['thisWeek', 'This week'], ['lastWeek', 'Last week'], ['last30', 'Last 30 days'],
@@ -95,19 +97,18 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
     if (filters.folder && !(p.folders || []).includes(filters.folder)) return false;
     if (filters.collection && (p.platform !== 'instagram' || !(p.collections || []).some(c => String(c.id) === String(filters.collection)))) return false;
     if (bounds.from || bounds.to) {
-      const timestamp = Date.parse(p.savedAt);
+      const timestamp = Date.parse(libraryAddedAt(p));
       if (!Number.isFinite(timestamp) || (bounds.from && timestamp < +bounds.from) || (bounds.to && timestamp >= +bounds.to)) return false;
     }
     if (term && ![p.text, p.title, p.bookmarkTitle, p.author, p.authorName, p.notes, p.url, ...(p.tags || []), ...(p.topics || []), ...(p.accounts || []), ...(p.folders || [])].join(' ').toLowerCase().includes(term)) return false;
     return true;
   });
-  const saved = p => Date.parse(p.savedAt) || 0;
-  return result.sort((a, b) => saved(b) - saved(a) || b.id - a.id);
+  return orderLibraryPosts(result, filters, +now);
 }
 
 export function filterChips(filters) {
   const chips = [];
-  if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Saved date' });
+  if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Date added' });
   if (filters.sources.length && !filters.accounts.length) chips.push({ key: 'sources', label: filters.sources.map(s => ({ x: 'X', instagram: 'Instagram', chrome: 'Chrome' }[s])).join(' + ') });
   for (const value of filters.accounts) {
     const colon = value.indexOf(':'), platform = value.slice(0, colon), handle = value.slice(colon + 1);

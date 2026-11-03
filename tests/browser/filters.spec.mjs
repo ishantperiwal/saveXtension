@@ -21,10 +21,10 @@ const apply = page => page.getByRole('button', { name: /^Show \d+ saves?$/ }).cl
 const visibleIds = page => page.locator('.save-card').evaluateAll(els => els.map(el => Number(el.dataset.postId)));
 
 test('two date handles bracket saves, support all-time and now, and cannot cross', async ({ page }) => {
-  await expect(page.getByRole('button', { name: /Grid view|List view/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Grid view|Feed view/ })).toHaveCount(2);
   await open(page);
   await expect(page.getByRole('radio')).toHaveCount(0);
-  const from = page.getByRole('slider', { name: 'Saved since', exact: true }), until = page.getByRole('slider', { name: 'Saved until', exact: true });
+  const from = page.getByRole('slider', { name: 'Added since', exact: true }), until = page.getByRole('slider', { name: 'Added until', exact: true });
   await expect(from).toHaveValue('0'); await expect(until).toHaveValue('6');
   await from.press('ArrowLeft'); await from.press('ArrowLeft'); await from.press('ArrowLeft');
   await expect(page.locator('.date-range-caption')).toHaveCount(0);
@@ -56,7 +56,7 @@ test('two date handles bracket saves, support all-time and now, and cannot cross
 
 test('timeline thumbs drag and resize without overflowing a narrow screen', async ({ page }) => {
   await open(page);
-  const from = page.getByRole('slider', { name: 'Saved since', exact: true }), until = page.getByRole('slider', { name: 'Saved until', exact: true });
+  const from = page.getByRole('slider', { name: 'Added since', exact: true }), until = page.getByRole('slider', { name: 'Added until', exact: true });
   async function drag(index, target) {
     const box = await page.locator('.time-slider').boundingBox(), x = i => box.x + 12 + (1 - i / 6) * (box.width - 24);
     await page.mouse.move(x(index), box.y + 24); await page.mouse.down(); await page.mouse.move(x(target), box.y + 24, { steps: 8 }); await page.mouse.up();
@@ -120,9 +120,9 @@ test.describe('touch timeline', () => {
     await page.setViewportSize({ width: 390, height: 844 }); await open(page);
     const box = await page.locator('.time-slider').boundingBox(), x = i => box.x + 12 + (1 - i / 6) * (box.width - 24);
     await page.touchscreen.tap(x(3), box.y + 24);
-    await expect(page.getByRole('slider', { name: 'Saved since', exact: true })).toHaveValue('3');
+    await expect(page.getByRole('slider', { name: 'Added since', exact: true })).toHaveValue('3');
     await page.touchscreen.tap(x(5), box.y + 24);
-    await expect(page.getByRole('slider', { name: 'Saved until', exact: true })).toHaveValue('5');
+    await expect(page.getByRole('slider', { name: 'Added until', exact: true })).toHaveValue('5');
     await expect(page.locator('#show-filtered-saves')).toHaveText('Show 2 saves');
     await apply(page); expect(await visibleIds(page)).toEqual([702, 703]);
   });

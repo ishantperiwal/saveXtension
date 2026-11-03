@@ -16,7 +16,8 @@ html, body {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 12px;
+  padding: calc(12px / var(--preview-scale, 1));
+  zoom: var(--preview-scale, 1);
 }
 
 #embed-root > iframe {

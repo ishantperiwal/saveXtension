@@ -31,7 +31,7 @@ test('custom ranges include the end date, support open endpoints and reject inva
   assert.match(dateBounds({ date: 'custom', from: '2026-02-31' }).error, /valid date/);
 });
 
-test('dates always use when a post was saved, regardless of publication time', () => {
+test('date filters use app additions when present, independent of source and publication dates', () => {
   assert.deepEqual(ids({ date: 'lastMonth', dateField: 'publishedAt' }), [2, 3, 4]);
   assert.deepEqual(ids({ date: 'yesterday' }), [2]);
 });
@@ -89,4 +89,11 @@ test('month and 30-day slider stops stay chronological across short months and y
     const dates = dateStops(new Date(2026, month, 1, 12)).slice(1).map(s => +s.date);
     assert.deepEqual(dates, [...dates].sort((a, b) => a - b));
   }
+});
+
+
+test('Chrome additions sort and filter by import time while unknown historical imports do not use bookmark dates',()=>{
+  const posts=[{id:1,platform:'chrome',savedAt:iso(2010,1,1),addedAt:iso(2026,11,1)},{id:2,platform:'chrome',savedAt:iso(2026,11,1),addedAt:null},{id:3,platform:'x',savedAt:iso(2026,11,1),addedAt:iso(2026,10,31)}];
+  assert.deepEqual(applyFilters(posts,{...defaultFilters(),date:'today'},{now:new Date(2026,10,1,18)}).map(p=>p.id),[1]);
+  assert.deepEqual(applyFilters(posts).map(p=>p.id),[1,3,2]);
 });

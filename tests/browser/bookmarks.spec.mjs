@@ -1,4 +1,4 @@
-import { chooseSelect, openSyncOptions, closeSyncOptions } from './select-helper.mjs';
+import { chooseSelect, openSyncOptions, closeSyncOptions, startQuickSync } from './select-helper.mjs';
 import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -25,19 +25,20 @@ test('Chrome bookmarks sync without social access or opening sites, with folders
       return { first: first.id, design: design.id, reading: reading.id };
     });
     library = await context.newPage(); await library.goto('http://localhost:3211'); await library.bringToFront();
+    await library.getByRole('button',{name:'Grid view',exact:true}).click();
     const initialTabs = await worker.evaluate(async () => (await chrome.tabs.query({})).map(t => t.id));
     const sync = async () => {
       const previous = await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job?.id);
-      await library.getByRole('button', { name: 'Sync', exact: true }).click();
+      await startQuickSync(library);
       await expect.poll(async () => library.evaluate(async () => (await (await fetch('/api/sync')).json()).job?.id)).not.toBe(previous);
       await expect.poll(async () => library.evaluate(async () => (await (await fetch('/api/sync')).json()).job?.status)).toBe('completed');
-      await expect(library.getByRole('button', { name: 'Sync', exact: true })).toBeEnabled();
+      await openSyncOptions(library); await closeSyncOptions(library);
     };
     await library.getByRole('button', { name: /^Chrome bookmarks/ }).click();
     await chooseSelect(library, 'Sync source', 'chrome');
     await openSyncOptions(library);
-    await expect(library.getByRole('checkbox', { name: 'Chrome bookmarks', exact: true })).toBeChecked();
-    await expect(library.locator('#sync-account-choices input[value^="x:"]')).not.toBeChecked();
+    await expect(library.getByRole('button', { name: 'Quick scan', exact: true })).toBeVisible();
+    await expect(library.getByRole('button', { name: 'Deep scan', exact: true })).toBeVisible();
     await closeSyncOptions(library);
     await sync();
     await expect(library.locator('.save-card.chrome')).toHaveCount(2, { timeout: 10000 });
@@ -54,7 +55,9 @@ test('Chrome bookmarks sync without social access or opening sites, with folders
     await library.getByRole('searchbox').fill('Reading'); await expect(library.locator('.save-card.chrome')).toHaveCount(2);
     await library.getByRole('searchbox').fill('');
     await library.locator('.save-card.chrome').filter({ hasText: 'Design handbook' }).getByRole('button', { name: 'Edit note' }).click();
-    await library.getByLabel('Note', { exact: true }).fill('Try this on Sunday'); await library.getByRole('button', { name: 'Close dialog' }).click();
+    await library.locator(`.save-card[data-post-id="${handbook.id}"]`).getByLabel('Note', { exact: true }).fill('Try this on Sunday');
+    await library.getByRole('searchbox').focus();
+    await expect(library.locator(`.save-card[data-post-id="${handbook.id}"] .note-status`)).toHaveAttribute('data-state','saved');
     await worker.evaluate(async id => { await chrome.bookmarks.update(id, { title: 'Renamed source title' }); }, seed.first);
     await sync();
     await expect(library.locator('.bookmark-title').filter({ hasText: 'Renamed source title' })).toBeVisible();

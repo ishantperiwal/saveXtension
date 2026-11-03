@@ -16,14 +16,14 @@ test('packaged desktop runs from its own runtime and resources and persists its 
   let desktop;
   try {
     desktop = await _electron.launch({ executablePath, env });
-    let page = await desktop.firstWindow(); await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeVisible();
+    let page = await desktop.firstWindow(); await expect(page.getByRole('button', { name: 'Settings & backups', exact: true })).toBeVisible();
     const info = await desktop.evaluate(({ app }) => ({ packaged: app.isPackaged, data: app.getPath('userData'), version: app.getVersion() }));
     assert.equal(info.packaged, true); assert.equal(info.data, dir);
     await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
-    await expect(page.getByText(`Installed version ${info.version}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`· ${info.version}`, { exact: true })).toBeVisible();
     await page.getByRole('switch', { name: 'Enable MCP server' }).check();
-    const mcpUrl = await page.getByRole('textbox', { name: 'MCP server URL' }).inputValue();
-    await expect(page.getByRole('group', { name: 'Copy a connection prompt' }).getByRole('button')).toHaveCount(4);
+    const mcpUrl = new URL('/mcp',page.url()).href;
+    await expect(page.getByRole('group', { name: 'Copy a connection prompt' }).getByRole('button', { name: 'Copy connection prompt', exact: true })).toHaveCount(1);
     const mcpClient = new Client({ name: 'packaged-verification', version: '1' });
     try {
       await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
@@ -47,7 +47,7 @@ test('packaged desktop runs from its own runtime and resources and persists its 
     await mkdir(resolve('test-results'), { recursive: true }); await page.screenshot({ path: resolve('test-results/desktop-packaged.png') });
     await desktop.close();
     desktop = await _electron.launch({ executablePath, env });
-    page = await desktop.firstWindow(); await expect(page.getByRole('button', { name: 'Sync', exact: true })).toBeVisible();
+    page = await desktop.firstWindow(); await expect(page.getByRole('button', { name: 'Settings & backups', exact: true })).toBeVisible();
     assert.equal(new URL(page.url()).origin, origin);
     assert.equal((await fetch(`${origin}/api/mcp`).then(r => r.json())).enabled, true);
     const posts = await page.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);

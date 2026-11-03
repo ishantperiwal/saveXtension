@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { Store } from '../server/store.mjs';
+import { TopicLibrary } from '../server/topics.mjs';
+import { createApp } from '../server/app.mjs';
+import { mcpLibrary } from '../server/mcp.mjs';
+
+test('adding a collection preserves other memberships and notes, remains curated across syncs, and can be undone',()=>{
+  const store=new Store(':memory:');
+  try{
+    store.importPosts([{url:'https://x.com/i/status/908001',notes:'My interpretation',topics:['Original'],topicsCurated:true}]);
+    const post=store.posts()[0],topics=new TopicLibrary(store),target=topics.create({name:'References'}).topic;
+    const added=topics.addToCollection({postId:post.id,topicId:target.id});
+    assert.deepEqual(added.post.topics,['Original','References']);assert.equal(added.post.notes,post.notes);assert.equal(added.post.addedAt,post.addedAt);
+    topics.addToCollection({postId:post.id,topicId:target.id});assert.equal(store.post(post.id).topics.length,2);
+    store.importPosts([{url:post.url,text:'Python AI tools coding research'}]);assert.deepEqual(store.post(post.id).topics,['Original','References']);
+    const created=topics.addToCollection({postId:post.id,name:'New collection'});assert(created.changeId);
+    assert(store.post(post.id).topics.includes('New collection'));topics.undo(created.changeId);
+    assert(!store.post(post.id).topics.includes('New collection'));assert(!topics.catalog().some(t=>t.name==='New collection'));
+    const reused=topics.addToCollection({postId:post.id,name:' references '});assert.equal(reused.topic.id,target.id);
+    assert.equal(topics.catalog().filter(t=>t.name.toLowerCase()==='references').length,1);
+  }finally{store.close();}
+});
+
+test('invalid and failed creates do not leave orphan collections or partial membership changes',()=>{
+  const store=new Store(':memory:');
+  try{
+    store.importPosts([{platform:'chrome',url:'https://collections.test/one'}]);const post=store.posts()[0],topics=new TopicLibrary(store);
+    for(const selection of [{},{name:'  '},{name:'x'.repeat(81)},{topicId:'missing'},{name:'One',topicId:'missing'}])assert.throws(()=>topics.addToCollection({postId:post.id,...selection}));
+    assert.throws(()=>topics.addToCollection({postId:9999,name:'Orphan'}));assert(!topics.catalog().some(t=>t.name==='Orphan'));
+    store.db.exec("CREATE TRIGGER fail_membership BEFORE INSERT ON post_topics BEGIN SELECT RAISE(ABORT,'Fixture failure'); END");
+    assert.throws(()=>topics.addToCollection({postId:post.id,name:'Atomic collection'}),/Fixture failure/);
+    assert(!topics.catalog().some(t=>t.name==='Atomic collection'));assert.deepEqual(store.post(post.id).topics,post.topics);
+  }finally{store.close();}
+});
+
+test('the UI API adds existing or new collections and archived saves remain excluded from MCP',async()=>{
+  const origin='http://localhost:3239',app=createApp({origin});app.server.listen(3239,'127.0.0.1');await once(app.server,'listening');
+  async function add(id,input){const response=await fetch(`${origin}/api/posts/${id}/collections`,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(input)});return{status:response.status,data:await response.json()};}
+  try{
+    app.store.importPosts([{url:'https://x.com/i/status/908002',notes:'Preserve me'}]);const post=app.store.posts()[0];
+    const created=await add(post.id,{name:'My collection'});assert.equal(created.status,200);
+    assert.equal(created.data.post.notes,'Preserve me');assert(created.data.topics.some(t=>t.name==='My collection'));
+    assert.deepEqual(mcpLibrary(app.store).getSave(post.id).topics,['My collection']);
+    assert.equal((await add(post.id,{topicId:created.data.topic.id})).status,200);
+    app.store.updatePost(post.id,{archived:true});assert.equal((await add(post.id,{name:'Archived references'})).status,200);
+    assert.equal(app.store.post(post.id).archived,true);assert.throws(()=>mcpLibrary(app.store).getSave(post.id),/unavailable/);
+    assert.equal((await add(99999,{name:'Orphan'})).status,404);
+    assert.equal((await add(post.id,{name:''})).status,400);
+  }finally{app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
+});

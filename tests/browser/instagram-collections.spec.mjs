@@ -2,7 +2,7 @@ import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { chooseSelect, openSyncOptions } from './select-helper.mjs';
+import { chooseSelect, openSyncOptions, startQuickSync, startDeepSync } from './select-helper.mjs';
 
 test('the collection tree keeps mobile controls in place and filters shared posts', async ({ page }, testInfo) => {
   const collections = [{ id: 101, account: '@me', name: 'Design notes' }, { id: 102, account: '@me', name: '❤️' }];
@@ -22,7 +22,7 @@ test('the collection tree keeps mobile controls in place and filters shared post
   await page.locator('.sidebar').screenshot({ path: testInfo.outputPath('instagram-collection-tree-mobile.png') });
 });
 
-for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers creator-prefixed collection posts and links existing saves`, async ({ baseURL }, testInfo) => {
+for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], ['deep',true]]) test(`Instagram ${mode}${limited ? ' selected-list' : ''} sync discovers creator-prefixed collection posts and links existing saves`, async ({ baseURL }, testInfo) => {
   test.setTimeout(120000);
   const profile = await mkdtemp(resolve(tmpdir(), 'savex-ig-collections-'));
   const extension = resolve(profile, 'extension'); await cp(resolve('extension'), extension, { recursive: true });
@@ -35,11 +35,12 @@ for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers cre
   const shell = body => `<html><head><meta charset="utf-8"></head><body><a href="/collection_user/" aria-label="Profile"><img alt="collection_user profile picture"></a><main>${body}</main></body></html>`;
   const post = (id, collection = false) => `<a href="${collection ? '/reference.creator' : ''}/p/${id}/"><img alt="Saved reference ${id}"></a>`;
   const catalog = '<a href="/collection_user/saved/all-posts/" aria-label="All Posts">All Posts</a><a href="/collection_user/saved/design/1001/" aria-label="Design notes">Design notes</a><a href="/collection_user/saved/_/1002/" aria-label="❤️">❤️</a>';
-  const detailVisits = []; let page;
+  const detailVisits = [], savedVisits = []; let page;
   try {
     await context.route('https://x.com/**', route => route.fulfill({ contentType: 'text/html', body: '<a data-testid="AppTabBar_Profile_Link" href="/test_account">Profile</a>' }));
     await context.route('https://www.instagram.com/**', route => {
       const path = new URL(route.request().url()).pathname;
+      if (path.includes('/saved/') && path !== '/collection_user/saved/') savedVisits.push(path);
       if (path === '/embed.js') return route.abort();
       let body;
       if (path === '/') body = shell('<a href="/collection_user/saved/">Saved</a>');
@@ -53,25 +54,27 @@ for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers cre
     let [worker] = context.serviceWorkers(); if (!worker) worker = await context.waitForEvent('serviceworker');
     page = await context.newPage(); await page.goto(`${baseURL}/`);
     // These posts predate collection support. Their global presence must not skip membership discovery.
-    await page.evaluate(async () => {
+    await page.evaluate(async limited => {
       const headers = { 'Content-Type': 'application/json' };
       const previous = (await (await fetch('/api/posts?scope=all')).json()).posts;
-      for (const post of previous.filter(post => post.platform === 'instagram' && ['Shared', 'DesignOnly', 'HeartOnly'].includes(post.externalId))) {
+      for (const post of previous.filter(post => post.platform === 'instagram' && (post.accounts||[]).includes('@collection_user'))) {
         await fetch(`/api/posts/${post.id}`, { method: 'DELETE' });
       }
       const { runId } = await (await fetch('/api/extension/runs', { method: 'POST', headers, body: JSON.stringify({ platform: 'instagram', account: '@collection_user' }) })).json();
-      await fetch(`/api/extension/runs/${runId}`, { method: 'POST', headers, body: JSON.stringify({ details: true, posts: ['Shared', 'DesignOnly', 'HeartOnly'].map(id => ({ url: `https://www.instagram.com/p/${id}/`, text: 'Already saved', author: 'creator' })) }) });
+      await fetch(`/api/extension/runs/${runId}`, { method: 'POST', headers, body: JSON.stringify({ details: true, posts: (limited ? ['Shared'] : ['Shared', 'DesignOnly', 'HeartOnly']).map(id => ({ url: `https://www.instagram.com/p/${id}/`, text: 'Already saved', author: 'creator' })) }) });
       await fetch(`/api/extension/runs/${runId}/finish`, { method: 'POST', headers, body: JSON.stringify({ status: 'completed' }) });
-    });
+      const catalog = (await (await fetch('/api/extension/instagram-collections', {method:'POST', headers, body:JSON.stringify({account:'@collection_user',collections:[{externalId:'1001',name:'Design notes',url:'https://www.instagram.com/collection_user/saved/design/1001/'},{externalId:'1002',name:'❤️',url:'https://www.instagram.com/collection_user/saved/_/1002/'}]})})).json()).collections;
+      await fetch('/api/instagram-save-list',{method:'POST',headers,body:JSON.stringify({account:'@collection_user',collectionIds:limited?[catalog.find(c=>c.externalId==='1001').id]:null})});
+    }, limited);
+    await page.reload();
     const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
     const previousJobId = (await job())?.id;
     await chooseSelect(page, 'Sync source', 'instagram');
     if (mode === 'deep') {
-      await openSyncOptions(page);
-      await page.getByRole('button', { name: 'Deep scan', exact: true }).click();
-    } else await page.getByRole('button', { name: 'Sync', exact: true }).click();
-    await expect(page.getByRole('list', { name: 'Instagram collections' })).toBeVisible({ timeout: 30000 });
-    await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
+      await startDeepSync(page);
+    } else await startQuickSync(page);
+    await expect(page.getByRole('list', { name: /^Instagram collections for/ })).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
     await expect.poll(async () => (await job())?.id, { timeout: 10000 }).not.toBe(previousJobId);
     await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('partial');
     expect((await job()).mode).toBe(mode);
@@ -79,11 +82,11 @@ for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers cre
     await page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
     await expect(page.locator('.save-card')).toHaveCount(2);
     await expect(page.getByRole('heading', { name: 'Design notes', exact: true })).toHaveClass('sr-only');
-    await expect(page.locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
-    await page.locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click();
-    await expect(page.locator('.save-card')).toHaveCount(2);
+    if (!limited) await expect(page.locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
+    if (!limited) { await page.locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click(); await expect(page.locator('.save-card')).toHaveCount(2); }
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts?scope=all')).json()).posts.filter(p => p.platform === 'instagram'));
-    expect(saved).toHaveLength(3); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(2);
+    expect(saved).toHaveLength(limited?2:3); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(limited?1:2);
+    if(limited){expect(savedVisits.some(path=>path.includes('/all-posts/')||path.includes('/1002/'))).toBe(false);expect(savedVisits.some(path=>path.includes('/1001/'))).toBe(true);}
     expect(detailVisits).toHaveLength(0);
     const branch = await page.locator('.instagram-collections > li').first().evaluate(el => getComputedStyle(el, '::after').borderLeftWidth);
     expect(branch).toBe('1px');
@@ -93,7 +96,7 @@ for (const mode of ['quick', 'deep']) test(`Instagram ${mode} sync discovers cre
     await page.screenshot({ path: testInfo.outputPath('instagram-collections-mobile.png') });
     const foreground = await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].url);
     expect(foreground).toBe(`${baseURL}/`);
-    await page.reload(); await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
+    await page.reload(); await expect(page.locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
   } finally {
     if (page && !page.isClosed()) await page.evaluate(() => fetch('/api/sync/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).catch(() => {});
     await context.close(); await rm(profile, { recursive: true, force: true });

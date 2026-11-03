@@ -147,6 +147,20 @@ export class TopicLibrary {
       return { updated: new Set(postIds).size };
     });
   }
+  addToCollection({ postId, topicId, name }, { allowArchived = false } = {}) {
+    const post = this.store.post(postId);
+    if (!post || (post.archived && !allowArchived)) throw new HttpError(404, 'Save not found.');
+    if ((topicId === undefined) === (name === undefined)) throw new HttpError(400, 'Choose a collection or give a new collection a name.');
+    if (topicId !== undefined) this.requireTopic(topicId);
+    if (name !== undefined) name = cleanTopicName(name);
+    return this.change('add_collection', () => {
+      const id = topicId ?? ensureTopic(this.db, name, true);
+      this.db.prepare('UPDATE topics SET managed=1 WHERE id=?').run(id);
+      this.db.prepare('INSERT OR IGNORE INTO post_topics VALUES(?,?)').run(postId, id);
+      this.db.prepare('UPDATE posts SET topics_curated=1,topics=?,updated_at=? WHERE id=?').run(JSON.stringify(topicNames(this.db, postId)), updatedTime(post.updatedAt), postId);
+      return { post: this.store.post(postId), topic: this.requireTopic(id) };
+    });
+  }
   merge({ sourceIds, targetId }) {
     this.requireTopic(targetId); for (const id of sourceIds) { this.requireTopic(id); if (id === targetId) throw new HttpError(400, 'The target cannot also be a source.'); }
     return this.change('merge_topics', () => {
