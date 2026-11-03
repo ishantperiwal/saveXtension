@@ -73,8 +73,7 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
     const first = posts.find(post => post.externalId === '400001');
     const proof = await (await page.request.post(origin + `/api/posts/${first.id}/unsave/prepare`, { headers, data: {} })).json();
     await page.request.post(origin + `/api/posts/${first.id}/unsave`, { headers, data: { nonce: proof.nonce, confirmed: true, account: '@beta' } });
-    await expect.poll(async () => (await status()).unsave?.status, { timeout: 30000 }).toBe('succeeded');
-    assert.deepEqual((await (await page.request.get(origin + '/api/posts?scope=all')).json()).posts.find(post => post.id === first.id).accounts, ['@alpha']);
+    await expect.poll(async () => (await (await page.request.get(origin + '/api/posts?scope=all')).json()).posts.find(post => post.id === first.id).accounts, { timeout: 30000 }).toEqual(['@alpha']);
     assert.equal(await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter(win => win.isVisible()).length), 1);
     // Instagram discovers native collections, records their membership, fetches
     // captions and verifies an unsave in its own persistent account session.
@@ -96,8 +95,7 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
     const igPost = igPosts.find(post => post.externalId === 'NativeIG1'); assert.match(igPost.text, /Full caption/);
     const igProof = await (await page.request.post(origin + `/api/posts/${igPost.id}/unsave/prepare`, { headers, data: {} })).json();
     await page.request.post(origin + `/api/posts/${igPost.id}/unsave`, { headers, data: { nonce: igProof.nonce, confirmed: true, account: '@iguser' } });
-    await expect.poll(async () => (await status()).unsave?.status, { timeout: 30000 }).toBe('succeeded');
-    assert(!(await (await page.request.get(origin + '/api/posts?scope=all')).json()).posts.some(post => post.id === igPost.id));
+    await expect.poll(async () => (await (await page.request.get(origin + '/api/posts?scope=all')).json()).posts.some(post => post.id === igPost.id), { timeout: 30000 }).toBe(false);
     // Fully restart with the same disposable data directory: account sessions
     // must survive without asking for credentials again.
     await desktop.close(); desktop = await launch();

@@ -27,7 +27,7 @@ test('reports a clear error when Chrome has no bookmark files', async () => {
 });
 
 test('locates Chrome user data on each platform', () => {
-  assert.equal(chromeUserData({ platform: 'darwin', home: '/Users/a' }), '/Users/a/Library/Application Support/Google/Chrome');
+  assert.equal(chromeUserData({ platform: 'darwin', home: '/Users/a' }), join('/Users/a', 'Library', 'Application Support', 'Google', 'Chrome'));
   assert.equal(chromeUserData({ platform: 'win32', env: { LOCALAPPDATA: 'C:/Users/a/AppData/Local' }, home: 'C:/Users/a' }), join('C:/Users/a/AppData/Local', 'Google', 'Chrome', 'User Data'));
-  assert.equal(chromeUserData({ platform: 'linux', env: {}, home: '/home/a' }), '/home/a/.config/google-chrome');
+  assert.equal(chromeUserData({ platform: 'linux', env: {}, home: '/home/a' }), join('/home/a', '.config', 'google-chrome'));
 });
