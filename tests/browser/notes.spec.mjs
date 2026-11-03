@@ -125,10 +125,19 @@ test('pencil slides an empty note open and closed, handles quick repeats and kee
   await page.goto('/');
   const pencil=card(page,second.id).getByRole('button',{name:'Edit note',exact:true}),section=card(page,second.id).locator('.card-note'),note=field(page,second.id);
   await expect(section).toBeHidden();
-  await pencil.click();await expect(note).toBeFocused();await expect(pencil).toHaveAttribute('aria-expanded','true');
-  const animation=await section.evaluate(el=>{
-    const animation=el.getAnimations()[0];return animation?{frames:animation.effect.getKeyframes(),duration:animation.effect.getTiming().duration}:null;
+  // Record when motion starts: a slow runner can finish the short animation
+  // before focus/ARIA assertions return, making getAnimations() an unreliable
+  // historical assertion. Preserve the real animation and its actual frames.
+  await section.evaluate(el=>{
+    const animate=el.animate;
+    el.animate=function(...args){
+      const animation=animate.apply(this,args);
+      this.__testNoteAnimation={frames:animation.effect.getKeyframes(),duration:animation.effect.getTiming().duration};
+      return animation;
+    };
   });
+  await pencil.click();await expect(note).toBeFocused();await expect(pencil).toHaveAttribute('aria-expanded','true');
+  const animation=await section.evaluate(el=>el.__testNoteAnimation||null);
   expect(animation).not.toBeNull();expect(animation.frames[0].height).toBe('0px');expect(animation.duration).toBeGreaterThan(150);
   await expect.poll(()=>section.evaluate(el=>el.getAnimations().length)).toBe(0);
   expect(await section.evaluate(el=>el.offsetHeight)).toBeGreaterThan(80);
