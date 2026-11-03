@@ -264,7 +264,7 @@ button svg, a svg { pointer-events: none; }
 .view-toggle button[aria-pressed="true"] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px #28302312; }
 .view-toggle .icon { width: 17px; height: 17px; }
 .cards.switching-view > .can-move:not(.more-saves) { transition: none; transform-origin: top left; }
-.browse-controls { display: flex; align-items: center; flex: 1 1 280px; flex-wrap: wrap; gap: 6px 8px; min-width: 0; min-height: 38px; }
+.browse-controls { display: flex; align-items: center; flex: 1 1 280px; flex-wrap: wrap; gap: 6px 8px; min-width: 0; min-height: 40px; }
 .select-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; max-width: 232px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--secondary); font-size: 12px; line-height: 20px; text-align: left; }
 .select-trigger:hover, .select-trigger[aria-expanded="true"] { border-color: var(--selected-border); background: var(--surface-soft); }
 .select-trigger:focus, .select-trigger:focus-visible { outline: none; }
@@ -684,7 +684,7 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .filter-footer .form-error { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .filter-footer .primary { flex-shrink: 0; min-width: 144px; }
 .filter-footer .secondary { flex-shrink: 0; }
-.filter-footer #reset-filter-draft { margin-left: auto; }
+.filter-footer #cancel-filter-draft { margin-left: auto; }
 @media(max-width: 560px) { .time-tick-full { display: none; } .time-tick-short { display: inline; } .filter-heading { padding-left: 20px; } .filter-fields { padding-left: 20px; padding-right: 20px; } .filter-footer { padding: 16px 20px; } }
 
 /* Instagram collections retain their source hierarchy. */
@@ -898,7 +898,7 @@ dialog.post-preview-dialog .post-preview-actions .unsave-button:is(:hover, :focu
 .collection-option.is-assigned:is(:hover, :focus-visible) .collection-option-remove { display: block; }
 /* Creating a new topic is the picker's main action when nothing matches, so it reads as one. */
 .collection-picker .collection-create { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--accent) 12%, var(--paper)); color: var(--accent); font-weight: 600; }
-.collection-picker .collection-create::before { content: '+'; display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--accent); color: var(--on-action); font: 600 14px/1 var(--sans); }
+.collection-picker .collection-create::before { content: '+' / ''; display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--accent); color: var(--on-action); font: 600 14px/1 var(--sans); }
 .collection-picker .collection-create:is(:hover, :focus-visible) { border-color: var(--accent); background: var(--accent); color: var(--on-action); }
 .collection-picker .collection-create:is(:hover, :focus-visible)::before { background: var(--on-action); color: var(--accent); }
 /* The add-topic button keeps an outline, drawn in the accent so it is noticeable without shouting. */

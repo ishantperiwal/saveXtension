@@ -33,6 +33,7 @@ test('Chrome bookmarks sync without social access or opening sites, with folders
       await expect.poll(async () => library.evaluate(async () => (await (await fetch('/api/sync')).json()).job?.id)).not.toBe(previous);
       await expect.poll(async () => library.evaluate(async () => (await (await fetch('/api/sync')).json()).job?.status)).toBe('completed');
       await openSyncOptions(library); await closeSyncOptions(library);
+      await library.locator('[data-filter="chrome"]').click();
     };
     await library.getByRole('button', { name: /^Chrome bookmarks/ }).click();
     await chooseSelect(library, 'Sync source', 'chrome');

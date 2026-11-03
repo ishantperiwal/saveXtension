@@ -24,7 +24,8 @@ test('deep scans are explicit and the selected mode survives helper setup', asyn
   expect(queued[0].mode).toBe('deep');
   await expect(page.getByRole('button', { name: 'Refresh all sources', exact: true })).toBeDisabled();
   job = { ...job, status: 'partial', message: 'Deep scan is incomplete; saved batches are kept.' };
-  await expect(page.locator('#sync-status')).toContainText('Deep scan is incomplete', { timeout: 6000 });
+  // A multi-source report shows a note per source rather than repeating the job-level paragraph.
+  await expect(page.locator('#sync-status')).toContainText('Sync ended before this source finished', { timeout: 6000 });
   await openSyncOptions(page);
   await startQuickSync(page);
   await expect.poll(() => queued.length).toBe(2);

@@ -9,7 +9,7 @@ test('X keeps its source sequence inside addition groups and reorders existing p
   await page.goto('/');
   const ids=()=>page.locator('.save-card').evaluateAll(cards=>cards.map(card=>card.dataset.postId));
   await expect.poll(ids).toEqual(['700','701','702','703']);
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/]);
+  await expect.poll(()=>page.locator('.save-card .new-tag').count()).toBeGreaterThan(0); await expect.poll(()=>page.locator('.save-card:not(:has(.new-tag))').count()).toBeGreaterThan(0);
   await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(4);
   const root=page.frameLocator('[data-post-id="700"] .embed-stage>iframe').locator('#embed-root');
   await root.evaluate(el=>el.dataset.continuity='preserved');
@@ -18,14 +18,14 @@ test('X keeps its source sequence inside addition groups and reorders existing p
   await expect.poll(ids,{timeout:8000}).toEqual(['701','702','700','703']);
   await expect(root).toHaveAttribute('data-continuity','preserved');
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/]);
+  await expect.poll(()=>page.locator('.save-card .new-tag').count()).toBeGreaterThan(0); await expect.poll(()=>page.locator('.save-card:not(:has(.new-tag))').count()).toBeGreaterThan(0);
   await expect.poll(ids).toEqual(['701','702','700','703']);
   await page.clock.setFixedTime(new Date('2026-11-04T12:00:00Z'));
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ older posts?$/],{timeout:8000});
+  await expect(page.locator('.save-card .new-tag')).toHaveCount(0,{timeout:8000});
   await expect.poll(ids).toEqual(['703','701','702','700']);
   await expect(root).toHaveAttribute('data-continuity','preserved');
   await page.clock.setFixedTime(new Date('2026-11-03T12:00:00Z'));
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/],{timeout:8000});
+  await expect.poll(()=>page.locator('.save-card .new-tag').count()).toBeGreaterThan(0); await expect.poll(()=>page.locator('.save-card:not(:has(.new-tag))').count()).toBeGreaterThan(0);
   await page.locator('[data-nav-account="x:@one"]').click();
   await expect(page.locator('.save-time-separator')).toHaveCount(0);
   await expect.poll(ids).toEqual(['703','701','702','700']);
@@ -33,6 +33,6 @@ test('X keeps its source sequence inside addition groups and reorders existing p
   await page.getByRole('button',{name:'Grid view',exact:true}).click();await expect.poll(ids).toEqual(['703','701','702','700']);
   await expect(page.locator('.save-time-separator')).toHaveCount(0);
   await page.locator('[data-filter="all"]').click();
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/]);
+  await expect.poll(()=>page.locator('.save-card .new-tag').count()).toBeGreaterThan(0); await expect.poll(()=>page.locator('.save-card:not(:has(.new-tag))').count()).toBeGreaterThan(0);
   await expect.poll(ids).toEqual(['701','702','700','703']);
 });

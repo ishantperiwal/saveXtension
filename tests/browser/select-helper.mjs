@@ -30,7 +30,7 @@ export async function startScan(page,mode='quick') {
   await closeSyncOptions(page);
   // Server completion can precede the next UI heartbeat. Open a fresh menu only
   // after the visible controls have left their busy state.
-  await page.locator('.sidebar-account-refresh:not(:disabled)').first().waitFor({state:'visible',timeout:10000});
+  await page.waitForFunction(()=>![...document.querySelectorAll('.sidebar-account-refresh')].some(button=>button.disabled),null,{timeout:10000});
   const scope=scanScopes.get(page)||{platform:'x',account:null};
   if(scope.platform==='all') {await openSyncOptions(page);await page.getByRole('button',{name:mode==='deep'?'Deep scan':'Quick scan',exact:true}).click();return;}
   const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="x:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();

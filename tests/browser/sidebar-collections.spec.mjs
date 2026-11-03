@@ -38,7 +38,8 @@ test('Accounts and Collections browse the same library with cross-source counts 
   const all = page.locator('[data-filter="all"]');
   await expect(all).toBeVisible();
   const count = await all.boundingBox(), tabs = await page.getByRole('tablist').boundingBox();
-  expect(count.y + count.height).toBeLessThan(tabs.y);
+  // All saves sits below the tab switcher.
+  expect(count.y).toBeGreaterThan(tabs.y + tabs.height);
   await all.click(); await expect(page.locator('.collection-folders')).toBeVisible(); expect(await ids(page)).toEqual([]);
   await expect(all).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('tab', { name: 'Topics', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -64,7 +65,7 @@ test('All Saves in Collections shows counted folders that open by click, double-
   expect(Math.abs(titleBounds.y+titleBounds.height/2-searchBounds.y-searchBounds.height/2)).toBeLessThan(2);
   await expect(folder('AI & models').locator('.collection-folder-count')).toHaveText('3');
   await expect(folder('Future ideas').locator('.collection-folder-count')).toHaveText('0');
-  await expect(folders.locator('.collection-folder-label')).toHaveText(['AI & models','Coding','Future ideas','Tools']);
+  await expect(folders.locator('.collection-folder-label')).toHaveText(['AI & models','Future ideas','Coding','Tools']);
   await expect(page.getByRole('group',{name:'Post layout'})).toBeHidden();
   await expect(page.locator('#open-filters')).toBeHidden();
   await expect(page.locator('.save-card')).toHaveCount(0);await expect(folders).not.toContainText('Instagram folder');

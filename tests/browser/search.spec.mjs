@@ -53,7 +53,7 @@ async function findShortcut(page) {
   await page.keyboard.press(mac?'Meta+f':'Control+f');
 }
 
-test('search and layout controls stick while filters scroll with the posts',async({page})=>{
+test('search, layout controls and Filters stick together while posts scroll',async({page})=>{
   await page.setViewportSize({width:1440,height:700});
   await searchFixture(page);
   const controls=page.locator('.search-tools'), search=page.locator('.search');
@@ -64,7 +64,9 @@ test('search and layout controls stick while filters scroll with the posts',asyn
   expect(filterBounds.y).toBe(searchBounds.y);expect(filterBounds.height).toBe(searchBounds.height);
   await page.evaluate(()=>scrollTo(0,650));
   await expect.poll(async()=>Math.round((await controls.boundingBox()).y)).toBe(16);
-  await expect(page.getByRole('button',{name:'Filters',exact:true})).not.toBeInViewport();
+  // Filters is pinned too, level with the search bar.
+  await expect(page.getByRole('button',{name:'Filters',exact:true})).toBeInViewport();
+  expect(Math.round((await page.locator('#open-filters').boundingBox()).y)).toBe(Math.round((await search.boundingBox()).y));
   for(const view of ['Feed','Grid']) {
     await page.getByRole('button',{name:`${view} view`,exact:true}).click();
     await expect(page.locator('.cards')).toHaveAttribute('data-view',view.toLowerCase());
@@ -81,7 +83,9 @@ test('search and layout controls stick while filters scroll with the posts',asyn
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.evaluate(()=>scrollTo(0,1000));
     await expect.poll(async()=>Math.round((await controls.boundingBox()).y)).toBe(16);
-    await expect(page.getByRole('button',{name:'Filters',exact:true})).not.toBeInViewport();
+    // On narrow screens Filters pins on its own line just below search.
+    await expect(page.getByRole('button',{name:'Filters',exact:true})).toBeInViewport();
+    expect((await page.locator('#open-filters').boundingBox()).y).toBeGreaterThanOrEqual((await controls.boundingBox()).y+(await controls.boundingBox()).height);
   }
 });
 

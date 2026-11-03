@@ -14,7 +14,7 @@ test('light mode overrides a previous dark preference and hides the theme switch
   await expect(page.locator('[data-action="toggle-theme"], .theme-switch')).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('savex-theme'))).toBe('light');
   await page.reload(); await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await expect(page.locator('.source-nav .archive-nav')).toHaveCount(1);
+  await expect(page.locator('.sidebar .archive-nav')).toHaveCount(1);
 });
 
 test('system appearance and older tabs cannot switch the library back to dark', async ({ page, context }) => {

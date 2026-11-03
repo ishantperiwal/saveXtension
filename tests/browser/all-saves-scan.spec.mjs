@@ -19,11 +19,12 @@ async function setup(page, { offline = false, selection = ['x:@one'] } = {}) {
   await page.goto('/'); return model;
 }
 
-test('save count replaces All saves and its refresh offers both modes for every source without changing saved account choices', async ({ page }) => {
+// All saves sits below the tabs with its count on the right; its refresh mark
+// appears while it is selected, like every account row.
+test('All saves shows its count, and its refresh offers both modes for every source without changing saved account choices', async ({ page }) => {
   const model = await setup(page);
-  await expect(page.getByRole('button', { name: '4 saves', exact: true })).toBeVisible();
-  await expect(page.locator('.saves-nav-row .nav-count')).toHaveCount(0);
-  await page.locator('[data-nav-account="x:@two"]').click(); await expect(page.locator('.save-card')).toHaveCount(1);
+  const all = page.getByRole('button', { name: 'All saves 4', exact: true });
+  await expect(all).toBeVisible(); await expect(all.locator('.nav-count')).toHaveText('4');
   const refresh = page.getByRole('button', { name: 'Refresh all sources', exact: true });
   await refresh.click(); await expect(page.getByRole('heading', { name: 'Refresh all sources', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Quick scan', exact: true })).toBeVisible();
@@ -33,10 +34,11 @@ test('save count replaces All saves and its refresh offers both modes for every 
   await page.getByRole('button', { name: 'Quick scan', exact: true }).click();
   await expect.poll(() => model.queued).toEqual([{ targets: ['chrome', 'x', 'instagram'], xAccount: 'all', mode: 'quick' }]);
   await expect(page.locator('#modal')).not.toBeVisible(); await expect(refresh).toBeDisabled();
-  await expect(page.locator('[data-nav-account="x:@two"]')).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('savex-sync-accounts')))).toEqual(['x:@one']);
   model.job = { ...model.job, status: 'completed' }; await expect(refresh).toBeEnabled({ timeout: 6000 });
-  await page.getByRole('button', { name: '4 saves', exact: true }).click(); await expect(page.locator('.save-card')).toHaveCount(4);
+  await page.locator('[data-nav-account="x:@two"]').click(); await expect(page.locator('.save-card')).toHaveCount(1);
+  await expect(refresh).toHaveCount(0);
+  await all.click(); await expect(page.locator('.save-card')).toHaveCount(4); await expect(refresh).toBeVisible();
 });
 
 test('deep scan targets all sources even with an empty settings selection, retains its scope through reconnecting, and cancels if closed during readiness', async ({ page }) => {
@@ -53,12 +55,12 @@ test('deep scan targets all sources even with an empty settings selection, retai
   await expect(refresh).toBeEnabled({ timeout: 6000 }); expect(model.queued).toHaveLength(1);
 });
 
-test('save count updates for active records, handles singular and zero, and the scan options fit a phone', async ({ page }) => {
+test('All saves count updates for active records, handles singular and zero, and the scan options fit a phone', async ({ page }) => {
   const model = await setup(page);
   model.posts = [model.posts[0], model.posts[4]];
-  await expect(page.getByRole('button', { name: '1 save', exact: true })).toBeVisible({ timeout: 8000 });
+  await expect(page.getByRole('button', { name: 'All saves 1', exact: true })).toBeVisible({ timeout: 8000 });
   model.posts = [model.posts[1]];
-  await expect(page.getByRole('button', { name: '0 saves', exact: true })).toBeVisible({ timeout: 8000 });
+  await expect(page.getByRole('button', { name: 'All saves 0', exact: true })).toBeVisible({ timeout: 8000 });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Refresh all sources', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Quick scan', exact: true })).toBeVisible();

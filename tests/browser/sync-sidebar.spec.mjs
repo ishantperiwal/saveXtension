@@ -4,9 +4,10 @@ async function setup(page,timestamp){
  await page.route('**/api/posts?scope=all',r=>r.fulfill({json:{posts:[],runs:[]}}));
  await page.route('**/api/sync',r=>{if(r.request().method()==='POST'){state.requests++;state.job={id:'sidebar-job',status:'queued',targets:['x']};}return r.fulfill({json:state});});await page.goto('/');return state;
 }
-test('save count and refresh sit above browse tabs, and busy scans disable another refresh',async({page})=>{
+test('All saves and its refresh sit below the browse tabs, and busy scans disable another refresh',async({page})=>{
  const state=await setup(page,'2026-11-01T11:00:00Z');
- await expect(page.locator('.source-nav > :first-child [data-filter="all"]')).toBeVisible();
+ const tabs=await page.getByRole('tablist').boundingBox(),all=await page.locator('[data-filter="all"]').boundingBox();
+ expect(all.y).toBeGreaterThan(tabs.y+tabs.height);
  await expect(page.locator('.sidebar-sync')).toHaveCount(0);
  const refresh=page.getByRole('button',{name:'Refresh all sources',exact:true});
  await refresh.click();await page.getByRole('button',{name:'Quick scan',exact:true}).click();
@@ -14,7 +15,7 @@ test('save count and refresh sit above browse tabs, and busy scans disable anoth
  state.job={...state.job,status:'completed'};await expect(refresh).toBeEnabled({timeout:6000});
 });
 test('failed scans use a floating status while the sidebar and minimal settings remain usable',async({page})=>{
- const state=await setup(page,'2026-11-01T11:00:00Z');state.job={id:'failed',status:'failed',message:'Try again'};
+ const state=await setup(page,'2026-11-01T11:00:00Z');state.job={id:'failed',status:'failed',targets:['x'],message:'Try again'};
  await expect(page.locator('#sync-status')).toContainText('Try again',{timeout:6000});
  expect(await page.locator('#sync-status').evaluate(el=>getComputedStyle(el.closest('.notification-stack')).position)).toBe('fixed');
  await page.getByRole('button',{name:'Settings & backups',exact:true}).click();

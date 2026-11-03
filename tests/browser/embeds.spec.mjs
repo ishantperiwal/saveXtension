@@ -108,12 +108,12 @@ test('time groups age automatically and preserve the loaded player when separato
   const saved=posts().map((post,index)=>({...post,addedAt:new Date(now-(index?72:4)*3600000).toISOString()}));
   await setup(page,saved);
   await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(2);
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/]);
+  await expect.poll(()=>page.locator('.save-card .new-tag').count()).toBeGreaterThan(0); await expect.poll(()=>page.locator('.save-card:not(:has(.new-tag))').count()).toBeGreaterThan(0);
   const player=await page.locator('.save-card[data-post-id="901"] .embed-stage > iframe').elementHandle();
   const root=page.frameLocator('.save-card[data-post-id="901"] .embed-stage > iframe').locator('#embed-root');
   await root.evaluate(el=>{el.dataset.continuity='retained';});
   await page.clock.setFixedTime(new Date(now+24*3600000));
-  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ older posts?$/],{timeout:8000});
+  await expect(page.locator('.save-card .new-tag')).toHaveCount(0,{timeout:8000});
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   await expect(root).toHaveAttribute('data-continuity','retained');
 });
@@ -383,7 +383,7 @@ test('six previews load at once, recover after failure, and inline notes do not 
   } finally { waiting.forEach(resolve => resolve()); }
 });
 
-test('scrolling prioritizes visible previews and preloads four screens in either direction', async ({ page }) => {
+test('scrolling prioritizes visible previews, lets started ones finish, and preloads four screens in either direction', async ({ page }) => {
   const waiting = []; let autoRelease = false;
   const gate = () => autoRelease ? Promise.resolve() : new Promise(resolve => waiting.push(resolve));
   const loading = page.locator('.save-card .native-embed[data-embed-state="loading"]');
@@ -398,10 +398,12 @@ test('scrolling prioritizes visible previews and preloads four screens in either
     const destination = page.locator('.save-card[data-post-id="2021"] .native-embed');
     await destination.scrollIntoViewIfNeeded();
     await expect(destination).toHaveAttribute('data-embed-state', /queued|loading/);
-    await expect.poll(async () => (await geometry()).filter(p => p.state === 'loading').every(p => p.visible)).toBe(true);
-    for (const frame of originalFrames) expect(await frame.evaluate(el => el.isConnected)).toBe(false);
-    await expect(loading).toHaveCount(6);
-    expect((await geometry()).filter(p => ['loading', 'queued'].includes(p.state)).every(p => p.near)).toBe(true);
+    await expect.poll(async () => (await geometry()).filter(p => p.state === 'loading' && p.visible).length).toBeGreaterThan(0);
+    // Downloads already in progress may finish in up to four extra slots instead of restarting later.
+    const kept = (await Promise.all(originalFrames.map(frame => frame.evaluate(el => el.isConnected)))).filter(Boolean).length;
+    expect(kept).toBeLessThanOrEqual(4);
+    expect(await loading.count()).toBeLessThanOrEqual(10);
+    expect((await geometry()).filter(p => p.state === 'queued').every(p => p.near)).toBe(true);
     await expect(page.locator('.embed-error:visible')).toHaveCount(0);
     autoRelease = true; waiting.forEach(resolve => resolve());
     await expect(destination).toHaveAttribute('data-embed-state', 'ready');
@@ -414,7 +416,7 @@ test('scrolling prioritizes visible previews and preloads four screens in either
     expect(await readyPlayer.evaluate(el => el.isConnected)).toBe(true);
     await page.setViewportSize({ width: 390, height: 844 });
     await top.scrollIntoViewIfNeeded(); await expect(top).toHaveAttribute('data-embed-state', 'ready');
-    await expect.poll(async () => (await geometry()).filter(p => p.state === 'loading').every(p => p.near)).toBe(true);
+    await expect.poll(async () => (await geometry()).filter(p => p.state === 'loading' && !p.near).length).toBeLessThanOrEqual(4);
     await page.screenshot({ path: 'test-results/viewport-priority-mobile.png' });
   } finally { autoRelease = true; waiting.forEach(resolve => resolve()); }
 });

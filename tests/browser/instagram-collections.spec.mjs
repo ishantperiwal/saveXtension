@@ -73,7 +73,7 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     if (mode === 'deep') {
       await startDeepSync(page);
     } else await startQuickSync(page);
-    await expect(page.getByRole('list', { name: /^Instagram collections for/ })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole('list', { name: 'Instagram collections for @collection_user', exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
     await expect.poll(async () => (await job())?.id, { timeout: 10000 }).not.toBe(previousJobId);
     await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('partial');

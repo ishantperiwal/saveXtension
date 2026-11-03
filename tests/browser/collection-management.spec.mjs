@@ -29,7 +29,7 @@ test('right-click renames a selected collection and preserves saves, notes and o
   await row(page,names[0]).click();
   const card=page.locator(`.save-card[data-post-id="${post.id}"]`),editor=await card.getByLabel('Note',{exact:true}).elementHandle();
   await row(page,names[0]).click({button:'right'});
-  await expect(page.getByRole('menu',{name:'Collection options'}).getByRole('menuitem')).toHaveText(['Rename','Delete']);
+  await expect(page.getByRole('menu',{name:'Collection options'}).getByRole('menuitem')).toHaveText(['Rename','Move into…','Delete']);
   await page.getByRole('menuitem',{name:'Rename',exact:true}).click();
   const dialog=page.locator('#modal'),input=dialog.getByRole('textbox',{name:'Collection name'});
   await expect(input).toHaveValue(names[0]);
