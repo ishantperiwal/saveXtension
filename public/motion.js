@@ -1,6 +1,10 @@
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const pendingCards = new Set(), entrances = new Map(), stages = new Map(), noteAnimations = new Map();
 const timing = { duration: 320, easing: 'cubic-bezier(.22,.68,.2,1)' };
+// A view switch moves every card in one motion. Embed heights that change
+// during it join that motion instead of growing on a separate curve.
+let embedHoldUntil = 0;
+export function holdEmbedMotion(ms) { embedHoldUntil = performance.now() + ms; }
 function clearStage(stage) {
   const animation = stages.get(stage);
   stages.delete(stage); delete stage.dataset.layoutHeight;
@@ -12,7 +16,7 @@ export function animateEmbedStage(holder, update) {
   const before = stage.offsetHeight;
   clearStage(stage); update();
   const after = stage.offsetHeight;
-  if (reducedMotion.matches || !holder.isConnected || !before || before === after) return;
+  if (reducedMotion.matches || performance.now() < embedHoldUntil || !holder.isConnected || !before || before === after) return;
   const rect = holder.getBoundingClientRect();
   if (rect.bottom < -innerHeight || rect.top > innerHeight * 2) return;
   // Masonry uses the destination height while the viewport clips/reveals the

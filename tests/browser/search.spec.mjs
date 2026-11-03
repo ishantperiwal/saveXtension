@@ -60,6 +60,8 @@ test('search and layout controls stick while filters scroll with the posts',asyn
   const initial=await controls.boundingBox();
   expect((await search.boundingBox()).width).toBeLessThan(250);
   expect(initial.x+initial.width).toBe(1416);
+  const searchBounds=await search.boundingBox(),filterBounds=await page.locator('#open-filters').boundingBox();
+  expect(filterBounds.y).toBe(searchBounds.y);expect(filterBounds.height).toBe(searchBounds.height);
   await page.evaluate(()=>scrollTo(0,650));
   await expect.poll(async()=>Math.round((await controls.boundingBox()).y)).toBe(16);
   await expect(page.getByRole('button',{name:'Filters',exact:true})).not.toBeInViewport();
@@ -85,20 +87,22 @@ test('search and layout controls stick while filters scroll with the posts',asyn
 
 test('Escape restores the unsearched source, loaded batch and scroll position',async({page})=>{
   await page.setViewportSize({width:1440,height:700});
-  const search=await searchFixture(page);
-  await expect(page.locator('.save-card')).toHaveCount(24);
+  const search=await searchFixture(page,300);
+  await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThanOrEqual(24);
+  const initial=await page.locator('.save-card').count(); expect(initial).toBeLessThan(300);
   await page.locator('.more-saves').scrollIntoViewIfNeeded();
-  await expect(page.locator('.save-card')).toHaveCount(48);
-  const anchor=page.locator('.save-card[data-post-id="10027"]');
+  await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThan(initial);
+  const anchor=page.locator('.save-card[data-post-id="10270"]');
   await anchor.scrollIntoViewIfNeeded();
   const before=await page.evaluate(()=>scrollY), rect=await anchor.boundingBox();
+  const loaded=await page.locator('.save-card').count();
   expect(before).toBeGreaterThan(100);
   await findShortcut(page); await search.fill('Reference 59');
   await expect(page.locator('.save-card')).toHaveCount(1);
   await expect(page.locator('.save-card')).toHaveAttribute('data-post-id','10059');
   await search.press('Escape');
   await expect(search).toHaveValue(''); await expect(search).not.toBeFocused();
-  await expect(page.locator('.save-card')).toHaveCount(48);
+  await expect(page.locator('.save-card')).toHaveCount(loaded);
   await expect(page.locator('[data-filter="chrome"]')).toHaveAttribute('aria-pressed','true');
   await expect.poll(()=>page.evaluate(original=>Math.abs(scrollY-original),before)).toBeLessThan(3);
   expect(Math.abs((await anchor.boundingBox()).y-rect.y)).toBeLessThan(3);

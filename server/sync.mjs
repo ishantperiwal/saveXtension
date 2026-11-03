@@ -2,7 +2,7 @@ import { instagramSyncScope } from './instagram-save-lists.mjs';
 import { randomBytes } from 'node:crypto';
 import { HttpError, text } from './domain.mjs';
 
-export function syncQueue(store) {
+export function syncQueue(store, { native = false } = {}) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS sync_jobs (
     id TEXT PRIMARY KEY, targets TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
     message TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -11,11 +11,17 @@ export function syncQueue(store) {
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'x_account')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN x_account TEXT NOT NULL DEFAULT 'current'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'mode')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'instagram_scope')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN instagram_scope TEXT NOT NULL DEFAULT 'null'");
+  if (native) {
+    const now = new Date().toISOString();
+    store.db.prepare("UPDATE sync_jobs SET status='failed',message='Sync was interrupted. Your imported saves are kept; retry to continue.',updated_at=? WHERE status IN ('queued','running')").run(now);
+    store.db.prepare("UPDATE sync_runs SET status='partial',message='Sync was interrupted. Imported saves are kept.',finished_at=? WHERE status='running'").run(now);
+  }
   let browser = null;
   try { browser = JSON.parse(store.get('sync_browser') || 'null'); } catch { /* First launch. */ }
   let setupRequest = null;
   let accountScanRequested = false;
   let xAccounts = null;
+  let nativeBrowser = null, nativeAccounts = [];
   const lastSync = store.db.prepare(`SELECT MAX(at) AS at FROM (
     SELECT finished_at AS at FROM sync_runs WHERE status IN ('completed', 'partial')
     UNION ALL SELECT updated_at AS at FROM sync_jobs WHERE status IN ('completed', 'partial')
@@ -29,8 +35,14 @@ export function syncQueue(store) {
       if (job && ['queued', 'running'].includes(job.status) && Date.now() - Date.parse(job.updated_at) > (job.status === 'queued' ? 5 : 25) * 60000) {
         store.db.prepare("UPDATE sync_jobs SET status='failed', message='Sync was interrupted. Click Sync to try again.' WHERE id=?").run(job.id);
       }
-      return { job: latest(), browser: browser && { ...browser, online: Date.now() - browser.seenAt < 90000 }, xAccounts, accountScanRequested, lastSyncedAt: lastSync.get().at || null };
+      const chrome = browser && { ...browser, online: Date.now() - browser.seenAt < 90000 };
+      const nativeOnline = !!nativeBrowser && Date.now() - nativeBrowser.seenAt < 90000;
+      const connected = nativeAccounts.filter(account => account.status === 'connected');
+      return { job: latest(), browser: native ? { ...chrome, name: 'saveXtension', online: nativeOnline, ready: nativeOnline && connected.length > 0, unsave: nativeOnline, bookmarksSupported: true, bookmarksReady: nativeOnline, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true } : chrome, ...(native ? { nativeSocial: { enabled: true, online: nativeOnline, accounts: nativeAccounts }, chromeBrowser: chrome } : {}), xAccounts, accountScanRequested, lastSyncedAt: lastSync.get().at || null };
     },
+    configureNativeAccounts(accounts) { nativeAccounts = accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status })); },
+    nativeHeartbeat(input) { nativeBrowser = { seenAt: Date.now() }; if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, input.instance); },
+    nativeStopped() { nativeBrowser = null; },
     enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null) {
       if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
       if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Chrome bookmarks, or all sources.');
@@ -47,7 +59,7 @@ export function syncQueue(store) {
       return latest();
     },
     heartbeat(input) {
-      browser = { unsave: input.unsave === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true };
+      browser = { unsave: input.unsave === true, desktopBookmarks: input.desktopBookmarks === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true };
       store.set('sync_browser', JSON.stringify(browser));
       if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, browser.instance);
       return browser;
@@ -75,6 +87,7 @@ export function syncQueue(store) {
     },
     claim(instance, accountSwitching = false, capabilities = {}) {
       if (!instance) throw new HttpError(400, 'Browser ID required.');
+      if (native && !capabilities.native) return null;
       const job = this.status().job;
       if (!job || job.status !== 'queued') return null;
       if (job.mode === 'deep' && !capabilities.syncModes) return null;

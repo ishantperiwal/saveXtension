@@ -59,7 +59,13 @@
         if(!seen.size){
           // The shell can be ready before its first posts hydrate. Never scroll
           // an empty/loading first viewport and accidentally skip the newest saves.
-          if(++initialWaits>50){message='The top of the saved list did not finish loading. Try refreshing again.';break;}
+          initialWaits++;
+          // After a few seconds an explicit empty list, or content the parser no
+          // longer understands, is final; waiting longer would not change it.
+          const state=initialWaits>=10?SaveXExtractors.diagnose(document,info.platform):'';
+          if(state==='empty'){status='completed';message='No saved posts on this page.';break;}
+          if(state==='unreadable'){status='failed';message=SaveXExtractors.layoutChanged(info.platform);break;}
+          if(initialWaits>50){message='The top of the saved list did not finish loading. Try refreshing again.';break;}
           const target=scroller();
           if(target.scrollTop>50){target.scrollTo({top:0,behavior:'instant'});target.dispatchEvent(new Event('scroll',{bubbles:true}));window.dispatchEvent(new Event('scroll'));initialSignature='';initialSamples=0;await sleep(500);continue;}
           const signature=extracted.slice(0,5).map(post=>postId(post)||post.url).join(',');

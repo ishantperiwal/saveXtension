@@ -4,14 +4,18 @@ import { mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDesktopLibrary, isLibraryFrame, isWebLink, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
-import { openSyncBrowser } from './browser.mjs';
+import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
+import { createNativeSocial } from './social.mjs';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const userData = process.env.SAVEX_DESKTOP_DATA_DIR || join(app.getPath('appData'), 'saveXtension');
 mkdirSync(userData, { recursive: true });
 app.setName('saveXtension'); app.setPath('userData', userData);
-let library, updater, window, starting, quitting = false, quitReady = false, connecting;
+let library, updater, social, window, starting, quitting = false, quitReady = false, connecting;
+const nativeTransport = { instance: `native-${randomUUID()}`, token: randomBytes(32).toString('hex') };
+const unsaveReturns=new Set();
 const locked = app.requestSingleInstanceLock();
 if (!locked) app.quit();
 else {
@@ -21,7 +25,7 @@ else {
   app.on('before-quit', event => {
     if (quitReady) return;
     event.preventDefault(); if (quitting) return; quitting = true;
-    void (async () => { try { await updater?.close(); await library?.close(); } catch (error) { await log(error); } finally { quitReady = true; app.quit(); } })();
+    void (async () => { try { await updater?.close(); await social?.close(); await library?.close(); } catch (error) { await log(error); } finally { quitReady = true; app.quit(); } })();
   });
   app.whenReady().then(() => { starting = start(); return starting; }).catch(async error => {
     await log(error); dialog.showErrorBox('saveXtension could not open', `${error.message}\n\nYour library is kept in:\n${userData}`); app.quit();
@@ -36,8 +40,9 @@ async function start() {
   library = await startDesktopLibrary({
     dataDir: userData, helperSource: app.isPackaged ? join(process.resourcesPath, 'extension') : join(root, 'extension'),
     legacyOrigin: process.env.SAVEX_DESKTOP_LEGACY_ORIGIN || 'http://localhost:3210',
-    legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite')
+    legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
   });
+  social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -56,8 +61,28 @@ async function start() {
         clipboard.writeText(message.text); return true;
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
       case 'connect': return connect(message.type);
+      case 'socialAccounts': return social.status();
+      case 'connectSocial': return social.connect(message.options);
+      case 'disconnectSocial': return social.disconnect(message.id);
+      case 'wakeSocial': social.wake(); return true;
+      case 'returnAfterUnsave': {
+        const status=await api('/sync'),id=message.id;
+        if(!/^[a-f0-9]{24}$/.test(id||'')||status.unsave?.id!==id&&!status.unsaveDiagnostics?.some(job=>job.id===id&&Date.now()-job.finishedAt<10000))throw new Error('Unsave request not found.');
+        if (status.nativeSocial?.enabled) { social.wake(); return true; }
+        if(!unsaveReturns.has(id)){
+          unsaveReturns.add(id);
+          await focusSyncBrowser(status.browser?.name).catch(log);
+          void returnAfterUnsave(id).catch(log);
+        }
+        return true;
+      }
       case 'updateStatus': return updater.status();
-      case 'checkForUpdates': return updater.check();
+      case 'checkForUpdates': return updater.check({ manual: true });
+      case 'viewUpdateRelease': {
+        const status = updater.status();
+        if (status.phase !== 'available' || !status.releaseUrl) throw new Error('Check for an available release first.');
+        await shell.openExternal(status.releaseUrl); return true;
+      }
       case 'installUpdate': {
         if (updater.status().phase !== 'ready') throw new Error('Download and verify an update first.');
         if (['queued', 'running'].includes((await api('/sync')).job?.status)) throw new Error('Finish or stop syncing before installing the update.');
@@ -77,23 +102,53 @@ async function start() {
   }
 }
 
+async function returnAfterUnsave(id){
+  try{
+    const deadline=Date.now()+210000;
+    while(!quitting&&Date.now()<deadline){
+      const status=await api('/sync');
+      const finished=status.unsave?.id===id&&!['queued','running'].includes(status.unsave.status)||status.unsaveDiagnostics?.some(job=>job.id===id);
+      if(finished){
+        if(window&&!window.isDestroyed()){
+          if(window.isMinimized())window.restore();
+          app.focus({steal:true});window.show();window.focus();
+        }
+        return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,300));
+    }
+  }finally{unsaveReturns.delete(id);}
+}
+
 async function api(path, body) {
   const response = await fetch(`${library.origin}/api${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { Origin: library.origin, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'The library request failed.'); return result;
 }
 
 async function autoQuickSync(previous) {
-  const browser = await connect('PROBE_EXTENSION');
+  let status = await api('/sync');
+  for (let attempt = 0; !status.browser?.online && attempt < 15 && !quitting; attempt++) { await new Promise(resolve => setTimeout(resolve, 200)); status = await api('/sync'); }
+  const browser = status.browser;
   if (!browser || previous.targets.some(t => t === 'chrome' ? !browser.bookmarksReady : !browser.ready)) return;
-  await api('/sync', { targets: previous.targets, xAccount: previous.xAccount || 'current', mode: 'quick' });
+  const connected = status.nativeSocial?.accounts.filter(account => account.status === 'connected') || [];
+  for (const platform of previous.targets.filter(target => target !== 'chrome')) {
+    const available = connected.filter(account => account.platform === platform), selected = platform === 'x' ? previous.xAccount : previous.instagramScope?.account;
+    const requested = Array.isArray(selected) ? selected : selected?.startsWith('@') ? [selected] : [];
+    if (!available.length || requested.some(handle => !available.some(account => account.handle.toLowerCase() === handle.toLowerCase()))) return;
+  }
+  const instagramAccount = previous.instagramScope?.account || 'current', selected = previous.instagramScope?.selections?.[instagramAccount.toLowerCase()];
+  await api('/sync', { targets: previous.targets, xAccount: previous.xAccount || 'current', instagramAccount, ...(previous.targets.length === 1 && previous.targets[0] === 'instagram' && selected?.length === 1 ? { instagramCollectionId: selected[0] } : {}), mode: 'quick' });
   await connect('WAKE_SYNC');
 }
 
 async function connect(type = 'PROBE_EXTENSION') {
   if (!['PROBE_EXTENSION', 'WAKE_SYNC', 'OPEN_SETUP', 'OPEN_BOOKMARK_SETUP'].includes(type)) throw new Error('Unsupported browser action.');
+  if (type === 'WAKE_SYNC') { social.wake(); return (await api('/sync')).browser; }
+  if (type === 'PROBE_EXTENSION') { social.wake(); return (await api('/sync')).browser; }
+  if (type === 'OPEN_SETUP') return social.status();
   const permission = type === 'OPEN_SETUP' || type === 'OPEN_BOOKMARK_SETUP';
   if (permission) await api('/sync/setup', { kind: type === 'OPEN_BOOKMARK_SETUP' ? 'chrome' : 'social' });
-  const current = (await api('/sync')).browser;
+  const current = (await api('/sync')).chromeBrowser;
   if (!permission && current?.online) return current;
   if (connecting) return connecting;
   connecting = (async () => {
@@ -101,7 +156,7 @@ async function connect(type = 'PROBE_EXTENSION') {
     await openSyncBrowser(`${library.origin}/desktop-connect.html?${query}`, { background: !permission });
     const deadline = Date.now() + 7000;
     while (Date.now() < deadline && !quitting) {
-      const browser = (await api('/sync')).browser;
+      const browser = (await api('/sync')).chromeBrowser;
       if (browser?.online) return browser;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
@@ -145,6 +200,5 @@ function installMenu() {
       ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]) ] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
-    { label: 'Browser helper', submenu: [{ label: 'Connect Chrome / Edge', click: safe(() => connect('WAKE_SYNC')) }, { label: 'Show helper folder', click: safe(() => shell.openPath(library.helperPath)) }, { label: 'Copy helper folder path', click: () => clipboard.writeText(library.helperPath) }, { label: 'Open browser extensions', click: safe(() => openSyncBrowser('chrome://extensions/')) }] }
   ]));
 }

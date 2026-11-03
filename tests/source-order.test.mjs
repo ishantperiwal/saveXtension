@@ -33,6 +33,7 @@ test('a shared post follows each selected account independently; date grouping a
       const inputs=ids.map(id=>input(id,owner));store.importPosts(inputs);store.recordDiscoveries(run,inputs);
     }
     assert.deepEqual(ordered(store),['30','20','10']);assert.deepEqual(ordered(store,'@two'),['10','30','20']);
+    store.db.prepare('UPDATE posts SET added_at=?').run('2026-11-03T10:00:00Z');
     const p=store.posts().find(p=>p.externalId==='20');store.db.prepare('UPDATE posts SET added_at=? WHERE id=?').run('2026-10-01T12:00:00Z',p.id);
     const posts=store.posts();
     assert.deepEqual(applyFilters(posts,{...defaultFilters(),accounts:['x:@one'],date:'today'},{now}).map(p=>p.externalId),['30','10']);

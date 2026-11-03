@@ -5,10 +5,13 @@
   const handle = value => /^@?[A-Za-z0-9_]{1,30}$/.test(value || '') ? `@${value.replace(/^@/, '')}` : '';
   const current = () => handle(document.querySelector('a[data-testid="AppTabBar_Profile_Link"]')?.getAttribute('href')?.match(/^\/([\w]+)\/?$/)?.[1]);
   const trigger = () => document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
-  const buttons = () => [...document.querySelectorAll('button[aria-label],[role="button"][aria-label]')].filter(el => !el.closest('[hidden],[aria-hidden="true"]') && /^Switch to @[A-Za-z0-9_]+$/i.test(el.getAttribute('aria-label')));
+  // Switcher entries are UserCells outside the timeline and sidebar; that holds
+  // in every site language. The English label is a fallback for older layouts.
+  const switcher = el => el.getAttribute('data-testid') === 'UserCell' && !el.closest('main,[data-testid="sidebarColumn"]') && (el.getAttribute('aria-label') || '').match(/@[A-Za-z0-9_]+/g)?.length === 1;
+  const buttons = () => [...document.querySelectorAll('button[aria-label],[role="button"][aria-label]')].filter(el => !el.closest('[hidden],[aria-hidden="true"]') && (switcher(el) || /^Switch to @[A-Za-z0-9_]+$/i.test(el.getAttribute('aria-label'))));
   const targetOf = el => handle(el.getAttribute('aria-label').match(/@([A-Za-z0-9_]+)/)?.[1]);
   function menuOpen() {
-    return buttons().length > 0 || [...document.querySelectorAll('a,button,[role="menuitem"]')].some(el => !el.closest('[hidden],[aria-hidden="true"]') && /^(Add an existing account|Manage accounts|Log out @\w+)$/i.test((el.innerText || el.textContent || '').trim()));
+    return buttons().length > 0 || [...document.querySelectorAll('a[href="/logout"]')].some(el => !el.closest('[hidden],[aria-hidden="true"]')) || [...document.querySelectorAll('a,button,[role="menuitem"]')].some(el => !el.closest('[hidden],[aria-hidden="true"]') && /^(Add an existing account|Manage accounts|Log out @\w+)$/i.test((el.innerText || el.textContent || '').trim()));
   }
   async function open() {
     const end = Date.now() + 12000;

@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('handles replace platform groupings and each row filters only that owner on that platform', async ({ page }) => {
-  await expect.poll(() => page.locator('.sidebar nav .nav-item:not(.instagram-collection)').evaluateAll(items => items.map(item => item.dataset.navAccount || item.dataset.filter || item.dataset.action))).toEqual(['all', 'x:@beta', 'x:@same', 'x:@zero', 'chrome', 'archive-view', 'instagram:@other', 'instagram:@same']);
+  await expect.poll(() => page.locator('.sidebar nav .nav-item:not(.instagram-collection)').evaluateAll(items => items.map(item => item.dataset.navAccount || item.dataset.filter || item.dataset.action))).toEqual(['all', 'x:@beta', 'x:@same', 'x:@zero', 'chrome', 'instagram:@other', 'instagram:@same']);
   await expect(page.locator('.sidebar nav')).toHaveCSS('scrollbar-width', 'none');
   await expect(page.locator('[data-filter="instagram"],[data-filter="x"]')).toHaveCount(0);
   await expect(row(page, 'instagram:@same').locator('.nav-label-text')).toHaveText('@same');
@@ -32,6 +32,17 @@ test('handles replace platform groupings and each row filters only that owner on
   await row(page, 'x:@same').click(); expect(await visibleIds(page)).toEqual([504]); await expect(row(page, 'instagram:@same')).toHaveAttribute('aria-pressed', 'false');
   await row(page, 'x:@zero').click(); await expect(page.locator('.save-card')).toHaveCount(0);
   await page.locator('[data-filter="all"]').click(); await expect(page.locator('.save-card')).toHaveCount(5);
+  await page.setViewportSize({width:1280,height:560});
+  const archived=page.getByRole('button',{name:'Archived 1',exact:true});
+  await expect(archived).toBeVisible();
+  const before=await archived.boundingBox(),sidebar=await page.locator('.sidebar').boundingBox();
+  expect(Math.abs(before.y+before.height-(sidebar.y+sidebar.height-17))).toBeLessThan(2);
+  await page.locator('.sidebar nav').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+  expect(Math.abs((await archived.boundingBox()).y-before.y)).toBeLessThan(1);
+  expect(await page.locator('.sidebar-footer').evaluate(el=>getComputedStyle(el,'::before').backgroundImage)).toContain('linear-gradient');
+  await page.getByRole('tab',{name:'Topics',exact:true}).click();await expect(archived).toBeVisible();
+  await archived.click();await expect(page.getByRole('heading',{name:'Archived',exact:true})).toBeVisible();
+  await page.screenshot({path:'test-results/archived-sidebar-footer.png'});
 });
 
 test('Instagram folders stay beneath their owner, and handles stay visible on mobile', async ({ page }) => {

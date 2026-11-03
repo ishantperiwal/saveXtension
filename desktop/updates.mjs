@@ -39,15 +39,15 @@ export function createUpdater({ version, dataDir, platform = process.platform, a
   async function request(url, signal, accept = 'application/octet-stream') {
     return fetchImpl(url, { signal, redirect: 'manual', headers: { Accept: accept, 'User-Agent': `saveXtension/${version}`, 'X-GitHub-Api-Version': '2022-11-28' } });
   }
-  async function check() {
-    if (!enabled || disposed) return status();
+  async function check({ manual = false } = {}) {
+    if ((!enabled && !manual) || disposed) return status();
     if (operation) return operation;
     if (ready) return status();
     controller = new AbortController();
     operation = (async () => {
       let partial;
       try {
-        set({ phase: 'checking', message: 'Checking GitHub for updates…', availableVersion: null, percent: 0, received: 0, total: 0 });
+        set({ phase: 'checking', message: 'Checking GitHub for updates…', availableVersion: null, releaseUrl: null, percent: 0, received: 0, total: 0 });
         const response = await request(API, AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]), 'application/vnd.github+json');
         if (response.status === 404) { set({ phase: 'unpublished', message: 'No installer release has been published yet. Check again after the first GitHub release.' }); return status(); }
         if (!response.ok) throw new Error(response.status === 403 || response.status === 429 ? 'GitHub is limiting update checks. Please try again later.' : 'Could not check GitHub. Please try again.');
@@ -57,6 +57,12 @@ export function createUpdater({ version, dataDir, platform = process.platform, a
         const release = JSON.parse(Buffer.concat(metadata).toString('utf8')), next = stableVersion(release.tag_name);
         if (release.draft || release.prerelease || !next) throw new Error('The latest release is not a supported stable version.');
         if (!newerVersion(next, version)) { set({ phase: 'current', message: `You’re up to date. Version ${version}.` }); return status(); }
+        if (!enabled) {
+          // A manual check is useful in local source runs, but must never
+          // download/install over unpublished work or start automatic checks.
+          set({ phase: 'available', availableVersion: next, releaseUrl: `https://github.com/${UPDATE_REPO}/releases/tag/${encodeURIComponent(release.tag_name)}`, message: `Version ${next} is available.` });
+          return status();
+        }
         const name = installerName(next, platform, arch);
         const asset = name && release.assets?.find(a => a.name === name && a.state === 'uploaded');
         if (!asset) throw new Error('This release does not have an installer for your computer yet. Please check again later.');

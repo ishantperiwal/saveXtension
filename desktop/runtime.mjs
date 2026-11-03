@@ -13,6 +13,9 @@ export const isLibraryFrame = (value, origin) => { try { return new URL(value).o
 export async function prepareHelper(source, destination, origin) {
   await mkdir(destination, { recursive: true });
   await cp(source, destination, { recursive: true, force: true });
+  // Chrome ignores this metadata; the native Node worker needs an explicit ESM
+  // boundary because this copied folder lives outside the application package.
+  await writeFile(join(destination, 'package.json'), JSON.stringify({ type: 'module' }));
   for (const name of ['background.js', 'options.js', 'options.html']) {
     const path = join(destination, name), contents = await readFile(path, 'utf8');
     await writeFile(path, contents.replaceAll('http://localhost:3210', origin));
@@ -74,7 +77,7 @@ async function legacySnapshot(origin, databasePath) {
   return null;
 }
 
-export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin = 'http://localhost:3210', legacyDatabasePath, preferredPort = DEFAULT_PORT }) {
+export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin = 'http://localhost:3210', legacyDatabasePath, preferredPort = DEFAULT_PORT, nativeTransport }) {
   await mkdir(dataDir, { recursive: true });
   const settingsPath = join(dataDir, 'desktop.json');
   let settings = {};
@@ -83,7 +86,7 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
   let instance, origin;
   for (let offset = 0; offset < 20; offset++) {
     origin = `http://localhost:${initialPort + offset}`;
-    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), origin, localMode: true });
+    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), origin, localMode: true, nativeTransport });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(initialPort + offset, '127.0.0.1', resolve); });
       break;

@@ -50,7 +50,8 @@ test('an unorganized card creates and adds a collection inline, retries failure 
   await expect(picker.getByRole('alert')).toHaveText('Please try again.');await expect(input).toHaveValue('Personal <ideas>');await expect(item.locator('.tag')).toHaveCount(0);
   online=true;await picker.getByRole('button',{name:'Create “Personal <ideas>”',exact:true}).click();
   await expect(picker).toHaveCount(0);await expect(item.locator('.tag')).toHaveText(['Personal <ideas>']);await expect(item.locator('.card-footer img')).toHaveCount(0);
-  await page.getByRole('tab',{name:'Collections',exact:true}).click();await expect(page.locator('[data-nav-topic="Personal <ideas>"]')).toContainText('1');
+  await page.getByRole('tab',{name:'Topics',exact:true}).click();await expect(page.locator('[data-nav-topic="Personal <ideas>"]')).toContainText('1');
+  await page.locator('[data-open-collection="Personal <ideas>"]').click();
   await plus.click();await expect(picker.getByRole('button',{name:'Add to Personal <ideas>',exact:true})).toHaveCount(0);
   await picker.getByRole('searchbox',{name:'Collection name',exact:true}).fill('Available collection');await page.keyboard.press('ArrowDown');
   await expect(picker.getByRole('button',{name:'Add to Available collection',exact:true})).toBeFocused();await page.keyboard.press('Enter');
@@ -59,5 +60,5 @@ test('an unorganized card creates and adds a collection inline, retries failure 
   await page.screenshot({path:'test-results/collection-picker-mobile.png'});await page.keyboard.press('Escape');
   await item.screenshot({path:'test-results/collection-pills.png'});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await page.reload();await expect(item.locator('.tag')).toHaveText(['Available collection','Personal <ideas>']);
+  await page.reload();await page.locator('[data-open-collection="Personal <ideas>"]').click();await expect(item.locator('.tag')).toHaveText(['Available collection','Personal <ideas>']);
 });

@@ -114,6 +114,29 @@ test('local grotesque and mono fonts load for the interface and account handles'
   await expect(page.locator('.account-handle').first()).toHaveCSS('font-family', /IBM Plex Mono/);
 });
 
+test('topic search narrows folder pills without losing hidden selections and reset clears the search', async ({ page }) => {
+  await open(page);
+  const topics=page.getByRole('group',{name:'Topics',exact:true}), search=topics.getByRole('searchbox',{name:'Search topics'});
+  await expect(topics.locator('.filter-choice > span > svg')).toHaveCount(2);
+  await topics.getByRole('checkbox',{name:'Coding',exact:true}).check();
+  await search.fill('  dEsIgN  ');
+  await expect(topics.getByRole('checkbox',{name:'Coding',exact:true})).toBeHidden();
+  await expect(topics.getByRole('checkbox',{name:'Design',exact:true})).toBeVisible();
+  await expect(page.locator('#show-filtered-saves')).toHaveText('Show 1 save');
+  await search.press('Enter');await expect(page.locator('#modal')).toBeVisible();
+  await search.fill('does not exist');await expect(topics.getByRole('status')).toHaveText('No matching topics');
+  await expect(topics.locator('.filter-choice:not([hidden])')).toHaveCount(0);
+  await page.getByRole('button',{name:'Reset',exact:true}).click();await expect(search).toHaveValue('');
+  await expect(topics.getByRole('status')).toBeHidden();await expect(topics.locator('.filter-choice:not([hidden])')).toHaveCount(2);
+  await expect(topics.getByRole('checkbox',{name:'Coding',exact:true})).not.toBeChecked();
+  await topics.getByRole('checkbox',{name:'Coding',exact:true}).check();await search.fill('Design');
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:'test-results/filter-topic-search-mobile.png',animations:'disabled'});
+  await apply(page);expect(await visibleIds(page)).toEqual([704]);
+  await open(page);await expect(search).toHaveValue('');await expect(topics.getByRole('checkbox',{name:'Coding',exact:true})).toBeChecked();
+});
+
 test.describe('touch timeline', () => {
   test.use({ hasTouch: true });
   test('tapping the track moves the nearer endpoint on a phone', async ({ page }) => {

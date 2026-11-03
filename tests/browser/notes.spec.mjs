@@ -18,6 +18,29 @@ test.afterEach(async({page})=>{
   for(const p of posts.filter(p=>p.url.startsWith('https://notes-fixture.example/'))) await page.request.delete('/api/posts/'+p.id,{headers:{Origin:'http://localhost:3211'}});
 });
 
+test('URLs in notes open as safe links without entering editing; plain text still edits and autosaves',async({page})=>{
+ const first=(await seed(page)).find(p=>p.bookmarkTitle==='First reference');
+ const text='Useful: contemporarytype.com\nSee https://example.com/tools?x=1&y=2.\n<script>window.noteInjected=true</script>';
+ await page.request.patch('/api/posts/'+first.id,{headers:{Origin:'http://localhost:3211'},data:{notes:text}});
+ let writes=0;await page.route(`**/api/posts/${first.id}`,route=>{if(route.request().method()==='PATCH')writes++;return route.continue();});
+ await page.route('https://contemporarytype.com/**',route=>route.fulfill({contentType:'text/html',body:'<p>External link destination</p>'}));
+ await page.goto('/');
+ const item=card(page,first.id),editor=field(page,first.id),preview=item.locator('.note-link-preview');
+ const link=preview.getByRole('link',{name:'contemporarytype.com',exact:true});
+ await expect(link).toBeVisible();await expect(link).toHaveAttribute('href','https://contemporarytype.com/');await expect(link).toHaveAttribute('rel','noopener noreferrer');
+ await expect(item.locator('.note-link-preview script')).toHaveCount(0);expect(await page.evaluate(()=>window.noteInjected)).toBeUndefined();
+ const popupPromise=page.waitForEvent('popup');await link.click();const popup=await popupPromise;
+ await expect(popup).toHaveURL('https://contemporarytype.com/');expect(await popup.evaluate(()=>window.opener)).toBe(null);await popup.close();
+ await expect(editor).not.toBeFocused();expect(writes).toBe(0);expect((await saved(page,first.id)).notes).toBe(text);
+ await editor.click({position:{x:8,y:8}});await expect(editor).toBeFocused();await expect(preview).toBeHidden();
+ const updated='Visit www.contemporarytype.com/fonts for reference.';await editor.fill(updated);await page.getByRole('searchbox').focus();
+ await expect(preview.getByRole('link',{name:'www.contemporarytype.com/fonts',exact:true})).toHaveAttribute('href','https://www.contemporarytype.com/fonts');
+ await expect.poll(async()=>(await saved(page,first.id)).notes).toBe(updated);
+ await page.getByRole('button',{name:'Feed view',exact:true}).click();
+ await expect(preview).toBeVisible();await expect(editor).toHaveValue(updated);
+ await item.screenshot({path:'test-results/clickable-note-links.png'});
+});
+
 test('sticky notes autosave inline, retain concurrent edits and flush between saves and search',async({page})=>{
   const posts=await seed(page),first=posts.find(p=>p.bookmarkTitle==='First reference'),second=posts.find(p=>p.bookmarkTitle==='Second reference');
   let release;const gate=new Promise(resolve=>{release=resolve;}),requests=[];

@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test';
 
 async function setup(page) {
-  const state = { browser: { online: true, ready: true, bookmarksReady: true }, job: null };
+  const state = { browser: { online: true, ready: true, bookmarksReady: true }, job: null, reads: 0 };
   await page.route('**/api/posts?scope=all', route => route.fulfill({ json: { posts: [], runs: [] } }));
-  await page.route('**/api/sync', route => route.fulfill({ json: state }));
+  await page.route('**/api/sync', route => { state.reads++; return route.fulfill({ json: state }); });
   await page.goto('/'); return state;
 }
 
-test('sync progress floats at the bottom right without moving the collection, and can be stopped or dismissed', async ({ page }) => {
+test('sync progress stays visible with Stop while active; only finished notices can be dismissed', async ({ page }) => {
+  await page.addInitScript(()=>sessionStorage.setItem('savex-dismissed-sync-jobs','["toast-active"]'));
   const state = await setup(page), toast = page.locator('#sync-status');
   const before = await page.locator('#results').boundingBox();
   let stops = 0;
@@ -22,9 +23,10 @@ test('sync progress floats at the bottom right without moving the collection, an
   expect(await toast.evaluate(element => !element.closest('main'))).toBeTruthy();
   const box = await toast.boundingBox(), viewport = page.viewportSize();
   expect(viewport.width - box.x - box.width).toBe(24); expect(viewport.height - box.y - box.height).toBe(24);
-  expect(box.height).toBeLessThanOrEqual(48); expect(box.width).toBeLessThan(300);
+  expect(box.height).toBeLessThanOrEqual(48); expect(box.width).toBeLessThanOrEqual(400);
   await expect(toast.locator('#sync-toast-details')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeHidden();
+  await expect(toast.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  await expect(toast.getByRole('button', { name: 'Dismiss sync status' })).toHaveCount(0);
   await expect(toast.locator('.sync-dots span').first()).toHaveCSS('animation-name', 'sync-dot');
   await toast.hover();
   await expect(toast.locator('#sync-toast-details')).toBeVisible();
@@ -36,8 +38,50 @@ test('sync progress floats at the bottom right without moving the collection, an
   state.job = { id: 'toast-failed', status: 'failed', targets: ['instagram'], message: 'Instagram: No tab with id: 2128255104.' };
   await expect(toast).toContainText('The background Instagram tab closed', { timeout: 6000 });
   await expect(toast).not.toContainText('2128255104'); await expect(toast).toHaveAttribute('data-tone', 'warning');
-  await page.getByRole('button', { name: 'Dismiss sync status' }).click(); await expect(toast).toBeHidden();
+  await page.getByRole('button', { name: 'Dismiss Instagram sync report' }).click(); await expect(toast).toBeHidden();
   await page.reload(); await expect(toast).toBeHidden();
+});
+
+test('finished sync reports group account and collection results into readable platform cards', async ({ page }) => {
+  const state = await setup(page), toast = page.locator('#sync-status');
+  const collectionResult = (name, imported, status) => ({ platform: 'instagram', account: '@ishantperiwal', imported, enriched: 1, status, message: `${name} · ${imported} new saves · 1 posts with added details. 0 confirmed unsaves removed. ${status === 'partial' ? 'Quick check stopped after five checks without more posts loading. Saved batches are kept; complete history and removals are not verified.' : 'Quick check finished at previously saved posts. Older history was not checked; use Deep scan to check it.'}` });
+  state.job = { id: 'platform-results', status: 'partial', targets: ['x', 'instagram', 'chrome'], message: 'A long combined message that must never be used as the report', results: [
+    { platform: 'x', account: '@one', imported: 2, updated: 0, enriched: 1, status: 'completed', message: '2 new saves · 1 posts with added details. 1 confirmed unsaves removed.' },
+    { platform: 'x', account: '@two', imported: 3, updated: 2, enriched: 0, status: 'completed', message: '3 new saves · 0 posts with added details. 0 confirmed unsaves removed.' },
+    collectionResult('ae. motion', 0, 'partial'), collectionResult('ai', 4, 'completed'), collectionResult('design', 1, 'partial'),
+    { platform: 'chrome', account: '', imported: 0, updated: 23, enriched: 0, status: 'completed', message: '0 new bookmarks · 23 refreshed.' }
+  ] };
+  await expect(toast.locator('.sync-platform-card')).toHaveCount(3, { timeout: 6000 });
+  const instagram = toast.locator('[data-platform="instagram"].sync-platform-card');
+  const x = toast.locator('[data-platform="x"].sync-platform-card');
+  await expect(x).toHaveAttribute('data-tone', 'success');
+  await expect(x.locator('.sync-report-counts')).toHaveText('5 new saves2 refreshed1 with added details1 removed');
+  await expect(instagram).toHaveAttribute('data-tone', 'warning');
+  await expect(instagram.locator('.sync-report-counts')).toHaveText('5 new saves3 with added details');
+  await expect(instagram.locator('.sync-report-issues li')).toHaveCount(1);
+  await expect(instagram.locator('.sync-report-issues')).toHaveText('Some posts did not finish loading. Try syncing again.');
+  await expect(toast).not.toContainText(state.job.message);
+  await expect(instagram.locator('.sync-report-log')).toBeHidden();
+  await instagram.locator('summary').click();
+  await expect(instagram.locator('.sync-report-log')).toBeVisible();
+  await expect(instagram.locator('.sync-report-entry strong').first()).toHaveText('@ishantperiwal · ae. motion');
+  const reads = state.reads;
+  await expect.poll(() => state.reads, { timeout: 6000 }).toBeGreaterThan(reads);
+  await expect(instagram.locator('details')).toHaveAttribute('open', '', { timeout: 6000 });
+  await page.screenshot({ path: 'test-results/sync-report-details.png' });
+  await instagram.locator('summary').click();
+  await page.screenshot({ path: 'test-results/sync-report-platforms.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  const box = await toast.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(12); expect(box.y).toBeGreaterThanOrEqual(12); expect(box.x + box.width).toBeLessThanOrEqual(378);
+  await page.screenshot({ path: 'test-results/sync-report-mobile.png' });
+  await page.getByRole('button', { name: 'Dismiss X sync report', exact: true }).click();
+  await expect(toast.locator('.sync-platform-card')).toHaveCount(2);
+  await page.reload();
+  await expect(toast.locator('.sync-platform-card')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Dismiss Instagram sync report' }).click();
+  await page.getByRole('button', { name: 'Dismiss Chrome bookmarks sync report' }).click();
+  await expect(toast).toBeHidden();
 });
 
 test('finished notices fade away, later jobs still appear, and the notification fits on a phone', async ({ page }) => {
@@ -59,4 +103,43 @@ test('finished notices fade away, later jobs still appear, and the notification 
   await page.screenshot({ path: 'test-results/sync-toast-expanded-mobile.png' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(toast.locator('.sync-dots span').first()).toHaveCSS('animation-name', 'none');
+});
+
+test('successful cards count down independently, pause for reading, and warning Retry keeps the source and scan mode', async ({ page }) => {
+  const state = await setup(page), toast = page.locator('#sync-status');
+  const requests = [];
+  await page.route('**/api/sync', async route => {
+    if (route.request().method() === 'POST') {
+      requests.push(route.request().postDataJSON());
+      state.job = { id: 'retried-instagram', status: 'queued', ...requests.at(-1), message: 'Waiting for Chrome' };
+      return route.fulfill({ json: { job: state.job } });
+    }
+    state.reads++; return route.fulfill({ json: state });
+  });
+  state.job = { id: 'countdown-results', status: 'partial', mode: 'deep', targets: ['x', 'instagram', 'chrome'], instagramScope: { account: '@collector', selections: { '@collector': [42] } }, results: [
+    { platform: 'x', account: '@one', imported: 2, status: 'completed' },
+    { platform: 'instagram', account: '@collector', imported: 1, status: 'partial', message: 'timed out' },
+    { platform: 'chrome', imported: 0, updated: 23, status: 'completed' }
+  ] };
+  const x = toast.getByRole('article', { name: 'X sync report', exact: true });
+  const instagram = toast.getByRole('article', { name: 'Instagram sync report', exact: true });
+  const chrome = toast.getByRole('article', { name: 'Chrome bookmarks sync report', exact: true });
+  await expect(x.getByRole('timer')).toHaveText(/^[1-8]s$/, { timeout: 6000 });
+  await expect(x.getByRole('timer')).not.toHaveText('8s');
+  await expect(x.locator('.sync-dismiss-progress')).toBeVisible();
+  await expect(instagram.getByRole('timer')).toHaveCount(0);
+  await expect(instagram.getByRole('button', { name: 'Retry Instagram sync' })).toBeVisible();
+  await chrome.hover();
+  await expect(chrome.getByRole('timer')).toHaveText('Paused');
+  await page.screenshot({ path: 'test-results/sync-report-countdown-retry.png' });
+  await expect(x).toHaveCount(0, { timeout: 10000 });
+  await expect(chrome.getByRole('timer')).toHaveText('Paused');
+  await expect(instagram).toBeVisible();
+  await chrome.locator('summary').click(); await page.mouse.move(0, 0);
+  await expect(chrome.getByRole('timer')).toHaveText('Paused');
+  await instagram.getByRole('button', { name: 'Retry Instagram sync' }).click();
+  await expect.poll(() => requests.length, { timeout: 6000 }).toBe(1);
+  expect(requests[0]).toMatchObject({ targets: ['instagram'], mode: 'deep', instagramAccount: '@collector', instagramCollectionId: 42 });
+  await expect(toast).toContainText('Sync queued');
+  await expect(toast.getByRole('button', { name: 'Retry Instagram sync' })).toHaveCount(0);
 });

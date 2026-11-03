@@ -108,35 +108,14 @@ test('time groups age automatically and preserve the loaded player when separato
   const saved=posts().map((post,index)=>({...post,addedAt:new Date(now-(index?72:4)*3600000).toISOString()}));
   await setup(page,saved);
   await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(2);
-  await expect(page.locator('.save-time-separator')).toHaveText(['Added today','Added earlier']);
+  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ new posts? added$/,/^\d+ older posts?$/]);
   const player=await page.locator('.save-card[data-post-id="901"] .embed-stage > iframe').elementHandle();
   const root=page.frameLocator('.save-card[data-post-id="901"] .embed-stage > iframe').locator('#embed-root');
   await root.evaluate(el=>{el.dataset.continuity='retained';});
   await page.clock.setFixedTime(new Date(now+24*3600000));
-  await expect(page.locator('.save-time-separator')).toHaveText(['Added earlier'],{timeout:8000});
+  await expect(page.locator('.save-time-separator')).toHaveText([/^\d+ older posts?$/],{timeout:8000});
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   await expect(root).toHaveAttribute('data-continuity','retained');
-});
-
-test('collapsing time groups preserves ready players and pauses hidden preview work', async ({ page }) => {
-  const now=Date.parse('2026-11-03T12:00:00Z');
-  await page.clock.install({time:new Date(now)});
-  const saved=posts().map((post,index)=>({...post,addedAt:new Date(now-(index?72:4)*3600000).toISOString()}));
-  await setup(page,saved);
-  await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(2);
-  const player=await page.locator('.save-card[data-post-id="901"] .embed-stage > iframe').elementHandle();
-  const root=page.frameLocator('.save-card[data-post-id="901"] .embed-stage > iframe').locator('#embed-root');
-  await root.evaluate(el=>{el.dataset.continuity='retained';});
-  const day=page.getByRole('button',{name:'Added today',exact:true});
-  await day.click(); await expect(page.locator('.save-card[data-post-id="901"]')).toBeHidden();
-  expect(await player.evaluate(el=>el.isConnected)).toBe(true);
-  await day.click(); await expect(root).toHaveAttribute('data-continuity','retained');
-  let attempts=0;
-  await page.route('https://platform.twitter.com/widgets.js',route=>{attempts++;return route.abort();});
-  await page.locator('.save-card[data-post-id="901"]').getByRole('button',{name:'Retry post preview',exact:true}).click();
-  await expect(page.locator('.save-card[data-post-id="901"] .native-embed')).toHaveAttribute('data-embed-state','failed');
-  await day.click(); await page.clock.fastForward(60000); expect(attempts).toBe(1);
-  await day.click(); await expect.poll(()=>attempts).toBe(2);
 });
 
 test('masonry keeps two posts adjacent and fills the shorter column as sync adds posts', async ({ page }) => {
@@ -240,7 +219,7 @@ test('failed previews only retry in the current viewport and resume when scrolle
   expect(attempts.get('/embed/x/200000000')).toBe(original+1);
 });
 
-test('automatic retries share the three-load budget and queued failures retain their metadata', async ({ page }) => {
+test('automatic retries share the six-load budget and queued failures retain their metadata', async ({ page }) => {
   await page.setViewportSize({width:1440,height:1800});
   await page.clock.install();
   let block=false; const waiting=[];
@@ -248,23 +227,23 @@ test('automatic retries share the three-load budget and queued failures retain t
   try {
     await expect(page.locator('.native-embed[data-embed-state="failed"]')).toHaveCount(9);
     block=true; await page.clock.fastForward(6000);
-    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(3);
-    await expect.poll(()=>waiting.length).toBe(3);
-    await expect(page.locator('.native-embed[data-embed-state="failed"]')).toHaveCount(6);
+    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(6);
+    await expect.poll(()=>waiting.length).toBe(6);
+    await expect(page.locator('.native-embed[data-embed-state="failed"]')).toHaveCount(3);
     await expect(page.locator('.native-embed[data-embed-state="failed"] .embed-capture-text').first()).toBeVisible();
     model.unavailable=false; block=false; waiting.forEach(resolve=>resolve());
     await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(9);
   } finally {waiting.forEach(resolve=>resolve());}
 });
 
-test('compact cards fit three across a laptop window and editing a note keeps the native player in place', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 1000 });
+test('compact cards fit three across a wide window and editing a note keeps the native player in place', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const saved = manyPosts(6).map((post, index) => index % 2 ? { ...post, platform: 'instagram', externalId: `Compact${index}`, url: `https://www.instagram.com/reel/Compact${index}/` } : post);
   await setup(page, saved);
   await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(6);
   await expect.poll(() => page.locator('.embed-stage[data-layout-height]').count()).toBe(0);
   const row = await page.locator('.save-card').evaluateAll(cards => cards.slice(0, 3).map(card => { const r = card.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width }; }));
-  expect(row.every(card => card.width >= 280 && card.width < 320)).toBe(true);
+  expect(row.every(card => card.width >= 340 && card.width < 380)).toBe(true);
   expect(row.every(card => Math.abs(card.y - row[0].y) < 2)).toBe(true);
   expect(row[1].x).toBeGreaterThan(row[0].x + row[0].width);
   expect(row[2].x).toBeGreaterThan(row[1].x + row[1].width);
@@ -340,85 +319,94 @@ test('reduced motion keeps posts immediately visible and disables preview and la
 test('scrolling appends batches, preserves players across sync updates, searches all saves and resets the batch for a new filter', async ({ page }) => {
   let release; const gate = new Promise(resolve => { release = resolve; });
   try {
-    const model = await setup(page, manyPosts(65), false, gate);
-    await expect(page.locator('.save-card')).toHaveCount(24);
-    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(3);
+    const model = await setup(page, manyPosts(240), false, gate);
+    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(6);
+    // The next batch is mounted before reaching its boundary, so the expanded
+    // preview queue can work ahead without waiting for a viewport-edge scroll.
+    await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThan(24);
+    const initialCount=await page.locator('.save-card').count();
+    expect(initialCount).toBeGreaterThanOrEqual(24); expect(initialCount).toBeLessThan(240);
     release(); await expect(page.locator('.save-card[data-post-id="2000"] .native-embed')).toHaveAttribute('data-embed-state', 'ready');
     const firstPlayer = await page.locator('.save-card[data-post-id="2000"] .embed-stage > iframe').elementHandle();
     await page.locator('.more-saves').scrollIntoViewIfNeeded();
-    await expect(page.locator('.save-card')).toHaveCount(48);
+    await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThan(initialCount);
     expect(await firstPlayer.evaluate(frame => frame.isConnected)).toBe(true);
     model.posts.unshift({ ...manyPosts(1)[0], id: 3000, url: 'https://x.com/i/status/300000000', text: 'A newly synced reference', savedAt: '2026-11-01T00:00:00Z' });
     await expect(page.locator('.save-card[data-post-id="3000"]')).toHaveCount(1, { timeout: 8000 });
-    await expect(page.locator('.save-card')).toHaveCount(49);
     expect(await firstPlayer.evaluate(frame => frame.isConnected)).toBe(true);
     await page.getByRole('searchbox').fill('Pagination reference number 64.');
     await expect(page.locator('.save-card')).toHaveCount(1); await expect(page.locator('.save-card')).toHaveAttribute('data-post-id', '2064');
-    // Both dates share a calendar-week group, which resets to 24 cards.
-    await page.getByRole('searchbox').fill(''); await expect(page.locator('.save-card')).toHaveCount(24);
-    await expect(page.locator('.save-card:not([data-post-id="3000"])')).toHaveCount(23);
-    await page.locator('.more-saves').scrollIntoViewIfNeeded(); await expect(page.locator('.save-card')).toHaveCount(48);
-    await page.locator('.more-saves').scrollIntoViewIfNeeded(); await expect(page.locator('.save-card')).toHaveCount(66);
+    await page.getByRole('searchbox').fill('');
+    await expect(page.locator('.save-card[data-post-id="3000"]')).toHaveCount(1);
+    await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThanOrEqual(24);
+    expect(await page.locator('.save-card').count()).toBeLessThan(241);
+    for(let batch=0;batch<10&&await page.locator('.more-saves').count();batch++) {
+      const count=await page.locator('.save-card').count();
+      await page.locator('.more-saves').scrollIntoViewIfNeeded();
+      await expect.poll(()=>page.locator('.save-card').count()).toBeGreaterThan(count);
+    }
+    await expect(page.locator('.save-card')).toHaveCount(241);
     await expect(page.locator('.more-saves')).toHaveCount(0);
     await page.screenshot({ path: 'test-results/paged-saves-loading.png' });
   } finally { release(); }
 });
 
-test('three grid loads run at once, recover after failure, and inline notes do not consume loading slots', async ({ page }) => {
+test('six previews load at once, recover after failure, and inline notes do not consume loading slots', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1800 });
   const waiting = [], gate = () => new Promise(resolve => waiting.push(resolve));
   try {
     const model = await setup(page, manyPosts(9), false, gate);
-    await expect.poll(() => waiting.length).toBe(3);
-    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(3);
-    await expect(page.locator('.native-embed[data-embed-state="queued"]')).toHaveCount(6);
-    await expect(page.getByText('Waiting to load preview…', { exact: true })).toHaveCount(6);
-    waiting[0](); await expect.poll(() => waiting.length).toBe(4);
+    await expect.poll(() => waiting.length).toBe(6);
+    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(6);
+    await expect(page.locator('.native-embed[data-embed-state="queued"]')).toHaveCount(3);
+    await expect(page.getByText('Waiting to load preview…', { exact: true })).toHaveCount(3);
+    waiting[0](); await expect.poll(() => waiting.length).toBe(7);
     await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(1);
-    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(3);
+    await expect(page.locator('.native-embed[data-embed-state="loading"]')).toHaveCount(6);
     model.unavailable = true; waiting[1]();
     await expect(page.locator('.native-embed[data-embed-state="failed"]')).toHaveCount(1); model.unavailable = false;
-    await expect.poll(() => waiting.length).toBe(5);
+    await expect.poll(() => waiting.length).toBe(8);
     await page.locator('.save-card').first().getByRole('button', { name: 'Edit note', exact: true }).click();
     await expect(page.locator('.save-card').first().getByLabel('Note',{exact:true})).toBeVisible();
     await expect(page.locator('#modal')).not.toBeVisible();
-    expect(waiting.length).toBe(5);
-    await expect(page.locator('.save-card .native-embed[data-embed-state="loading"]')).toHaveCount(3);
+    expect(waiting.length).toBe(8);
+    await expect(page.locator('.save-card .native-embed[data-embed-state="loading"]')).toHaveCount(6);
     const waitingPost = await page.locator('.save-card .native-embed[data-embed-state="queued"]').first().evaluate(holder => Number(holder.closest('.save-card').dataset.postId) - 2000);
     await page.getByRole('searchbox').fill(`Pagination reference number ${waitingPost}.`);
     await expect(page.locator('.save-card')).toHaveCount(1);
     await expect(page.locator('.save-card .native-embed')).toHaveAttribute('data-embed-state', 'loading');
-    await expect.poll(() => waiting.length).toBe(6);
+    await expect.poll(() => waiting.length).toBe(9);
     await page.getByRole('button', { name: 'Retry post preview', exact: true }).click();
-    await expect.poll(() => waiting.length).toBe(7);
+    await expect.poll(() => waiting.length).toBe(10);
     waiting.forEach(resolve => resolve());
     await expect(page.locator('.save-card .native-embed')).toHaveAttribute('data-embed-state', 'ready');
   } finally { waiting.forEach(resolve => resolve()); }
 });
 
-test('scrolling reprioritizes visible previews, defers distant work and preloads only the adjacent screens', async ({ page }) => {
+test('scrolling prioritizes visible previews and preloads four screens in either direction', async ({ page }) => {
   const waiting = []; let autoRelease = false;
   const gate = () => autoRelease ? Promise.resolve() : new Promise(resolve => waiting.push(resolve));
   const loading = page.locator('.save-card .native-embed[data-embed-state="loading"]');
   const geometry = () => page.locator('.save-card .native-embed').evaluateAll(holders => holders.map(holder => {
     const r = holder.getBoundingClientRect();
-    return { state: holder.dataset.embedState, visible: r.bottom > 0 && r.top < innerHeight, near: r.bottom > -innerHeight && r.top < innerHeight * 2 };
+    return { state: holder.dataset.embedState, visible: r.bottom > 0 && r.top < innerHeight, near: r.bottom > -innerHeight * 4 && r.top < innerHeight * 5, beyondAdjacent:r.top>=innerHeight*2||r.bottom<=-innerHeight };
   }));
   try {
-    await setup(page, manyPosts(48), false, gate);
-    await expect(loading).toHaveCount(3);
+    await setup(page, manyPosts(180), false, gate);
+    await expect(loading).toHaveCount(6);
     const originalFrames = await page.locator('.save-card .embed-stage > iframe').elementHandles();
     const destination = page.locator('.save-card[data-post-id="2021"] .native-embed');
     await destination.scrollIntoViewIfNeeded();
     await expect(destination).toHaveAttribute('data-embed-state', /queued|loading/);
     await expect.poll(async () => (await geometry()).filter(p => p.state === 'loading').every(p => p.visible)).toBe(true);
     for (const frame of originalFrames) expect(await frame.evaluate(el => el.isConnected)).toBe(false);
-    await expect(loading).toHaveCount(3);
+    await expect(loading).toHaveCount(6);
     expect((await geometry()).filter(p => ['loading', 'queued'].includes(p.state)).every(p => p.near)).toBe(true);
     await expect(page.locator('.embed-error:visible')).toHaveCount(0);
     autoRelease = true; waiting.forEach(resolve => resolve());
     await expect(destination).toHaveAttribute('data-embed-state', 'ready');
     await expect.poll(async () => (await geometry()).filter(p => p.near && ['pending', 'queued', 'loading'].includes(p.state)).length, { timeout: 8000 }).toBe(0);
+    expect((await geometry()).some(p => p.near && p.beyondAdjacent && p.state==='ready')).toBe(true);
     expect((await geometry()).some(p => !p.near && p.state === 'pending')).toBe(true);
     const readyPlayer = await destination.locator('.embed-stage > iframe').elementHandle();
     const top = page.locator('.save-card[data-post-id="2000"] .native-embed');
@@ -474,6 +462,10 @@ test('captured metadata and images show while both platforms load, update withou
     await expect(ig.locator('.embed-capture-text')).toContainText('Captured Instagram caption');
     await expect(ig.locator('.embed-capture-image')).toBeHidden();
     await expect(x.locator('.embed-loading')).toBeVisible(); await expect(ig.locator('.embed-loading')).toBeVisible();
+    for(const [card,post] of [[x,saved[0]],[ig,saved[1]]]){
+      const original=card.getByRole('link',{name:'Open original post',exact:true});
+      await expect(original).toBeVisible();await expect(original).toHaveAttribute('href',post.url);await expect(original).toHaveAttribute('target','_blank');
+    }
     await expect(x.locator('.native-embed')).toHaveAttribute('aria-busy', 'true');
     await expect(page.getByText('Loading post…', { exact: true })).toHaveCount(0);
     const frame = await x.locator('.embed-stage > iframe').elementHandle();
@@ -490,6 +482,7 @@ test('captured metadata and images show while both platforms load, update withou
     await expect(page.locator('.native-embed[data-embed-state="ready"]')).toHaveCount(2);
     await expect(x.locator('.embed-placeholder')).toBeHidden();
     await expect(ig.locator('.embed-placeholder')).toBeHidden();
+    await expect(x.getByRole('link',{name:'Open original post',exact:true})).toBeHidden();
     await expect(x.locator('.embed-loading')).toBeHidden(); await expect(x.locator('.native-embed')).toHaveAttribute('aria-busy', 'false');
     expect(await frame.evaluate(el => el.isConnected)).toBe(true);
   } finally { release(); }

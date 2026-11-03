@@ -10,6 +10,7 @@ export function openAccountMenu(trigger, items, point, label = 'Account options'
   menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', label);
   for (const item of items) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'account-menu-item';
+    if (item.danger) button.classList.add('danger');
     button.setAttribute('role', 'menuitem'); button.textContent = item.label; button.disabled = !!item.disabled;
     button.onclick = () => { closeAccountMenu(); item.run(); };
     menu.append(button);

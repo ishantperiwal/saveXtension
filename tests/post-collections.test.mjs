@@ -50,3 +50,66 @@ test('the UI API adds existing or new collections and archived saves remain excl
     assert.equal((await add(post.id,{name:''})).status,400);
   }finally{app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
 });
+
+test('confirmed collection deletion untags active and archived saves, preserves their data, and survives refresh',()=>{
+  const store=new Store(':memory:');
+  try{
+    store.importPosts([
+      {url:'https://x.com/i/status/908003',text:'Recipe reference',notes:'Keep this note',topics:['Food','Other'],topicsCurated:false},
+      {url:'https://www.instagram.com/p/DeleteCollection/',text:'Recipe reel',archived:true,topics:['Food','Other'],topicsCurated:false,collections:[{externalId:'123',name:'Instagram recipes',account:'@cook',url:'https://www.instagram.com/cook/saved/123/'}]}
+    ]);
+    const topics=new TopicLibrary(store),food=topics.catalog().find(t=>t.name==='Food');
+    const renamed=topics.update({topicId:food.id,name:'Foods and recipes'}).topic;
+    const before=store.posts({scope:'all'});
+    assert.equal(before.find(p=>p.platform==='instagram').collections.length,1);
+    assert.throws(()=>topics.delete({topicId:food.id}),/memberships/);
+    topics.delete({topicId:renamed.id},{removeMemberships:true});
+    assert(!topics.catalog().some(t=>t.id===food.id));
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM topic_aliases WHERE topic_id=?').get(food.id).n,0);
+    for(const original of before){
+      const saved=store.post(original.id);
+      assert.deepEqual(saved.topics,['Other']);
+      for(const key of ['url','text','notes','archived','addedAt','savedAt','accounts'])assert.deepEqual(saved[key],original[key]);
+      assert.deepEqual(saved.collections.map(c=>({...c})),original.collections.map(c=>({...c})));
+      assert(saved.topicsCurated);
+      assert.deepEqual(JSON.parse(store.db.prepare('SELECT topics FROM posts WHERE id=?').get(original.id).topics),['Other']);
+      store.importPosts([{url:original.url,text:'Food recipes cooking',topics:['Food','Foods and recipes']}]);
+      assert.deepEqual(store.post(original.id).topics,['Other']);
+    }
+    assert.throws(()=>topics.delete({topicId:food.id},{removeMemberships:true}),/not found/);
+  }finally{store.close();}
+});
+
+test('collection deletion is atomic and reversible without deleting posts',()=>{
+  const store=new Store(':memory:');
+  try{
+    store.importPosts([{url:'https://x.com/i/status/908004',topics:['Recipes','Other'],topicsCurated:true}]);
+    const topics=new TopicLibrary(store),post=store.posts()[0],topic=topics.catalog().find(t=>t.name==='Recipes');
+    store.db.exec("CREATE TRIGGER fail_collection_delete BEFORE UPDATE OF topics_curated ON posts BEGIN SELECT RAISE(ABORT,'Fixture failure'); END");
+    assert.throws(()=>topics.delete({topicId:topic.id},{removeMemberships:true}),/Fixture failure/);
+    assert(topics.catalog().some(t=>t.id===topic.id));assert.deepEqual(store.post(post.id).topics,post.topics);
+    store.db.exec('DROP TRIGGER fail_collection_delete');
+    const removed=topics.delete({topicId:topic.id},{removeMemberships:true});topics.undo(removed.changeId);
+    assert(topics.catalog().some(t=>t.id===topic.id));assert.deepEqual(store.post(post.id).topics,post.topics);
+  }finally{store.close();}
+});
+
+test('collection UI endpoints rename memberships, reject duplicate names, and delete only the tag',async()=>{
+  const app=createApp({origin:'http://localhost:3240'});app.server.listen(3240,'127.0.0.1');await once(app.server,'listening');
+  const edit=async(id,method,input)=>{
+    const response=await fetch(`http://localhost:3240/api/topics/${id}`,{method,headers:{Origin:'http://localhost:3240',...(input?{'Content-Type':'application/json'}:{})},...(input?{body:JSON.stringify(input)}:{})});
+    return {status:response.status,data:await response.json()};
+  };
+  try{
+    app.store.importPosts([{url:'https://x.com/i/status/908005',notes:'Keep',topics:['Food','Other'],topicsCurated:true}]);
+    const topics=new TopicLibrary(app.store),food=topics.catalog().find(t=>t.name==='Food'),post=app.store.posts()[0];
+    assert.equal((await edit(food.id,'PATCH',{name:'Other'})).status,409);
+    assert.equal((await edit(food.id,'PATCH',{name:' '})).status,400);
+    const renamed=await edit(food.id,'PATCH',{name:'Foods and recipes'});assert.equal(renamed.status,200);
+    assert.deepEqual(renamed.data.posts[0].topics,['Foods and recipes','Other']);assert.equal(renamed.data.topic.id,food.id);
+    const deleted=await edit(food.id,'DELETE');assert.equal(deleted.status,200);
+    assert.equal(deleted.data.posts.length,1);assert.equal(deleted.data.posts[0].notes,'Keep');assert.deepEqual(deleted.data.posts[0].topics,['Other']);
+    assert.equal(app.store.post(post.id).url,post.url);
+    assert.equal((await edit(food.id,'DELETE')).status,404);
+  }finally{app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
+});

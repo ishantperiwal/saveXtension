@@ -40,6 +40,15 @@ test('verified deletion removes note history and assignments; shared saves remai
     assert.equal(store.db.prepare('SELECT COUNT(*) n FROM posts WHERE archived=1').get().n,0);
   }finally{store.close();}
 });
+test('completion timings survive acknowledgement and cannot replace verified account or post identity',()=>{
+ const{store,queue}=setup();try{
+  const p=seed(store),job=enqueue(queue,p);queue.claim('browser',true);
+  queue.finish(job.id,'browser',{status:'succeeded',observations:evidence(job),diagnostics:{account:'@wrong',externalId:'wrong',accountSwitched:true,timings:{opening:50,account:1200,post:400,checking:500,verifying:700,ignored:100,unsaving:-1}}});
+  queue.acknowledge(job.id);assert.equal(queue.status(),null);
+  const [result]=queue.diagnostics();assert.equal(result.id,job.id);assert.equal(result.account,job.account);assert.equal(result.externalId,job.external_id);assert.equal(result.accountSwitched,true);
+  assert.deepEqual(result.timings,{opening:50,account:1200,post:400,checking:500,verifying:700});
+ }finally{store.close();}
+});
 test('failed, interrupted and expired requests keep the local save and cannot automatically act again',()=>{
   const{store,queue}=setup();try{
     const p=seed(store,'instagram');let job=enqueue(queue,p);queue.claim('browser',true);

@@ -3,10 +3,12 @@ const key = text => text.normalize('NFKC').trim().toLocaleLowerCase('en-US');
 export function closeCollectionPicker(restoreFocus = false) {
   if (!current) return;
   const picker = current; current = null;
-  picker.root.remove(); picker.trigger.setAttribute('aria-expanded', 'false');
+  cancelAnimationFrame(picker.frame); picker.root.remove(); picker.trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus) picker.restoreFocus();
 }
-export function openCollectionPicker({ trigger, post, topics, onAdd, restoreFocus }) {
+// Lists every topic with a folder icon; the post's own topics are ticked and
+// listed first, and choosing one asks to remove it (onRemove) instead of adding.
+export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, restoreFocus, icons = {} }) {
   closeCollectionPicker();
   const root = document.createElement('section'); root.id = 'collection-picker'; root.className = 'select-menu collection-picker';
   root.setAttribute('role','dialog'); root.setAttribute('aria-label','Add to collection');
@@ -17,8 +19,8 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, restoreFocu
   const create = document.createElement('button'); create.type = 'submit'; create.className = 'collection-create';
   const error = document.createElement('p'); error.className = 'form-error collection-picker-error'; error.setAttribute('role','alert');
   form.append(input,list,hint,create,error); root.append(form); document.body.append(root);
-  const assigned = new Set((post.topics || []).map(key)), catalog = [...topics].sort((a,b)=>a.name.localeCompare(b.name));
-  const picker = { root, trigger, restoreFocus, busy:false }; current = picker; trigger.setAttribute('aria-expanded','true');
+  const assigned = new Set((post.topics || []).map(key)), catalog = [...topics.filter(topic=>assigned.has(key(topic.name))), ...topics.filter(topic=>!assigned.has(key(topic.name)))];
+  const picker = { root, trigger, restoreFocus, busy:false, frame:0 }; current = picker; trigger.setAttribute('aria-expanded','true');
   function position() {
     if (!trigger.isConnected) { closeCollectionPicker(); return; }
     const rect = trigger.getBoundingClientRect(), box = root.getBoundingClientRect();
@@ -38,11 +40,18 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, restoreFocu
     }
   }
   function render() {
-    const query = key(input.value), available = catalog.filter(topic=>!assigned.has(key(topic.name))&&key(topic.name).includes(query));
+    const query = key(input.value), available = catalog.filter(topic=>key(topic.name).includes(query));
     list.replaceChildren();
     for (const topic of available) {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'collection-option';
-      button.textContent = topic.name; button.setAttribute('aria-label',`Add to ${topic.name}`); button.onclick = ()=>void add({topicId:topic.id}); list.append(button);
+      const ticked = assigned.has(key(topic.name)), button = document.createElement('button'), name = document.createElement('span');
+      button.type = 'button'; button.className = `collection-option${ticked ? ' is-assigned' : ''}`;
+      name.className = 'collection-option-name'; name.textContent = topic.name;
+      button.innerHTML = icons.folder || ''; button.append(name);
+      if (ticked) button.insertAdjacentHTML('beforeend', `${icons.check || ''}${icons.remove || ''}`);
+      button.setAttribute('aria-label', ticked ? `Remove from ${topic.name}` : `Add to ${topic.name}`);
+      button.setAttribute('aria-pressed', String(ticked));
+      button.onclick = () => { if (!ticked) { void add({topicId:topic.id}); return; } closeCollectionPicker(); onRemove?.(topic); };
+      list.append(button);
     }
     hint.hidden = !!available.length;
     hint.textContent = query&&assigned.has(query)?'Already in this collection.':query?'No matching collections.':'Type a name to create a collection.';
@@ -66,7 +75,16 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, restoreFocu
     }
   };
   root.onfocusout = event => { if (event.relatedTarget&&!root.contains(event.relatedTarget)) closeCollectionPicker(); };
-  render(); input.focus({preventScroll:true});
+  // Stay attached to the + button when the card grows or the layout moves it,
+  // for example as a preview finishes loading above it.
+  let last = '';
+  const follow = () => {
+    if (current !== picker) return;
+    const rect = trigger.getBoundingClientRect(), spot = `${Math.round(rect.left)},${Math.round(rect.top)}`;
+    if (spot !== last) { last = spot; position(); }
+    picker.frame = requestAnimationFrame(follow);
+  };
+  render(); input.focus({preventScroll:true}); picker.frame = requestAnimationFrame(follow);
 }
 document.addEventListener('pointerdown',event=>{if(current&&!current.root.contains(event.target)&&!current.trigger.contains(event.target))closeCollectionPicker();},true);
 window.addEventListener('scroll',event=>{if(current&&!(event.target instanceof Node&&current.root.contains(event.target)))closeCollectionPicker();},true);

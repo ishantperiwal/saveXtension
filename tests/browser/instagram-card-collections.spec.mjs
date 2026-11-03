@@ -56,10 +56,10 @@ test('long names truncate beside the icon and refresh without replacing native p
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
 });
 
-test('feed source pills show saved handles and their source collections, stay scoped to the selected account and leave grid styling intact',async({page})=>{
+test('feed source pills stay hidden while source metadata and native previews remain intact',async({page})=>{
   const model=await setup(page);await page.getByRole('button',{name:'Feed view',exact:true}).click();
   const card=page.locator('[data-post-id="1"]'),pill=card.locator('.feed-source-pill');
-  await expect(pill).toBeVisible();await expect(pill).toHaveText('@me · AI tools · Design references for motion, typography and interface systems · @other · Other account folder');
+  await expect(pill).toBeHidden();await expect(pill).toHaveText('@me · AI tools · Design references for motion, typography and interface systems · @other · Other account folder');
   await expect(page.locator('[data-post-id="3"] .feed-source-pill')).toHaveText('@writer');
   await expect(page.locator('[data-post-id="2"] .feed-source-pill')).toHaveText('@me');
   const player=await card.locator('.embed-stage > iframe').elementHandle();
@@ -69,11 +69,10 @@ test('feed source pills show saved handles and their source collections, stay sc
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   for(const width of [1440,390]){
     await page.setViewportSize({width,height:1000});
-    const geometry=await card.evaluate(el=>{const p=el.querySelector('.feed-source-pill').getBoundingClientRect(),preview=el.querySelector('.card-preview').getBoundingClientRect(),label=el.querySelector('.feed-source-label');return{right:p.right,previewRight:preview.right,top:p.top,previewTop:preview.top,truncated:label.scrollWidth>label.clientWidth};});
-    expect(geometry.right).toBeLessThan(geometry.previewRight);expect(geometry.right).toBeGreaterThan(geometry.previewRight-20);expect(geometry.top).toBeLessThan(geometry.previewTop);expect(geometry.truncated).toBe(true);
+    await expect(pill).toBeHidden();await expect(card.locator('.card-preview')).toBeVisible();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }
   await page.getByRole('button',{name:'Grid view',exact:true}).click();await expect(pill).toBeHidden();
-  await page.getByRole('button',{name:'Feed view',exact:true}).click();await expect(pill).toBeVisible();expect(await player.evaluate(el=>el.isConnected)).toBe(true);
+  await page.getByRole('button',{name:'Feed view',exact:true}).click();await expect(pill).toBeHidden();expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   model.collections[0].name='Updated source collection';await expect(pill).toHaveText('@me · Updated source collection',{timeout:8000});
 });

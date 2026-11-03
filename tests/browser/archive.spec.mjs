@@ -18,7 +18,7 @@ test('archive and restore work across search, accounts, notes, sync refreshes an
     expect((await (await page.request.get('/api/posts')).json()).posts.some(p => p.id === post.id)).toBe(false);
     await page.getByRole('searchbox').fill('Archive fixture reference'); await expect(card).toHaveCount(0);
     await page.locator('.archive-nav').click();
-    await expect(page.getByRole('heading', { name: 'Archive', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Archived', exact: true })).toBeVisible();
     await expect(card).toBeVisible(); await expect(card.getByLabel('Note',{exact:true})).toHaveValue('Latest context before archiving');
     await page.getByRole('searchbox').fill('Latest context'); await expect(card).toBeVisible();
     await page.request.post('/api/posts/import', { headers: origin, data: { posts: [{ ...fixture, archived: false }] } });

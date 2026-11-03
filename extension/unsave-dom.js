@@ -16,7 +16,10 @@
         const links=[...parent.querySelectorAll('a[href]')].map(a=>a.getAttribute('href'));
         navigation=links.includes('/')&&links.includes('/direct/inbox/')&&links.includes('/explore/');
       }
-      const profile=/^profile$/i.test(link.getAttribute('aria-label')||'')||[...link.querySelectorAll('svg[aria-label]')].some(svg=>/^profile$/i.test(svg.getAttribute('aria-label')))||[...link.querySelectorAll('img[alt]')].some(img=>/profile picture/i.test(img.alt))&&navigation&&!link.closest('main');
+      // The navigation's only avatar link is the signed-in profile in every
+      // site language; English labels remain a fallback for icon-only layouts.
+      const avatar=navigation&&!link.closest('main')&&!!link.querySelector('img');
+      const profile=avatar||/^profile$/i.test(link.getAttribute('aria-label')||'')||[...link.querySelectorAll('svg[aria-label]')].some(svg=>/^profile$/i.test(svg.getAttribute('aria-label')))||[...link.querySelectorAll('img[alt]')].some(img=>/profile picture/i.test(img.alt))&&navigation&&!link.closest('main');
       if(!profile)continue;
       const match=link.getAttribute('href').match(/^\/([\w.]+)\/?$/);if(match&&!['accounts','explore','reels','direct'].includes(match[1]))found.add(`@${match[1]}`.toLowerCase());
     }

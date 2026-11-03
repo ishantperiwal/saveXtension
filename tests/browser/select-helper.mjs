@@ -4,6 +4,8 @@ const scanScopes = new WeakMap();
 export async function openSyncOptions(page) {
   if (await page.locator('#modal[data-all-sources-scan]').isVisible()) return;
   if (await page.locator('#modal').isVisible()) await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  // The all-sources refresh sits on the All saves row while it is selected.
+  if (!(await page.getByRole('button',{name:'Refresh all sources',exact:true}).isVisible())) await page.locator('[data-filter="all"]').click();
   await page.getByRole('button',{name:'Refresh all sources',exact:true}).click();
 }
 export async function closeSyncOptions(page) {
@@ -28,7 +30,7 @@ export async function startScan(page,mode='quick') {
   await closeSyncOptions(page);
   // Server completion can precede the next UI heartbeat. Open a fresh menu only
   // after the visible controls have left their busy state.
-  await page.locator('[data-action="scan-options"]:not(:disabled)').waitFor({state:'visible',timeout:10000});
+  await page.locator('.sidebar-account-refresh:not(:disabled)').first().waitFor({state:'visible',timeout:10000});
   const scope=scanScopes.get(page)||{platform:'x',account:null};
   if(scope.platform==='all') {await openSyncOptions(page);await page.getByRole('button',{name:mode==='deep'?'Deep scan':'Quick scan',exact:true}).click();return;}
   const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="x:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();

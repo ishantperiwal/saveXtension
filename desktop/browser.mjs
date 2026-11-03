@@ -4,6 +4,12 @@ import { win32 } from 'node:path';
 import { promisify } from 'node:util';
 const execute = promisify(execFile);
 
+export async function focusSyncBrowser(name='Chrome') {
+  // The extension activates the exact work tab. macOS can leave its browser
+  // window behind another app despite windows.update({focused:true}).
+  if(process.platform==='darwin')await execute('/usr/bin/open',['-a',name==='Edge'?'Microsoft Edge':'Google Chrome']);
+}
+
 export function windowsBrowsers(env = process.env) {
   const roots = [env.PROGRAMFILES, env['PROGRAMFILES(X86)'], env.LOCALAPPDATA].filter(Boolean);
   return [...roots.map(root => win32.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe')), ...roots.map(root => win32.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'))];

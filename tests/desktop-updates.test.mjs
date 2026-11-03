@@ -89,3 +89,14 @@ test('closing cancels an in-flight update; source development makes no update re
   const development = createUpdater({ ...base, enabled: false, fetchImpl: () => { throw new Error('Must not fetch'); } });
   await development.check(); assert.equal(development.status().phase, 'development');
 }));
+
+test('local source checks releases only on an explicit manual request and never downloads or installs them', async () => fixture(async (base, directory) => {
+  const requests=[];
+  const updater=createUpdater({...base,enabled:false,fetchImpl:async url=>{requests.push(url);assert(url.startsWith('https://api.github.com/'));return Response.json(release());},openInstaller:async()=>{throw new Error('Local source must not install an update.');}});
+  await updater.check();assert.equal(requests.length,0);
+  await updater.check({manual:true});assert.equal(requests.length,1);
+  assert.equal(updater.status().phase,'available');assert.equal(updater.status().availableVersion,'1.0.2');
+  assert.equal(updater.status().releaseUrl,'https://github.com/ishantperiwal/saveXtension/releases/tag/v1.0.2');
+  assert.deepEqual(await readdir(directory),[]);await assert.rejects(updater.install(),/Download and verify/);
+  await updater.check();assert.equal(requests.length,1);await updater.close();
+}));

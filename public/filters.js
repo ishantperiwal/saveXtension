@@ -7,7 +7,7 @@ export const datePresets = [
 ];
 
 export function defaultFilters() {
-  return { sources: [], accounts: [], topics: [], folder: '', collection: '', collectionName: '', date: 'any', start: 'all', end: 'now', from: '', to: '' };
+  return { sources: [], accounts: [], collections: [], topics: [], folder: '', collection: '', collectionName: '', date: 'any', start: 'all', end: 'now', from: '', to: '' };
 }
 
 export function dateStops(now = new Date()) {
@@ -86,14 +86,16 @@ export function dateBounds(filters, now = new Date()) {
   }
 }
 
-export function applyFilters(posts, filters = defaultFilters(), { query = '', now = new Date() } = {}) {
+export function applyFilters(posts, filters = defaultFilters(), { query = '', now = new Date(), topicScope = name => [name] } = {}) {
   const bounds = dateBounds(filters, now);
   if (bounds.error) return [];
   const term = query.trim().toLowerCase();
   const result = posts.filter(p => {
     if (filters.sources.length && !filters.sources.includes(p.platform)) return false;
-    if (filters.topics.length && !filters.topics.some(t => (p.topics || []).includes(t))) return false;
-    if (filters.accounts.length && !filters.accounts.some(value => matchesAccount(p, value))) return false;
+    if (filters.topics.length && !filters.topics.flatMap(topicScope).some(t => (p.topics || []).includes(t))) return false;
+    // Shift-selected accounts and Instagram collections combine: a post in any of them matches.
+    const collections = filters.collections || [];
+    if ((filters.accounts.length || collections.length) && !filters.accounts.some(value => matchesAccount(p, value)) && !(p.platform === 'instagram' && (p.collections || []).some(c => collections.includes(String(c.id))))) return false;
     if (filters.folder && !(p.folders || []).includes(filters.folder)) return false;
     if (filters.collection && (p.platform !== 'instagram' || !(p.collections || []).some(c => String(c.id) === String(filters.collection)))) return false;
     if (bounds.from || bounds.to) {
@@ -106,7 +108,7 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
   return orderLibraryPosts(result, filters, +now);
 }
 
-export function filterChips(filters) {
+export function filterChips(filters, { collectionName = () => '' } = {}) {
   const chips = [];
   if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Date added' });
   if (filters.sources.length && !filters.accounts.length) chips.push({ key: 'sources', label: filters.sources.map(s => ({ x: 'X', instagram: 'Instagram', chrome: 'Chrome' }[s])).join(' + ') });
@@ -116,7 +118,8 @@ export function filterChips(filters) {
     const label = handle === '*' ? source : handle || 'Unassigned';
     chips.push({ key: `account:${value}`, label, platform, title: `${source} ${label}`, removeLabel: `Remove ${source} ${label} filter` });
   }
-  if (filters.topics.length) chips.push({ key: 'topics', label: filters.topics.length > 1 ? `${filters.topics.length} topics` : filters.topics[0], title: filters.topics.join(', ') });
+  for (const id of filters.collections || []) chips.push({ key: `collection:${id}`, label: collectionName(id) || 'Instagram collection', platform: 'instagram', title: 'Instagram collection', removeLabel: `Remove ${collectionName(id) || 'Instagram collection'} filter` });
+  for (const topic of filters.topics) chips.push({ key: `topic:${topic}`, label: topic, icon: 'folder', title: 'Topic', removeLabel: `Remove ${topic} filter` });
   if (filters.folder) chips.push({ key: 'folder', label: filters.folder });
   if (filters.collection) chips.push({ key: 'collection', label: filters.collectionName || 'Instagram collection', title: 'Instagram collection' });
   return chips;

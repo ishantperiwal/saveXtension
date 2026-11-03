@@ -3,7 +3,7 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--paper);
+  background: transparent;
   color: var(--ink);
   overflow: hidden;
   font: 14px -apple-system, BlinkMacSystemFont, sans-serif;

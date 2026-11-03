@@ -5,6 +5,10 @@ let changes=Promise.resolve();
 const serialize=task=>{const pending=changes.then(task,task);changes=pending.catch(()=>{});return pending;};
 const state=async()=> (await chrome.storage.session.get(KEY))[KEY] || {tabs:{},groups:{}};
 const save=value=>chrome.storage.session.set({[KEY]:value});
+export async function ownsWorkTab(tab,kind){
+  const record=(await state()).tabs[tab.id];
+  return !!record&&record.windowId===tab.windowId&&record.kind===kind;
+}
 async function group(tab,value){
   let groupId=value.groups[tab.windowId],existing;
   if(Number.isInteger(groupId))existing=await chrome.tabGroups.get(groupId).catch(()=>null);
@@ -29,9 +33,9 @@ async function close(id,value){
   }
   delete value.tabs[id];await save(value);return true;
 }
-export function createWorkTab(kind='sync'){
+export function createWorkTab(kind='sync',{active=false}={}){
   return serialize(async()=>{
-    const tab=await chrome.tabs.create({url:'about:blank',active:false});let value;
+    const tab=await chrome.tabs.create({url:'about:blank',active});let value;
     try{
       value=await state();value.tabs[tab.id]={windowId:tab.windowId,kind,createdAt:Date.now()};
       await save(value);
@@ -39,6 +43,14 @@ export function createWorkTab(kind='sync'){
       await group(tab,value);await save(value);return await chrome.tabs.get(tab.id);
     }catch(error){await chrome.tabs.remove(tab.id).catch(()=>{});if(value){delete value.tabs[tab.id];await save(value).catch(()=>{});}throw error;}
   });
+}
+export async function foregroundUnsaveTab(id){
+  const tab=await chrome.tabs.get(id);
+  if(!await ownsWorkTab(tab,'unsave'))throw new Error('The unsave tab is no longer owned by saveXtension.');
+  if(tab.groupId>=0)await chrome.tabGroups.update(tab.groupId,{collapsed:false});
+  await chrome.tabs.update(id,{active:true});
+  const window=await chrome.windows.get(tab.windowId);
+  await chrome.windows.update(tab.windowId,{...(window.state==='minimized'?{state:'normal'}:{}),focused:true});
 }
 // Call only after verifying the exact local desktop-connect URL and desktop=1.
 export function adoptConnectionTab(id){

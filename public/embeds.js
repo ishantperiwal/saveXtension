@@ -1,7 +1,7 @@
 import { embedTarget } from './embed-target.js';
 import { animateEmbedStage } from './motion.js';
+import { PRELOAD_SCREENS, MAX_PREVIEW_LOADS, FINISHING_PREVIEW_LOADS } from './preview-policy.js';
 const holders = new Map(), layoutRoots = new Set();
-const MAX_GRID_LOADS = 3;
 const RETRY_DELAY = 5000, MAX_RETRY_DELAY = 30000;
 let previewOrigin, pumpScheduled = false, retryTimer;
 export function configureEmbeds(origin) { previewOrigin = origin; }
@@ -19,9 +19,14 @@ function cancelLoading(item) {
   if (item.frame) { item.frame.onload = null; item.frame.onerror = null; item.frame.remove(); }
   item.frame = null; item.loading = false;
 }
+// The post under the pointer is the focal point for loading: previews load
+// radially outward from it. Without a pointer over the library, the centre of
+// the screen is the focus.
+let pointer = null, hoveredCard = null;
 function pump() {
   clearTimeout(retryTimer);
   const height = innerHeight, now = Date.now(), canRetry = !document.hidden && navigator.onLine;
+  const focus = pointer || { x: innerWidth / 2, y: height / 2 };
   const dialog = document.querySelector('dialog[open]');
   let retryAt = Infinity;
   // Read geometry together, before any frame removals or state/style changes.
@@ -37,13 +42,17 @@ function pump() {
       if (item.retryAt > now) { retryAt = Math.min(retryAt, item.retryAt); continue; }
       if (item.eager) { eagerRetries.push(holder); continue; }
     }
-    const near = rect.height > 0 && rect.bottom > -height && rect.top < height * 2 && (!item.automatic || canRetry && retryVisible);
-    candidates.push({ holder, item, visible, near, retryVisible, automatic: failed || item.automatic, distance: visible ? Math.abs((rect.top + rect.bottom) / 2 - height / 2) : Math.max(0, rect.top - height, -rect.bottom) });
+    const near = rect.height > 0 && rect.bottom > -height * PRELOAD_SCREENS && rect.top < height * (1 + PRELOAD_SCREENS) && (!item.automatic || canRetry && retryVisible);
+    const dx = Math.max(rect.left - focus.x, 0, focus.x - rect.right), dy = Math.max(rect.top - focus.y, 0, focus.y - rect.bottom);
+    candidates.push({ holder, item, visible, near, retryVisible, automatic: failed || item.automatic, distance: Math.hypot(dx, dy) });
   }
   const ranked = candidates.filter(candidate => candidate.near).sort((a, b) =>
     Number(b.visible) - Number(a.visible) || Number(b.item.priority) - Number(a.item.priority) ||
     Number(b.item.loading) - Number(a.item.loading) || Number(a.automatic) - Number(b.automatic) || a.distance - b.distance);
-  const wanted = new Set(ranked.slice(0, MAX_GRID_LOADS).map(candidate => candidate.holder));
+  const wanted = new Set(ranked.slice(0, MAX_PREVIEW_LOADS).map(candidate => candidate.holder));
+  // Previews already loading keep going in a few extra slots, nearest first,
+  // so scrolling past one never throws its download away.
+  for (const candidate of candidates.filter(candidate => candidate.item.loading && !wanted.has(candidate.holder)).sort((a, b) => a.distance - b.distance).slice(0, FINISHING_PREVIEW_LOADS)) wanted.add(candidate.holder);
   for (const { holder, item, near, retryVisible } of candidates) {
     if (item.loading && !wanted.has(holder)) {
       cancelLoading(item);
@@ -63,10 +72,17 @@ function pump() {
       holder.setAttribute('aria-busy', String(near)); loadingLabel(holder);
     }
   }
-  for (const { holder, item } of ranked.slice(0, MAX_GRID_LOADS)) if (!item.loading) load(holder, holder.dataset.embedState === 'failed');
+  for (const { holder, item } of ranked.slice(0, MAX_PREVIEW_LOADS)) if (!item.loading) load(holder, holder.dataset.embedState === 'failed');
   for (const holder of eagerRetries) load(holder, true);
   if (Number.isFinite(retryAt)) retryTimer = setTimeout(schedulePump, Math.max(50, retryAt - Date.now()));
 }
+// Re-rank when the pointer moves onto a different post, or leaves the library.
+window.addEventListener('pointermove', event => {
+  const card = event.target.closest?.('#results .save-card') || null;
+  pointer = event.target.closest?.('#results') ? { x: event.clientX, y: event.clientY } : null;
+  if (card !== hoveredCard) { hoveredCard = card; schedulePump(); }
+}, { passive: true });
+document.documentElement.addEventListener('pointerleave', () => { pointer = null; hoveredCard = null; schedulePump(); });
 // Reprioritize on every scroll, viewport resize and masonry/image/widget reflow.
 const observer = new ResizeObserver(schedulePump);
 window.addEventListener('scroll', schedulePump, { passive: true, capture: true });

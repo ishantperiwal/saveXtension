@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 test.use({ storageState: { cookies: [], origins: [] } });
-async function setup(page, count = 8, tall = false) {
-  const posts = Array.from({length: count}, (_, i) => ({id: 8800+i, platform: i===1?'instagram':'x', externalId: i===1?'View1':String(900000+i), url: i===1?'https://www.instagram.com/p/View1/':`https://x.com/i/status/${900000+i}`, title: `Reference ${i}`, text:'A useful reference with captured metadata.', author:'creator', authorName:'Creator', media:[], topics:['Design'], accounts:[], notes:i===0?'My interpretation of this post.':'', archived:false, savedAt:'2026-11-03T08:00:00Z', addedAt:new Date(Date.parse('2026-11-03T08:00:00Z')-i*60000).toISOString()}));
+async function setup(page, count = 8, tall = false, instagramIndex = 1) {
+  const posts = Array.from({length: count}, (_, i) => ({id: 8800+i, platform: i===instagramIndex?'instagram':'x', externalId: i===instagramIndex?'View1':String(900000+i), url: i===instagramIndex?'https://www.instagram.com/p/View1/':`https://x.com/i/status/${900000+i}`, title: `Reference ${i}`, text:'A useful reference with captured metadata.', author:'creator', authorName:'Creator', media:[], topics:['Design'], accounts:[], notes:i===0?'My interpretation of this post.':'', archived:false, savedAt:'2026-11-03T08:00:00Z', addedAt:new Date(Date.parse('2026-11-03T08:00:00Z')-i*60000).toISOString()}));
   await page.route('**/api/posts?scope=all',r=>r.fulfill({json:{posts,runs:[]}}));
   await page.route('https://platform.twitter.com/widgets.js',r=>r.fulfill({contentType:'text/javascript',body:`window.twttr={widgets:{createTweet:async(id,root)=>{const f=document.createElement('iframe');f.title='X fixture';f.src='https://platform.twitter.com/fixture';f.style.cssText='width:100%;height:'+(id==='900011'&&${tall}?'1800px':'260px');root.append(f);await new Promise(r=>f.onload=r);return f;}}};`}));
   await page.route('https://www.instagram.com/embed.js',r=>r.fulfill({contentType:'text/javascript',body:`window.instgrm={Embeds:{process:()=>{const b=document.querySelector('.instagram-media');const f=document.createElement('iframe');f.className='instagram-media';f.src='https://www.instagram.com/fixture';f.style.cssText='width:100%;height:360px';b.replaceWith(f);}}};`}));
@@ -12,6 +12,63 @@ async function setup(page, count = 8, tall = false) {
   return posts;
 }
 async function settled(page) { await expect(page.locator('.cards')).not.toHaveClass(/switching-view/); }
+async function resizeWidget(widget,height) {
+  return widget.evaluate((el,height)=>{
+    el.style.height=`${height}px`;
+    const reported=Math.ceil(el.parentElement.getBoundingClientRect().height);
+    // Deliver the widget's normal height report deterministically even when
+    // Chromium throttles ResizeObserver inside an offscreen nested iframe.
+    el.ownerDocument.defaultView.parent.postMessage({source:'savex-native-embed',type:'resize',height:reported},'*');
+    return reported;
+  },height);
+}
+
+for (const [width, motion, platform] of [[1440, 'no-preference','x'], [1440, 'reduce','x'], [390, 'no-preference','x'], [1440,'no-preference','instagram']]) {
+  test(`feed holds the reading position while ${platform} previews above grow and shrink (${width}px, ${motion})`, async ({page}) => {
+    await page.setViewportSize({width, height:700}); await page.emulateMedia({reducedMotion:motion});
+    await setup(page,24,false,platform==='instagram'?10:1);
+    const above=page.locator('[data-post-id="8810"]'), focused=page.locator('[data-post-id="8811"]');
+    await above.scrollIntoViewIfNeeded();
+    await expect(above.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
+    await focused.scrollIntoViewIfNeeded();
+    await expect(focused.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
+    await expect(page.locator('.embed-stage[data-layout-height]')).toHaveCount(0);
+    await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).length)).toBe(0);
+    await focused.locator('.card-preview').evaluate(el=>scrollTo({top:scrollY+el.getBoundingClientRect().top-140,behavior:'instant'}));
+    const player=await focused.locator('.embed-stage>iframe').elementHandle();
+    const before=(await focused.locator('.card-preview').boundingBox()).y;
+    const upperPlayer=page.frameLocator('[data-post-id="8810"] .embed-stage>iframe').locator('#embed-root>iframe');
+    for (const height of [1400,260]) {
+      await page.evaluate(()=>{
+        window.readingSamples=[];
+        const until=performance.now()+1100, preview=document.querySelector('[data-post-id="8811"] .card-preview');
+        // Sample after the frame's layout/scroll compensation callbacks, rather
+        // than observing an intermediate position earlier in the same frame.
+        const sample=()=>{setTimeout(()=>window.readingSamples.push(preview.getBoundingClientRect().top),0);if(performance.now()<until)requestAnimationFrame(sample);};
+        requestAnimationFrame(sample);
+      });
+      const reported=await resizeWidget(upperPlayer,height);
+      await expect.poll(()=>above.locator('.embed-stage').evaluate(el=>Math.round(el.getBoundingClientRect().height))).toBe(reported);
+      await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).length)).toBe(0);
+      await expect.poll(()=>page.evaluate(()=>window.readingSamples.length)).toBeGreaterThan(50);
+      expect(await page.evaluate(before=>Math.max(...window.readingSamples.map(y=>Math.abs(y-before))),before)).toBeLessThan(5);
+      expect(Math.abs((await focused.locator('.card-preview').boundingBox()).y-before)).toBeLessThan(2);
+    }
+    // Growing the focused post preserves its top/text, rather than scrolling
+    // proportionally through its newly increased height.
+    await resizeWidget(page.frameLocator('[data-post-id="8811"] .embed-stage>iframe').locator('#embed-root>iframe'),1100);
+    await expect.poll(()=>focused.locator('.embed-stage').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(900);
+    await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).length)).toBe(0);
+    expect(Math.abs((await focused.locator('.card-preview').boundingBox()).y-before)).toBeLessThan(2);
+    // A deliberate scroll during another expansion remains under user control.
+    await resizeWidget(upperPlayer,1000);
+    await page.mouse.wheel(0,650);
+    await expect.poll(()=>focused.locator('.card-preview').evaluate(el=>el.getBoundingClientRect().top)).toBeLessThan(before-300);
+    await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).length)).toBe(0);
+    expect((await focused.locator('.card-preview').boundingBox()).y).toBeLessThan(before-300);
+    expect(await player.evaluate(el=>el.isConnected)).toBe(true);
+  });
+}
 
 for (const [width,motion] of [[1440,'no-preference'],[1440,'reduce'],[390,'no-preference']]) {
   test(`view changes keep the most visible post on screen (${width}px, ${motion})`,async({page})=>{
@@ -88,28 +145,41 @@ test('both layouts fit a narrow screen and honor reduced motion',async({page})=>
   }
 });
 
-test('grid bars frame the preview and Instagram stays smaller only in the feed',async({page})=>{
+test('feed card edges stay aligned across platforms while Instagram preview content stays compact',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});await setup(page);
   const instagram=page.locator('[data-post-id="8801"]'),preview=instagram.locator('.card-preview');
-  expect((await preview.boundingBox()).width).toBe(440);
+  expect((await preview.boundingBox()).width).toBe(500);
   expect((await page.locator('[data-post-id="8800"] .card-preview').boundingBox()).width).toBe(500);
+  expect((await instagram.locator('.native-embed').boundingBox()).width).toBe(440);
+  const loadedBounds=await preview.boundingBox();
+  const xBounds=await page.locator('[data-post-id="8800"] .card-preview').boundingBox();
+  expect(loadedBounds.x).toBe(xBounds.x);
+  // Failure and retry retain the same outer card width and note alignment.
+  await expect(instagram.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
+  await page.frameLocator('[data-post-id="8801"] .embed-stage>iframe').locator('body').evaluate(el=>el.ownerDocument.defaultView.parent.postMessage({source:'savex-native-embed',type:'failed',reason:'Fixture unavailable'},'*'));
+  await expect(instagram.locator('.native-embed')).toHaveAttribute('data-embed-state','failed');
+  expect((await preview.boundingBox()).width).toBe(loadedBounds.width);
+  expect((await preview.boundingBox()).x).toBe(loadedBounds.x);
+  await instagram.getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(instagram.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
+  expect((await preview.boundingBox()).width).toBe(loadedBounds.width);
   const note=await instagram.locator('.card-note').boundingBox(),feed=await preview.boundingBox();
   expect(note.x-feed.x-feed.width).toBe(16);expect(note.width).toBe(240);
   const player=await instagram.locator('.embed-stage>iframe').elementHandle();
   await page.getByRole('button',{name:'Grid view',exact:true}).click();await settled(page);
   const colors=await instagram.evaluate(el=>Object.fromEntries(['.card-header','.card-footer','.card-preview'].map(selector=>[selector,getComputedStyle(el.querySelector(selector)).backgroundColor])));
-  expect(colors['.card-header']).not.toBe(colors['.card-preview']);
-  expect(colors['.card-footer']).not.toBe(colors['.card-preview']);
-  expect(colors['.card-header']).not.toBe(colors['.card-footer']);
+  // Grid card bars are white so the card stands apart from the page background.
+  expect(colors['.card-header']).toBe('rgb(255, 255, 255)');
+  expect(colors['.card-footer']).toBe('rgb(255, 255, 255)');
   expect((await instagram.locator('.card-content').boundingBox()).width).toBe((await instagram.boundingBox()).width);
   await instagram.screenshot({path:'test-results/grid-tinted-bars.png'});
   await page.getByRole('button',{name:'Feed view',exact:true}).click();await settled(page);
-  expect((await preview.boundingBox()).width).toBe(440);
+  expect((await preview.boundingBox()).width).toBe(500);
   expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   await instagram.screenshot({path:'test-results/feed-compact-instagram.png'});
   await page.setViewportSize({width:950,height:1000});
   await expect(page.locator('.cards')).toHaveAttribute('data-side-notes','false');
-  expect((await preview.boundingBox()).width).toBe(440);
+  expect((await preview.boundingBox()).width).toBe(500);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
@@ -121,8 +191,8 @@ test('feed notes sit beside the post without increasing its height, stack in gri
     const preview=el.querySelector('.card-preview').getBoundingClientRect(),note=el.querySelector('.card-note').getBoundingClientRect(),header=el.querySelector('.card-header').getBoundingClientRect();
     return {postWidth:preview.width,postRight:preview.right,noteLeft:note.left,noteWidth:note.width,noteTop:note.top,previewTop:preview.top,previewLeft:preview.left,headerTop:header.top,headerRight:header.right};
   });
-  expect(bounds.postWidth).toBe(500);expect(bounds.noteWidth).toBe(240);expect(bounds.noteLeft-bounds.postRight).toBe(16);expect(bounds.noteTop).toBe(bounds.previewTop);expect(bounds.headerTop).toBeGreaterThanOrEqual(bounds.previewTop);expect(bounds.headerRight).toBeLessThan(bounds.previewLeft);
-  await expect(card.locator('.feed-source-pill').getByRole('img',{name:'X',exact:true})).toBeVisible();
+  expect(bounds.postWidth).toBe(500);expect(bounds.noteWidth).toBe(240);expect(bounds.noteLeft-bounds.postRight).toBe(16);expect(bounds.noteTop-bounds.previewTop).toBe(8);expect(bounds.headerTop).toBeGreaterThanOrEqual(bounds.previewTop);expect(bounds.headerRight).toBeLessThan(bounds.previewLeft);
+  await expect(card.locator('.feed-source-pill')).toBeHidden();
   const actions=await card.locator('.card-actions button:visible').evaluateAll(buttons=>buttons.map(button=>{const r=button.getBoundingClientRect();return {x:r.x,y:r.y};}));
   expect(actions).toHaveLength(3);expect(new Set(actions.map(r=>r.x)).size).toBe(1);expect(actions[1].y).toBeGreaterThan(actions[0].y);expect(actions[2].y).toBeGreaterThan(actions[1].y);
   await card.screenshot({path:"test-results/feed-side-notes.png"});

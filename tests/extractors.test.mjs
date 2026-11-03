@@ -64,6 +64,15 @@ test('unsave evidence requires the exact post, signed-in profile, and an explici
   button.setAttribute('data-testid', 'bookmark'); button.setAttribute('aria-label', 'Bookmark'); article.append(button);
   const state = parser.xBookmarkState(document, 'https://x.com/i/status/123456789');
   assert.equal(state.state, 'unsaved'); assert.equal(state.account, '@personal_account');
+  for(const label of ['235 Bookmarks. Bookmark','1 Bookmark. Bookmark','1,235 Bookmarks. Bookmark','1.2K Bookmarks. Bookmark']){
+    button.setAttribute('aria-label',label);
+    assert.equal(parser.xBookmarkState(document,'https://x.com/i/status/123456789').state,'unsaved');
+  }
+  for(const label of ['235 Bookmarks. Remove Bookmark','Remove Bookmark','Bookmark settings']){
+    button.setAttribute('aria-label',label);assert.equal(parser.xBookmarkState(document,'https://x.com/i/status/123456789'),null);
+  }
+  button.setAttribute('aria-label','235 Bookmarks. Bookmark');button.setAttribute('aria-pressed','true');
+  assert.equal(parser.xBookmarkState(document,'https://x.com/i/status/123456789'),null);button.removeAttribute('aria-pressed');
   const duplicate = article.cloneNode(true); article.after(duplicate);
   assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
   duplicate.remove();

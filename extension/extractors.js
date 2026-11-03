@@ -5,7 +5,8 @@
   function pageInfo(doc, location) {
     const host = location.hostname.replace(/^www\./, '').replace(/^mobile\./, '');
     const path = location.pathname;
-    const bookmarksSelected = [...doc.querySelectorAll('[role="tab"][aria-selected="true"]')].some(tab => /^bookmarks$/i.test(visibleText(tab)));
+    // Match the selected tab by its link so other site languages still work.
+    const bookmarksSelected = [...doc.querySelectorAll('[role="tab"][aria-selected="true"]')].some(tab => [tab, ...tab.querySelectorAll('a[href]')].some(el => /^\/i\/bookmarks(?:\/|$)/.test(el.getAttribute('href') || '')) || /^bookmarks$/i.test(visibleText(tab)));
     const xBookmarks = /^\/i\/bookmarks(?:\/|$)/.test(path) || (/^\/i\/history(?:\/|$)/.test(path) && bookmarksSelected);
     if (['x.com', 'twitter.com'].includes(host) && xBookmarks) {
       const profile = doc.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
@@ -84,7 +85,7 @@
     const description = meta('og:description') || meta('description');
     const caption = visibleText(article?.querySelector('h1')) || description;
     const author = article?.querySelector('header a[href]')?.getAttribute('href')?.match(/^\/([\w.]+)\/?$/)?.[1] || description.match(/(?:[—–-]\s*|\()([\w.]+)(?:\)| on |:)/)?.[1] || '';
-    const images = [...(article?.querySelectorAll('img') || [])].filter(img => !/profile picture/i.test(img.getAttribute('alt') || '') && (Number(img.getAttribute('width')) > 100 || /cdninstagram|fbcdn/.test(img.getAttribute('src') || ''))).map(img => img.getAttribute('src')).filter(Boolean);
+    const images = [...(article?.querySelectorAll('img') || [])].filter(img => !img.closest('header') && !/profile picture/i.test(img.getAttribute('alt') || '') && (Number(img.getAttribute('width')) > 100 || /cdninstagram|fbcdn/.test(img.getAttribute('src') || ''))).map(img => img.getAttribute('src')).filter(Boolean);
     const thumbnail = meta('og:image') || images[0] || '';
     if (!caption && !thumbnail) return null;
     return { url, text: caption, author, authorName: '', thumbnail, media: [...new Set([thumbnail, ...images].filter(Boolean))].slice(0, 20), publishedAt: article?.querySelector('time')?.getAttribute('datetime') || null, kind: doc.querySelector('video') || /\/reel\//.test(url) ? 'video' : images.length > 1 ? 'carousel' : 'image' };
@@ -102,11 +103,25 @@
     if (targets.length !== 1) return null;
     const article = targets[0];
     const buttons = [...article.querySelectorAll('button[data-testid]')].filter(b => b.closest('article') === article && !b.disabled && b.getAttribute('aria-disabled') !== 'true');
-    const save = buttons.filter(b => b.getAttribute('data-testid') === 'bookmark' && /^bookmark$/i.test(b.getAttribute('aria-label') || '') && b.getAttribute('aria-pressed') !== 'true');
+    // The data-testid names the state in every site language. An English name
+    // that contradicts it (remove, settings) still fails closed. Detail pages put
+    // a public count in the name; it does not mean this user saved it.
+    const save = buttons.filter(b => b.getAttribute('data-testid') === 'bookmark' && !/remove|settings/i.test(b.getAttribute('aria-label') || '') && b.getAttribute('aria-pressed') !== 'true');
     const remove = buttons.filter(b => b.getAttribute('data-testid') === 'removeBookmark');
     if (save.length === 1 && remove.length === 0) return { externalId, account: `@${handle}`, state: 'unsaved' };
     if (remove.length === 1 && save.length === 0) return { externalId, account: `@${handle}`, state: 'saved' };
     return null;
   }
-  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, xBookmarkState, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : instagramPosts(doc) };
+  // Tells an empty saved list apart from a page whose posts can't be read.
+  // 'unreadable' means the site rendered content this parser no longer understands.
+  function diagnose(doc, platform) {
+    if (platform === 'x') {
+      if (doc.querySelector('[data-testid="emptyState"]')) return 'empty';
+      return !xPosts(doc).length && doc.querySelector('main article, main a[href*="/status/"] time') ? 'unreadable' : '';
+    }
+    const images = [...doc.querySelectorAll('main img[src]')].filter(img => !img.closest('header'));
+    return !instagramPosts(doc).length && images.length >= 3 ? 'unreadable' : '';
+  }
+  const layoutChanged = platform => `${platform === 'x' ? 'X' : 'Instagram'} loaded, but saveXtension couldn’t read the page. The site’s layout may have changed, so saveXtension needs an update. Nothing was removed.`;
+  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, xBookmarkState, diagnose, layoutChanged, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : instagramPosts(doc) };
 })();

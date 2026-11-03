@@ -4,6 +4,9 @@ import { bookmarkPosts } from './bookmarks.js';
 
 const DEFAULT_ORIGIN = 'http://localhost:3210';
 const SOCIAL_ORIGINS = ['https://x.com/*', 'https://www.instagram.com/*'];
+// The desktop runs this same tested scan engine in a private Node worker. Its
+// browser adapter owns isolated Electron sessions instead of Chrome tabs.
+const desktop = globalThis.SaveXDesktopWorker;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let working = false, checking = false, unsaving = false;
 let queuePoll;
@@ -14,6 +17,7 @@ const localOrigin = value => {
 };
 async function origin() { return (await get('libraryOrigin')) || DEFAULT_ORIGIN; }
 async function request(path, body) {
+  if (desktop) return desktop.request(path, body);
   const response = await fetch(`${await origin()}/api/extension${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(12000) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Library request failed.'); return result;
 }
@@ -120,6 +124,7 @@ async function publishAccounts(catalog) {
   await request('/accounts', { ...catalog, instance: await instanceId() });
 }
 async function discoverXAccounts() {
+  if (desktop) { const catalog = await desktop.accounts('x'); await publishAccounts(catalog); return catalog; }
   if (accountScanPromise) return accountScanPromise;
   accountScanPromise = (async () => {
     let tab;
@@ -142,16 +147,19 @@ async function discoverXAccounts() {
   })();
   try { return await accountScanPromise; } finally { accountScanPromise = null; }
 }
-async function switchXAccount(tabId, account) {
+async function switchXAccount(tabId, account, { verifyBookmarks = true } = {}) {
+  if (desktop) return desktop.verifyAccount(tabId, 'x', account);
   await chrome.scripting.executeScript({ target: { tabId }, files: ['x-accounts.js'] });
+  let choice;
   try {
     // Return explicit errors: injected promise rejections are not consistently
     // propagated by Chrome's scripting API across document changes.
     const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: async target => {
-      try { await globalThis.SaveXAccounts.choose(target); return { ok: true }; }
+      try { return { ok: true, ...await globalThis.SaveXAccounts.choose(target) }; }
       catch (error) { return { ok: false, error: error.message }; }
     }, args: [account] });
     if (result?.ok === false) throw new Error(result.error);
+    choice=result;
   }
   catch (error) { if (/not signed in|valid X account|read X’s account switcher/.test(error.message)) throw error; /* A successful switch can replace the executing document. */ }
   const end = Date.now() + 20000; let matched = false;
@@ -165,6 +173,7 @@ async function switchXAccount(tabId, account) {
     await sleep(400);
   }
   if (!matched) throw new Error(`Couldn’t confirm ${account} is active. No posts were imported for that account.`);
+  if (!verifyBookmarks) return {switched:choice?.requested===true};
   await chrome.tabs.update(tabId, { url: 'https://x.com/i/bookmarks#savex-sync' });
   await sleep(400); await loaded(tabId);
   const info = await inspect(tabId, 'x');
@@ -173,7 +182,12 @@ async function switchXAccount(tabId, account) {
 async function preparePlan(job) {
   const plan = [];
   for (const platform of job.targets) {
-    if (platform === 'x' && Array.isArray(job.xAccount)) plan.push(...job.xAccount.map(account => ({ platform, account })));
+    if (desktop && platform === 'instagram') {
+      const catalog = await desktop.accounts('instagram'), requested = job.instagramScope?.account;
+      const accounts = requested && requested !== 'current' ? catalog.accounts.filter(item => item.handle.toLowerCase() === requested.toLowerCase()) : catalog.accounts;
+      if (!accounts.length) throw new Error(`Connect ${requested && requested !== 'current' ? requested : 'Instagram'} in saveXtension, then retry.`);
+      plan.push(...accounts.map(item => ({ platform, account: item.handle })));
+    } else if (platform === 'x' && Array.isArray(job.xAccount)) plan.push(...job.xAccount.map(account => ({ platform, account })));
     else if (platform !== 'x' || !job.xAccount || job.xAccount === 'current') plan.push({ platform, account: null });
     else if (job.xAccount === 'all') {
       await progress('Finding your signed-in X accounts…');
@@ -187,7 +201,7 @@ async function preparePlan(job) {
 async function syncChromeBookmarks() {
   if (!(await bookmarksReady())) throw new Error('Allow Chrome bookmarks in saveXtension settings, then click Sync again.');
   await progress('Reading your Chrome bookmark folders…');
-  const { posts, skipped } = bookmarkPosts(await chrome.bookmarks.getTree());
+  const { posts, skipped } = bookmarkPosts(desktop ? await desktop.bookmarks() : await chrome.bookmarks.getTree());
   const { runId } = await request('/runs', { platform: 'chrome', account: '' });
   let imported = 0, updated = 0, rejected = 0, processed = 0;
   await setRun({ runId, platform: 'chrome', account: '', status: 'running', stage: 'importing', imported, updated, rejected, posts: [], message: 'Reading Chrome bookmarks…' });
@@ -206,12 +220,14 @@ async function syncChromeBookmarks() {
 }
 async function startSource(platform, selectedAccount = null, collection = null) {
   let job = await get('job');
+  if (desktop) await desktop.selectAccount(platform, selectedAccount);
   const tab = await createWorkTab('sync');
   job.ownedTabs.push(tab.id); job.sourceTabId = tab.id; job.phase = 'loading'; await chrome.storage.local.set({ job });
   await chrome.tabs.update(tab.id, { autoDiscardable: false, muted: true });
   await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : 'https://www.instagram.com/' });
   await sleep(400);
   await loaded(tab.id);
+  if (desktop) await desktop.verifyAccount(tab.id, platform, selectedAccount);
   if (platform === 'instagram') {
     let url;
     if (collection) url = collection.url;
@@ -361,6 +377,7 @@ async function advanceJob() {
     }
     try { if (job.phase === 'loading') { await closeOwned(); job.ownedTabs = []; await chrome.storage.local.set({ job }); } if (job.plan[job.index].platform === 'chrome') await syncChromeBookmarks(); else await startSource(job.plan[job.index].platform, job.plan[job.index].account, job.plan[job.index].collection); }
     catch (e) {
+      if (desktop) await desktop.accountError(e.message);
       const run = await get('syncState'); if (run?.status === 'running') await finishRun(run, 'failed', e.message);
       job = await get('job'); job.results.push({ platform: job.plan[job.index].platform, account: job.plan[job.index].account || '', imported: run?.status === 'running' ? run.imported : 0, updated: 0, enriched: 0, status: 'failed', message: e.message });
       await closeOwned(); job.ownedTabs = []; job.index++; job.phase = 'next'; await chrome.storage.local.set({ job });
@@ -387,13 +404,22 @@ async function checkJobs() {
     if (allowed && !(await chrome.scripting.getRegisteredContentScripts({ ids: ['savex-background-layout'] })).length) {
       await chrome.scripting.registerContentScripts([{ id: 'savex-background-layout', matches: SOCIAL_ORIGINS, js: ['background-render.js'], world: 'MAIN', runAt: 'document_start' }]);
     }
-    const response = await request('/jobs', { instance: await instanceId(), name: 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
+    const response = await request('/jobs', { instance: await instanceId(), name: desktop ? 'saveXtension' : navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
     reachedLibrary=true;
+    if (!desktop && response.desktopSocial) {
+      if (job) { await closeOwned(); await chrome.storage.local.remove(['job', 'cancelRequested']); }
+      if (response.bookmarkSetupRequested && !bookmarkAccess) await chrome.runtime.openOptionsPage();
+      return;
+    }
     if (response.scanAccountsRequested) await chrome.storage.local.set({ accountScanRequested: true });
     if (response.setupRequested && !allowed) await chrome.runtime.openOptionsPage();
     if (response.bookmarkSetupRequested && !bookmarkAccess) await chrome.runtime.openOptionsPage();
     if(response.claimedUnsave){
       unsaving=true;
+      if (desktop) {
+        try { await desktop.selectAccount(response.claimedUnsave.platform, response.claimedUnsave.account); }
+        catch (error) { await request(`/unsaves/${response.claimedUnsave.id}/finish`, { instance: await instanceId(), status: 'failed', message: error.message }); unsaving = false; return; }
+      }
       void performUnsave(response.claimedUnsave,{request,instance:await instanceId(),switchXAccount,instagramUrl,loaded,sleep}).finally(()=>{unsaving=false;void checkJobs();});
       return;
     }

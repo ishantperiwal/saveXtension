@@ -28,6 +28,21 @@ test('Settings enables local MCP, copies a universal connection prompt, reflects
   expect(prompt).toContain('installed version'); expect(prompt).toContain('DeepSeek');
   expect(prompt).toContain('my selected model does not need to change');
   expect(prompt).toContain('If you cannot edit its configuration');
+  // The actual clipboard must carry the runtime acceptance gates even when the
+  // receiving harness cannot read our repository checklist.
+  const gates=['1. Identify the client.','2. Establish the schema before writing.','3. Make the minimal change.','4. Validate the saved configuration.','5. Verify registration.','6. Verify through this client.','7. Report evidence, not a success assumption.'];
+  const positions=gates.map(gate=>prompt.indexOf(gate));
+  expect(positions.every(position=>position>=0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((a,b)=>a-b));
+  expect(prompt).toContain('minimal remote Streamable HTTP MCP example');
+  expect(prompt).toContain('object map, wrapped object map, or patch-operation list');
+  expect(prompt).toContain('Timebox discovery to two minutes');
+  expect(prompt).toContain('Within 60 seconds');
+  expect(prompt).toContain('A missing tool is a registration failure');
+  expect(prompt).toContain('using the target client\'s MCP tooling in the active session');
+  expect(prompt).toContain('A direct HTTP request, curl check, separate SDK connection');
+  expect(prompt).toContain('Configured; verification pending');
+  expect(prompt).toContain('unless I explicitly stop you');
   await expect(copyButton).not.toHaveClass(/is-copied/);
   await expect(copyButton).toHaveText('Copy connection prompt');
   await expect(page.locator('#toast')).toContainText('Connection copied');
