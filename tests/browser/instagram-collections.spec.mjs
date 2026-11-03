@@ -74,16 +74,16 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
       await startDeepSync(page);
     } else await startQuickSync(page);
     await expect(page.getByRole('list', { name: 'Instagram collections for @collection_user', exact: true })).toBeVisible({ timeout: 30000 });
-    await expect(page.locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
+    await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
     await expect.poll(async () => (await job())?.id, { timeout: 10000 }).not.toBe(previousJobId);
     await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('partial');
     expect((await job()).mode).toBe(mode);
-    await expect(page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' })).toContainText('2', { timeout: 7000 });
-    await page.locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
+    await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: 'Design notes' })).toContainText('2', { timeout: 7000 });
+    await page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
     await expect(page.locator('.save-card')).toHaveCount(2);
     await expect(page.getByRole('heading', { name: 'Design notes', exact: true })).toHaveClass('sr-only');
-    if (!limited) await expect(page.locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
-    if (!limited) { await page.locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click(); await expect(page.locator('.save-card')).toHaveCount(2); }
+    if (!limited) await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
+    if (!limited) { await page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click(); await expect(page.locator('.save-card')).toHaveCount(2); }
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts?scope=all')).json()).posts.filter(p => p.platform === 'instagram'));
     expect(saved).toHaveLength(limited?2:3); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(limited?1:2);
     if(limited){expect(savedVisits.some(path=>path.includes('/all-posts/')||path.includes('/1002/'))).toBe(false);expect(savedVisits.some(path=>path.includes('/1001/'))).toBe(true);}
@@ -96,7 +96,7 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     await page.screenshot({ path: testInfo.outputPath('instagram-collections-mobile.png') });
     const foreground = await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].url);
     expect(foreground).toBe(`${baseURL}/`);
-    await page.reload(); await expect(page.locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
+    await page.reload(); await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
   } finally {
     if (page && !page.isClosed()) await page.evaluate(() => fetch('/api/sync/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).catch(() => {});
     await context.close(); await rm(profile, { recursive: true, force: true });

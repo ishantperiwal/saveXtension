@@ -8,6 +8,8 @@ const posts=[
 async function setup(page){
   await page.route('https://**/*',route=>route.abort());
   await page.route('**/api/posts?scope=all',route=>route.fulfill({json:{posts,runs:[]}}));
+  // A finished sync from another spec would leave its report over the cards.
+  await page.route('**/api/sync',route=>route.fulfill({json:{job:null,browser:null}}));
   await page.goto('/');
 }
 const card=(page,id)=>page.locator(`.save-card[data-post-id="${id}"]`);

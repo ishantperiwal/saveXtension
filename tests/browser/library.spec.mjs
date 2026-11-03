@@ -57,6 +57,8 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
 });
 
 test('one click in library collects and enriches in an inactive tab, then closes only its own tab', async () => {
+  // Specs share the fixture library; end any sync an earlier spec left queued.
+  await fetch('http://localhost:3211/api/sync/stop', { method: 'POST', headers: { Origin: 'http://localhost:3211', 'Content-Type': 'application/json' }, body: '{}' });
   const profile = await mkdtemp(resolve(tmpdir(), 'savex-local-extension-'));
   const extension = resolve(profile, 'extension'); await cp(resolve('extension'), extension, { recursive: true });
   // The worker starts before a library tab opens. Keep that first heartbeat on
