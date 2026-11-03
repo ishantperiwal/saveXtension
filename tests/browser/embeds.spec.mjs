@@ -443,7 +443,12 @@ test('native borders and shadows retain their padding when editing inline, inclu
     });
     for (const side of ['left', 'top', 'right', 'bottom']) expect(spacing[side]).toBeGreaterThanOrEqual(11.9);
     expect(spacing.shadow).not.toBe('none'); expect(spacing.overflow).toBe(false);
-    await expect.poll(async () => (await frame.boundingBox()).height).toBe(Math.ceil(spacing.height));
+    // Resizing can change the widget scale again after the padding sample.
+    // Compare live heights until the host and its parent frame agree.
+    await expect.poll(async () => {
+      const height = await host.locator('#embed-root').evaluate(root => Math.ceil(root.getBoundingClientRect().height));
+      return Math.abs((await frame.boundingBox()).height - height);
+    }).toBeLessThan(1);
   }
   await checkFrame('.save-card');
   await page.setViewportSize({ width: 390, height: 844 }); await checkFrame('.save-card');
