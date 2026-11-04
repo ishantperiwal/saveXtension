@@ -36,7 +36,7 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
   for (const name of ['desktop', 'server', 'public', 'extension']) await cp(resolve(name), join(appPath, name), { recursive: true });
   await cp(resolve('package.json'), join(appPath, 'package.json')); await symlink(resolve('node_modules'), join(appPath, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   const manager = join(appPath, 'desktop/social.mjs');
-  await writeFile(manager, (await readFile(manager, 'utf8')).replace("const ses = session.fromPartition(`persist:savex-social-${profile.id}`);", `const ses = session.fromPartition(\`persist:savex-social-\${profile.id}\`); (${fixtureSetup})(ses);`));
+  await writeFile(manager, (await readFile(manager, 'utf8')).replace("const ses = session.fromPartition(partition);", `const ses = session.fromPartition(partition); (${fixtureSetup})(ses);`));
   await writeFile(join(appPath, 'desktop/browser.mjs'), 'export async function openSyncBrowser(){throw new Error("Native social sync must not open Chrome");}export async function focusSyncBrowser(){throw new Error("Native social sync must not focus Chrome");}');
   const env = { ...process.env, SAVEX_DESKTOP_DATA_DIR: join(dir, 'library'), SAVEX_DESKTOP_LEGACY_ORIGIN: 'http://localhost:1', SAVEX_DESKTOP_DISABLE_AUTO_SYNC: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = () => _electron.launch({ executablePath: require('electron'), args: [appPath], env });
