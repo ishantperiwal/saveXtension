@@ -2,7 +2,7 @@
 
 Your Instagram saves and X bookmarks in one searchable library, on your computer.
 
-Download for Mac (Apple Silicon) or Windows (64-bit) at **[ishantperiwal.github.io/saveXtension](https://ishantperiwal.github.io/saveXtension/)**. Google Chrome is the supported browser for syncing, using the Chrome helper and your existing sign-ins.
+Download for Mac (Apple Silicon) or Windows (64-bit) at **[ishantperiwal.github.io/saveXtension](https://ishantperiwal.github.io/saveXtension/)**. Sign in to X and Instagram inside the app; Chrome bookmarks are read straight from Chrome, including bookmarks synced from your other devices when Chrome sync is on. No browser extension is needed.
 
 The minimal download page lives in `website/`. `node scripts/build-download-page.mjs` generates `dist/downloads/` with links to the latest stable installer assets. The Download page workflow deploys to GitHub Pages after page changes or a successful Desktop installers run, so new releases refresh both download buttons without a browser-side GitHub API request.
 

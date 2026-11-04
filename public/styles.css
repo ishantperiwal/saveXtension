@@ -827,11 +827,12 @@ dialog.post-preview-dialog::backdrop { background: #000000b8; animation: post-pr
 
 /* Dotted grip on topic rows: press it to drag a folder up, down or into another. */
 .topic-nav-item { position: relative; }
-.topic-grip { position: absolute; top: 50%; left: 1px; width: 10px; height: 16px; margin-top: -8px; border-radius: 4px; background-image: radial-gradient(circle, currentColor 1px, transparent 1.3px); background-size: 5px 5px; background-position: center; color: var(--muted); opacity: .45; cursor: grab; transition: opacity 120ms ease-out; }
+.topic-grip { position: absolute; top: 50%; left: 3px; width: 6px; height: 10px; margin-top: -5px; background-image: radial-gradient(circle, currentColor 1px, transparent 1.25px); background-size: 4px 4px; background-position: -1px -1px; color: var(--muted); opacity: .5; cursor: grab; transition: opacity 120ms ease-out; }
 .topic-nav-item:hover .topic-grip, .topic-grip:hover { opacity: 1; }
-/* The folder icon is a second, larger grip. */
-.topic-nav-item svg[data-drag-topic] { pointer-events: auto; cursor: grab; }
-.instagram-collection.topic-nav-item .topic-grip { left: -1px; }
+/* Two crisp columns of three dots, sitting in the row's left padding. */
+.instagram-collection.topic-nav-item { padding-left: 15px; }
+.instagram-collection.topic-nav-item .topic-grip { left: 4px; }
+.topic-child-icon { width: 18px; height: 18px; flex: none; color: var(--secondary); }
 .topic-drop-line { position: fixed; z-index: 59; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); pointer-events: none; opacity: 0; transition: top 80ms ease-out, opacity 100ms ease-out; }
 .topic-drop-line.is-visible { opacity: 1; }
 /* Rows part smoothly to open the gap a dragged folder will land in. */
