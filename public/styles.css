@@ -953,3 +953,29 @@ dialog.post-preview-dialog .post-preview-actions .unsave-button:is(:hover, :focu
 /* X posts brighten their own card on hover, so the space around them follows to white. */
 .cards[data-view="grid"] .save-card.x .card-preview { transition: background-color 160ms ease-out; }
 .cards[data-view="grid"] .save-card.x .card-preview:hover { background: var(--paper); }
+/* Compact sync report: one tight header, counts as a quiet second line, details as a
+   small inline link, and the auto-dismiss countdown as a hairline on the card's edge. */
+.sync-platform-card { padding: 10px 12px 12px; border-radius: 14px; overflow: hidden; box-shadow: 0 6px 20px #2931201a, 0 1px 2px #2931200d; }
+.sync-report-header { gap: 7px; min-height: 24px; }
+.sync-report-header > .source-icon { width: 16px; height: 16px; flex-basis: 16px; }
+.sync-report-header > strong { flex: 0 1 auto; font-size: 12px; }
+.sync-report-state { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.sync-report-state::before { content: '·' / ''; margin-right: 7px; }
+.sync-report-header > .icon-button { width: 22px; height: 22px; padding: 4px; }
+.sync-dismiss-timer { min-width: 0; font-size: 10px; color: var(--muted); }
+.sync-report-counts { gap: 2px 12px; margin: 2px 0 0 23px; font-size: 11px; line-height: 18px; }
+.sync-report-issues { margin: 6px 0 0 23px; font-size: 11px; line-height: 16px; }
+.sync-report-footer { min-height: 0; margin: 4px 0 0 23px; padding-top: 0; border-top: 0; }
+.sync-report-details > summary { min-height: 22px; font-size: 11px; line-height: 18px; color: var(--muted); }
+.sync-report-details > summary:hover { color: var(--ink); }
+.sync-report-details > summary .icon { width: 13px; height: 13px; }
+.sync-report-footer.has-retry summary { max-width: calc(100% - 76px); }
+.sync-report-retry.secondary { top: -2px; min-height: 24px; padding: 2px 9px; font-size: 11px; }
+.sync-report-log { margin-top: 4px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--paper) 60%, transparent); font-size: 11px; }
+.sync-dismiss-progress { right: 0; bottom: 0; left: 0; height: 2px; border-radius: 0; background: transparent; }
+.sync-dismiss-progress > span { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+/* Folder icons on topic rows and subfolder rows are grips too. */
+.topic-nav-item svg[data-drag-topic] { pointer-events: auto; cursor: grab; }
+/* The label sits above the row's centre, so the whole toggle (its hover circle
+   included) lifts to the text's centre; the chevron stays centred in its circle. */
+.source-account-group > .collection-toggle { translate: 0 -2.5px; }

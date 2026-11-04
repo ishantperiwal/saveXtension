@@ -33,6 +33,11 @@ function pump() {
   const candidates = [], eagerRetries = [];
   for (const [holder, item] of holders) {
     const failed = holder.dataset.embedState === 'failed';
+    // Ready previews on screen re-measure, catching size changes they missed off screen.
+    if (holder.isConnected && holder.dataset.embedState === 'ready' && item.frame) {
+      const rect = holder.getBoundingClientRect();
+      if (rect.bottom > 0 && rect.top < height) item.frame.contentWindow?.postMessage({ source: 'savex-library-measure' }, previewOrigin);
+    }
     if (!holder.isConnected || holder.dataset.embedState === 'ready' || item.eager && !failed) continue;
     const rect = holder.getBoundingClientRect();
     const visible = rect.height > 0 && rect.bottom > 0 && rect.top < height;
