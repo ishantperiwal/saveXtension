@@ -1,4 +1,4 @@
-import { BrowserWindow, session, ipcMain } from 'electron';
+import { BrowserWindow, session, ipcMain, shell } from 'electron';
 import { Worker } from 'node:worker_threads';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -44,11 +44,12 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
   const publicAccounts = () => accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status }));
   const publish = () => { library.store.set('desktop_social_accounts', JSON.stringify(accounts)); library.sync.configureNativeAccounts(publicAccounts()); onChange(); };
   publish();
-  function profileSession(profile) {
-    const ses = session.fromPartition(`persist:savex-social-${profile.id}`);
+  function profileSession(profile) { return appSession(`persist:savex-social-${profile.id}`, profile.id); }
+  function appSession(partition, key) {
+    const ses = session.fromPartition(partition);
     ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
-    if (!configured.has(profile.id)) { configured.add(profile.id); ses.on('will-download', event => event.preventDefault()); }
+    if (!configured.has(key)) { configured.add(key); ses.on('will-download', event => event.preventDefault()); }
     // Session UA is independent of the library window and has no app branding.
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:saveXtension|savextension|Electron)\/[^\s]+/gi, ''));
     return ses;
@@ -70,6 +71,25 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     });
     win.webContents.on('page-title-updated', event => event.preventDefault());
     return win;
+  }
+  // A small app-owned window for Instagram posts the embed cannot play. It signs in
+  // with the connected Instagram account when there is one; other links go to the browser.
+  let viewer;
+  function openPost(url) {
+    if (!viewer || viewer.isDestroyed()) {
+      const profile = accounts.find(item => item.platform === 'instagram' && item.status === 'connected');
+      viewer = new BrowserWindow({ width: 460, height: 860, minWidth: 360, minHeight: 520, title: 'Instagram', backgroundColor: '#ffffff', autoHideMenuBar: true, webPreferences: {
+        session: profile ? profileSession(profile) : appSession('persist:savex-instagram-viewer', 'viewer'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false
+      } });
+      const outside = url => { if (/^https?:/.test(url)) void shell.openExternal(url).catch(onError); };
+      viewer.webContents.on('will-navigate', (event, url) => { if (!socialUrl(url, 'instagram')) { event.preventDefault(); outside(url); } });
+      viewer.webContents.on('will-attach-webview', event => event.preventDefault());
+      viewer.webContents.setWindowOpenHandler(({ url }) => { if (socialUrl(url, 'instagram')) void viewer.loadURL(url).catch(onError); else outside(url); return { action: 'deny' }; });
+      viewer.on('closed', () => { viewer = null; });
+    }
+    void viewer.loadURL(url).catch(onError);
+    if (viewer.isMinimized()) viewer.restore();
+    viewer.show(); viewer.focus();
   }
   const tab = id => { const value = work.get(Number(id)); if (!value || value.win.isDestroyed()) throw new Error('The native sync page was closed.'); return value; };
   const tabInfo = value => ({ id: value.id, windowId: 1, groupId: value.groupId ?? -1, active: false, mutedInfo: { muted: true }, status: value.win.webContents.isLoadingMainFrame() ? 'loading' : 'complete', url: value.win.webContents.getURL() || 'about:blank' });
@@ -220,7 +240,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     return publicAccounts();
   }
   return {
-    status: publicAccounts, connect, wake,
+    status: publicAccounts, connect, wake, openPost,
     async disconnect(id) {
       const profile = accounts.find(item => item.id === id); if (!profile) throw new Error('Connection not found.');
       if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before disconnecting.');
@@ -238,6 +258,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       for (const { win, timer } of logins.values()) { clearInterval(timer); win.removeAllListeners('closed'); win.destroy(); }
       logins.clear();
       for (const value of work.values()) value.win.destroy(); work.clear();
+      if (viewer && !viewer.isDestroyed()) viewer.destroy();
       await worker.terminate();
     }
   };

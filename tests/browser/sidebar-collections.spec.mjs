@@ -66,10 +66,17 @@ test('All Saves in Collections shows counted folders that open by click, double-
   await expect(folder('AI & models').locator('.collection-folder-count')).toHaveText('3');
   await expect(folder('Future ideas').locator('.collection-folder-count')).toHaveText('0');
   await expect(folders.locator('.collection-folder-label')).toHaveText(['AI & models','Future ideas','Coding','Tools']);
-  await expect(page.getByRole('group',{name:'Post layout'})).toBeHidden();
+  const layout=page.getByRole('group',{name:'Post layout'});
+  await expect(layout.getByRole('button')).toHaveCount(2);
+  await expect(layout.getByRole('button',{name:'Folder view',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#open-filters')).toBeHidden();
   await expect(page.locator('.save-card')).toHaveCount(0);await expect(folders).not.toContainText('Instagram folder');
   await page.screenshot({path:'test-results/collection-folders-desktop.png',animations:'disabled'});
+  await layout.getByRole('button',{name:'Grid view',exact:true}).click();
+  await expect(page.locator('.save-card').first()).toBeVisible();await expect(folders).toBeHidden();
+  await expect(page.locator('#results .cards')).toHaveAttribute('data-view','grid');
+  await expect(layout.getByRole('button',{name:'Grid view',exact:true})).toHaveAttribute('aria-pressed','true');
+  await layout.getByRole('button',{name:'Folder view',exact:true}).click();await expect(folders).toBeVisible();
   await folder('AI & models').click();expect(await ids(page)).toEqual([3,2,1]);
   await expect(collection(page,'AI & models')).toHaveAttribute('aria-pressed','true');
   await expect(page.getByRole('group',{name:'Post layout'})).toBeVisible();
@@ -128,4 +135,21 @@ test('sidebar tabs support keyboard navigation, persist their view and fit a pho
   await collection(page, 'AI & models').click(); await expect(page.locator('.save-card')).toHaveCount(3);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/sidebar-collections-mobile.png', animations: 'disabled' });
+});
+
+test('a topic dragged from the sidebar onto a post card joins that post', async ({ page }) => {
+  await page.addInitScript(()=>{localStorage.setItem('savex-sidebar-view','collections');localStorage.setItem('savex-topics-view','cards');});
+  const model=await setup(page); let sent=null;
+  await page.route('**/api/posts/4/collections', async route => { sent=route.request().postDataJSON(); model.posts[3]={...model.posts[3],topics:['Coding','Future ideas']}; await route.fulfill({ json: { post: model.posts[3], topics: model.topics } }); });
+  const card=page.locator('.save-card[data-post-id="4"]'),grip=page.locator('#topic-navigation [data-topic-row="empty"] .nav-label-text').first();
+  await expect(card).toBeVisible();
+  const from=await grip.boundingBox(),to=await card.locator('.card-body').boundingBox();
+  await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();
+  await page.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:12});
+  await expect(card).toHaveClass(/is-drop-target/);await expect(page.locator('.topic-drag-ghost')).toHaveClass(/is-away/);
+  await expect(card.locator('.topic-drop-text')).toHaveText('Add “Future ideas” to this post');
+  await page.mouse.up();
+  await expect.poll(()=>sent).toEqual({topicId:'empty'});
+  await expect(card.locator('.tag')).toHaveText(['Coding','Future ideas']);
+  await expect(card).not.toHaveClass(/is-drop-target/);await expect(card.locator('.topic-drop-overlay')).toHaveCount(0);
 });

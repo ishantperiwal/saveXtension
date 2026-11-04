@@ -255,7 +255,7 @@ button svg, a svg { pointer-events: none; }
 .search-tools > .search { flex: 1; min-width: 0; }
 .page-content[data-folder-view="true"] { display: flex; flex-wrap: wrap; align-items: center; gap: 24px 16px; }
 .page-content[data-folder-view="true"] > h1 { flex: 1; min-width: 0; margin: 0; }
-.page-content[data-folder-view="true"] > .search-tools { flex: 0 1 230px; width: 230px; max-width: calc(100% - 112px); margin: 0 0 0 auto; }
+.page-content[data-folder-view="true"] > .search-tools { flex: 0 1 318px; width: 318px; max-width: calc(100% - 112px); margin: 0 0 0 auto; }
 .page-content[data-folder-view="true"] > #results { flex: 0 0 100%; min-width: 0; }
 .search-tools > .search, .view-toggle { box-shadow: 0 4px 16px #2830230b, 0 1px 3px #28302308; }
 .view-toggle { display: flex; flex-shrink: 0; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-soft); }
@@ -798,6 +798,19 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .move-topic-list { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
 /* Dragging a folder: a lifted chip follows the pointer, targets glow in the accent. */
 body.topic-dragging, body.topic-dragging * { cursor: grabbing !important; user-select: none; }
+/* Post previews are other sites' frames; they would swallow the drag, so they ignore the pointer while a topic is carried. */
+body.topic-dragging iframe { pointer-events: none; }
+.topic-drag-ghost { transition: opacity 120ms ease; }
+.topic-drag-ghost.is-away { opacity: 0; }
+.topic-drop-overlay { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; border-radius: 20px; background: color-mix(in srgb, var(--paper) 58%, transparent); -webkit-backdrop-filter: blur(4px) saturate(.85); backdrop-filter: blur(4px) saturate(.85); box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; animation: topic-drop-in 140ms ease-out; }
+.topic-drop-overlay.is-ready { background: color-mix(in srgb, var(--accent) 12%, color-mix(in srgb, var(--paper) 58%, transparent)); box-shadow: inset 0 0 0 2px var(--accent); }
+.topic-drop-badge { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 10px 18px 10px 14px; border-radius: 999px; background: var(--paper); color: var(--muted); font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px #2830231f, 0 1px 3px #28302314; }
+.topic-drop-overlay.is-ready .topic-drop-badge { background: var(--accent); color: var(--paper); animation: topic-drop-pop 180ms cubic-bezier(.22,.68,.2,1.2); }
+.topic-drop-badge svg { width: 17px; height: 17px; flex-shrink: 0; }
+.topic-drop-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes topic-drop-in { from { opacity: 0; } }
+@keyframes topic-drop-pop { from { scale: .92; } }
+@media (prefers-reduced-motion: reduce) { .topic-drop-overlay, .topic-drop-overlay.is-ready .topic-drop-badge { animation: none; } }
 .is-drag-source { opacity: .4; transition: opacity 120ms ease-out; }
 .topic-drag-ghost { position: fixed; top: 0; left: 0; z-index: 60; display: inline-flex; flex-direction: column; gap: 2px; max-width: 240px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--paper) 62%, transparent); color: var(--ink); font-size: 13px; line-height: 18px; box-shadow: 0 8px 24px #1b201b1f; pointer-events: none; opacity: .88; backdrop-filter: blur(6px); transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
 .topic-drag-ghost.has-target { border-color: var(--accent); box-shadow: 0 12px 32px #1b201b29, 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }

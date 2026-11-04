@@ -8,6 +8,13 @@ import { topicCatalog, importTopicCatalog, topicNames } from '../server/topics.m
 
 export const DEFAULT_PORT = 3217;
 export const isWebLink = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } };
+// An Instagram post or reel link, reduced to its canonical page (no tracking query).
+export const instagramPost = value => {
+  try {
+    const url = new URL(value), path = url.pathname.match(/^\/(?:[\w.]+\/)?(?:p|reels?|tv)\/[\w-]+/)?.[0];
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['instagram.com', 'www.instagram.com'].includes(url.hostname) && path ? `https://www.instagram.com${path}/` : '';
+  } catch { return ''; }
+};
 export const isLibraryFrame = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
 
 export async function prepareHelper(source, destination, origin) {

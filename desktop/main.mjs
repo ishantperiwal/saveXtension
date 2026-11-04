@@ -3,7 +3,7 @@ import { mkdir, readFile, appendFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDesktopLibrary, isLibraryFrame, isWebLink, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
+import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
@@ -171,7 +171,8 @@ async function createWindow() {
   window = new BrowserWindow({ title: 'saveXtension', width: 1280, height: 900, minWidth: 760, minHeight: 560, show: false, backgroundColor: '#f7f8f3', icon: join(root, 'desktop', 'assets', 'icon.png'),
     webPreferences: { preload: join(root, 'desktop', 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false }
   });
-  window.webContents.setWindowOpenHandler(({ url }) => { if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  // Instagram posts open in saveXtension's own small viewer; every other link opens in the browser.
+  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url); if (post) social.openPost(post); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
   window.webContents.on('will-navigate', (event, url) => { if (!isLibraryFrame(url, library.origin)) { event.preventDefault(); if (isWebLink(url)) void shell.openExternal(url); } });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.on('closed', () => { window = null; });

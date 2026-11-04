@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { Store } from '../server/store.mjs';
 import { createApp } from '../server/app.mjs';
-import { startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink } from '../desktop/runtime.mjs';
+import { startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink, instagramPost } from '../desktop/runtime.mjs';
 import { windowsBrowsers } from '../desktop/browser.mjs';
 
 test('desktop navigation and browser candidates do not expose arbitrary protocols or credentials', () => {
@@ -15,6 +15,9 @@ test('desktop navigation and browser candidates do not expose arbitrary protocol
   assert.equal(isLibraryFrame('https://evil.example/', 'http://localhost:3217'), false);
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'https://user:secret@example.com']) assert.equal(isWebLink(url), false);
   assert.equal(isWebLink('https://x.com/i/status/123'), true);
+  assert.equal(instagramPost('https://www.instagram.com/reel/DQ8x_ab-1/?utm_source=ig_embed&ig_rid=1'), 'https://www.instagram.com/reel/DQ8x_ab-1/');
+  assert.equal(instagramPost('https://instagram.com/fra_motion_design/p/ABC123'), 'https://www.instagram.com/fra_motion_design/p/ABC123/');
+  for (const url of ['https://www.instagram.com/fra_motion_design/', 'https://evil.example/reel/ABC/', 'http://www.instagram.com/reel/ABC/', 'https://www.instagram.com.evil.example/reel/ABC/']) assert.equal(instagramPost(url), '');
   assert.deepEqual(windowsBrowsers({ PROGRAMFILES: 'C:\\Program Files' }), ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe']);
 });
 

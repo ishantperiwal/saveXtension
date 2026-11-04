@@ -91,7 +91,7 @@ try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-topics')); 
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-instagram')); if (Array.isArray(saved)) for (const account of saved) if (typeof account === 'string') collapsedInstagramAccounts.add(account); } catch { /* Start with collections expanded. */ }
 let storedSyncAccounts = null;
 try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
-const state = { cardView: localStorage.getItem('savex-card-view') === 'grid' ? 'grid' : 'feed', sidebarView: localStorage.getItem('savex-sidebar-view') === 'collections' ? 'collections' : 'accounts', syncAccounts: storedSyncAccounts, instagramCollections: [], instagramSaveLists: {}, topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
+const state = { cardView: localStorage.getItem('savex-card-view') === 'grid' ? 'grid' : 'feed', topicsView: localStorage.getItem('savex-topics-view') === 'cards' ? 'cards' : 'folders', sidebarView: localStorage.getItem('savex-sidebar-view') === 'collections' ? 'collections' : 'accounts', syncAccounts: storedSyncAccounts, instagramCollections: [], instagramSaveLists: {}, topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
 let toastTimer, searchTimer, updatePoll, collectionVersion = 0, searchReturnView = null;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
 const syncReportTimers = new Map(), SYNC_REPORT_DURATION = 8000;
@@ -370,8 +370,18 @@ async function arrangeTopics(layout, ids, action) {
     else if ((topic?.parentId || null) !== (action.parentId || null)) toast(action.parentId ? `Moved ${label} into “${parent?.name}”` : `Moved ${label} to the top level`, false, 'bottom-center');
   } catch (failure) { toast(failure.message, true, 'bottom-center'); }
 }
-function showingCollectionFolders() {
+// Topics → All saves opens on the folders; its layout toggle swaps them for every save as grid cards.
+function showingTopicsHome() {
   return state.sidebarView === 'collections' && !state.archive && !state.query.trim() && !filterChips(state.filters).length;
+}
+function showingCollectionFolders() { return showingTopicsHome() && state.topicsView === 'folders'; }
+function syncViewToggle() {
+  const home = showingTopicsHome();
+  for (const button of document.querySelectorAll('.view-toggle button')) {
+    const view = button.dataset.topicsView ? 'folders' : button.dataset.cardView;
+    button.hidden = home ? view === 'feed' : view === 'folders';
+    button.setAttribute('aria-pressed', String(home ? (view === 'folders') === (state.topicsView === 'folders') : view === state.cardView));
+  }
 }
 function renderCollectionFolders() {
   const root = $('#results'), topics = localCollections(), signature = JSON.stringify(topics), tree = topicTree(topics);
@@ -430,6 +440,12 @@ function collectionDialog(topic, action) {
       error.textContent = failure.message; controls.forEach(control => control.disabled = false);
     }
   };
+}
+function setTopicsView(view) {
+  if (view === state.topicsView) return;
+  state.topicsView = view; if (view === 'cards') state.cardView = 'grid';
+  try { localStorage.setItem('savex-topics-view', view); if (view === 'cards') localStorage.setItem('savex-card-view', 'grid'); } catch { /* Keep the session's view. */ }
+  renderResults();
 }
 function selectSidebarView(view, focus = false) {
   state.sidebarView = view === 'collections' ? 'collections' : 'accounts';
@@ -539,7 +555,7 @@ function render() {
       <div class="page-content">
         <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
         <div class="search-tools"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label>
-        <div class="view-toggle" role="group" aria-label="Post layout">${['feed', 'grid'].map(view => `<button type="button" data-action="card-view" data-card-view="${view}" aria-label="${view === 'feed' ? 'Feed' : 'Grid'} view" title="${view === 'feed' ? 'Feed' : 'Grid'} view" aria-pressed="${state.cardView === view}">${icon(view)}</button>`).join('')}</div></div>
+        <div class="view-toggle" role="group" aria-label="Post layout"><button type="button" data-action="topics-view" data-topics-view="folders" aria-label="Folder view" title="Folder view" hidden>${icon('folder')}</button>${['feed', 'grid'].map(view => `<button type="button" data-action="card-view" data-card-view="${view}" aria-label="${view === 'feed' ? 'Feed' : 'Grid'} view" title="${view === 'feed' ? 'Feed' : 'Grid'} view" aria-pressed="${state.cardView === view}">${icon(view)}</button>`).join('')}</div></div>
         <div class="collection-tools"><div class="toolbar-blur" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           <div class="browse-controls"><button class="filter-button" id="open-filters" data-action="filters" aria-label="Filters" aria-haspopup="dialog" aria-expanded="false">${icon('filter')}<span>Filters</span><span class="filter-count" hidden></span></button><div id="active-filters" class="active-filters" hidden></div></div>
         </div>
@@ -576,6 +592,7 @@ function renderResults(restoreView) {
   if (!$('#results')) return;
   renderFilterUI();
   if (showingCollectionFolders()) { renderCollectionFolders(); return; }
+  if (showingTopicsHome()) state.cardView = 'grid';
   const posts = filteredPosts();
   const pageKey = resultsScopeKey();
   const pageChanged = pageKey !== resultsPageKey;
@@ -673,7 +690,7 @@ function renderFilterUI() {
   $('.page-content').dataset.folderView = String(folders);
   const tools = $('.collection-tools'); if (tools) tools.hidden = folders;
   if (button) button.hidden = folders;
-  const viewToggle = $('.view-toggle'); if (viewToggle) viewToggle.hidden = folders;
+  syncViewToggle();
   const topicCount = folders ? localCollections().length : 0;
   const heading = $('.page-content h1'); if (heading) { heading.textContent = folders ? `${topicCount} ${topicCount === 1 ? 'topic' : 'topics'}` : state.archive ? 'Archived' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = folders || state.archive ? 'collection-heading' : 'sr-only'; }
   renderSidebarMarkers();
@@ -821,6 +838,20 @@ function addCollection(button) {
       state.topicCatalog=result.topics; updateCollection();
     }
   });
+}
+// A topic dragged from the sidebar onto a card joins that post, like picking it from +.
+async function tagPost(id, topicIds) {
+  const added = [];
+  try {
+    for (const topicId of topicIds) {
+      const result = await api(`/posts/${id}/collections`, { method: 'POST', body: { topicId } });
+      state.posts = notes.overlay(state.posts.map(post => post.id === id ? { ...post, ...result.post } : post));
+      state.topicCatalog = result.topics; added.push(state.topicCatalog.find(topic => topic.id === topicId)?.name);
+    }
+  } catch (failure) { toast(failure.message, true, 'bottom-center'); }
+  if (!added.length) return;
+  collectionVersion++; updateCollection();
+  toast(`Added to “${added.filter(Boolean).join('”, “')}”`, false, 'bottom-center');
 }
 // Removing a post from a topic only drops this one membership, after a confirmation.
 function removeTopicDialog(id, name) {
@@ -1602,8 +1633,10 @@ document.addEventListener('click', async e => {
     else switch (button.dataset.action) {
       case 'unsave': await openUnsave(button); break;
       case 'sidebar-view': selectSidebarView(button.dataset.sidebarView); break;
+      case 'topics-view': setTopicsView('folders'); break;
       case 'card-view': {
         const view = button.dataset.cardView;
+        if (showingTopicsHome()) { setTopicsView('cards'); break; }
         if (view === state.cardView) break;
         state.cardView = view; localStorage.setItem('savex-card-view', view);
         document.querySelectorAll('[data-action="card-view"]').forEach(control => control.setAttribute('aria-pressed', String(control.dataset.cardView === view)));
@@ -1719,5 +1752,6 @@ function syncToolbar() {
 }
 addEventListener('scroll', syncToolbar, { passive: true }); addEventListener('resize', () => { fitFilterChips(); syncToolbar(); }); syncToolbar();
 enableTopicDrag({ topics: () => state.topicCatalog, describe: id => state.topicCatalog.find(topic => topic.id === id), move: moveTopic, arrange: arrangeTopics,
+  tag: { has: (postId, id) => state.demo || !!allPosts().find(post => post.id === postId)?.topics.includes(state.topicCatalog.find(topic => topic.id === id)?.name), add: tagPost },
   selection: () => state.filters.topics.map(name => state.topicCatalog.find(topic => topic.name === name)?.id).filter(Boolean) });
 boot();

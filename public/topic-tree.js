@@ -47,13 +47,31 @@ const THRESHOLD = 6, EDGE = 48, GAP = 14;
 // Sidebar rows ([data-topic-row]) take a drop above or below them to reorder,
 // or in the middle of a top-level folder to nest. Folder tiles take
 // [data-drop-topic] drops to nest. The list scrolls near its edges.
-export function enableTopicDrag({ topics, move, arrange, describe, selection = () => [] }) {
+export function enableTopicDrag({ topics, move, arrange, describe, selection = () => [], tag = null }) {
   let pending = null, drag = null, suppressClick = false, lastPointer = null, scrollFrame = 0;
   const line = () => document.querySelector('.topic-drop-line') || document.body.appendChild(Object.assign(document.createElement('div'), { className: 'topic-drop-line', ariaHidden: 'true' }));
   const clear = () => {
     document.querySelectorAll('.is-drop-target, .is-drop-root').forEach(el => el.classList.remove('is-drop-target', 'is-drop-root'));
     document.querySelector('.topic-drop-line')?.classList.remove('is-visible');
   };
+  // A post under a dragged topic is veiled with a badge naming what the drop will do.
+  const FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V7a2 2 0 0 1 2-2h4.5l2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
+  function veil(card, text, ready) {
+    const host = card.querySelector('.card-content') || card;
+    let el = host.querySelector(':scope > .topic-drop-overlay');
+    if (!el) { el = Object.assign(document.createElement('div'), { className: 'topic-drop-overlay', ariaHidden: 'true' }); el.innerHTML = `<span class="topic-drop-badge">${FOLDER}<span class="topic-drop-text"></span></span>`; host.append(el); }
+    el.classList.toggle('is-ready', ready); el.querySelector('.topic-drop-text').textContent = text;
+    return el;
+  }
+  function unveil(keep = null, done = '') {
+    for (const el of document.querySelectorAll('.topic-drop-overlay')) {
+      if (el === keep || el.dataset.leaving) continue;
+      el.dataset.leaving = '';
+      if (done) el.querySelector('.topic-drop-text').textContent = done;
+      if (reducedMotion.matches) { el.remove(); continue; }
+      el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: done ? 220 : 120, delay: done ? 380 : 0, easing: 'ease-out', fill: 'forwards' }).onfinish = () => el.remove();
+    }
+  }
   // Rows after the insertion point slide down to open a gap where the folder will land.
   function openGap(boundary) {
     const moved = new Set();
@@ -113,8 +131,11 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
     ghost.style.translate = `${event.clientX - drag.offsetX}px ${event.clientY - drag.offsetY}px`;
     const under = document.elementFromPoint(event.clientX, event.clientY);
     const list = under?.closest('#topic-navigation');
+    // The floating label guides moves within the sidebar; over posts the card's own overlay speaks instead.
+    ghost.classList.toggle('is-away', !under?.closest('.sidebar'));
     clear(); drag.action = null;
     if (list && drag.rows.length) {
+      unveil();
       const info = nearestRow(event.clientY), action = info && rowAction(info, event.clientY);
       if (action?.type === 'into') action.element.classList.add('is-drop-target');
       if (action?.type === 'place') {
@@ -129,7 +150,18 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
       drag.action = action;
     } else {
       openGap(Infinity);
-      const folder = under?.closest('[data-drop-topic]'), root = under?.closest('[data-drop-root]');
+      // A post card takes the dragged topics as tags instead of moving them.
+      const card = tag && under?.closest('.save-card[data-post-id]'), folder = under?.closest('[data-drop-topic]'), root = under?.closest('[data-drop-root]');
+      if (card) {
+        const postId = Number(card.dataset.postId), fresh = drag.ids.filter(item => !tag.has(postId, item));
+        const named = list => list.length === 1 ? `“${describe(list[0])?.name || 'this topic'}”` : `${list.length} topics`;
+        const overlay = veil(card, fresh.length ? `Add ${named(fresh)} to this post` : `Already in ${named(drag.ids)}`, !!fresh.length);
+        if (fresh.length) { card.classList.add('is-drop-target'); drag.action = { type: 'tag', postId, ids: fresh, element: card.querySelector('.card-footer') || card, overlay, label: named(fresh) }; }
+        ghost.querySelector('.topic-drag-hint').textContent = fresh.length ? 'Add to this post' : 'Already on this post'; ghost.classList.toggle('has-target', !!fresh.length);
+        unveil(overlay);
+        return;
+      }
+      unveil();
       if (folder && drag.ids.every(item => canNest(topics(), item, folder.dataset.dropTopic))) { folder.classList.add('is-drop-target'); drag.action = { type: 'into', parentId: folder.dataset.dropTopic, element: folder }; }
       else if (!folder && root && drag.ids.some(item => describe(item)?.parentId)) { root.classList.add('is-drop-root'); drag.action = { type: 'top', element: root }; }
     }
@@ -154,20 +186,23 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
     openGap(Infinity);
     const { ghost, sources, id, ids, origin, action } = drag; drag = null; cancelAnimationFrame(scrollFrame);
     clear(); sources.forEach(item => item.classList.remove('is-drag-source')); document.body.classList.remove('topic-dragging');
+    unveil(null, commit && action?.type === 'tag' ? `Added ${action.label}` : '');
     suppressClick = true; setTimeout(() => { suppressClick = false; }, 0);
     const done = commit && action, to = done ? action.element.getBoundingClientRect() : origin, from = ghost.getBoundingClientRect();
     const remove = () => ghost.remove();
-    if (reducedMotion.matches) remove();
+    if (reducedMotion.matches || ghost.classList.contains('is-away')) remove();
     // Settle into the new place, or glide back to where the drag began.
     else ghost.animate([{ opacity: 1, scale: 1 }, { opacity: 0, scale: done ? .7 : .95, translate: `${to.left + 12}px ${to.top + to.height / 2 - from.height / 2}px` }], { duration: done ? 220 : 200, easing: 'cubic-bezier(.22,.68,.2,1)', fill: 'forwards' }).onfinish = remove;
     if (!done) return;
-    if (ids.length === 1 && action.type === 'top') void move(id, null);
+    if (action.type === 'tag') void tag.add(action.postId, action.ids);
+    else if (ids.length === 1 && action.type === 'top') void move(id, null);
     else if (ids.length === 1 && action.type === 'into' && !action.element.matches('[data-topic-row]')) void move(id, action.parentId);
     else void arrange(arrangedLayout(topics(), ids, action), ids, action);
   }
   document.addEventListener('pointerdown', event => {
-    const source = event.button === 0 && event.target.closest('[data-drag-topic]');
-    pending = source ? { source, id: source.dataset.dragTopic, x: event.clientX, y: event.clientY } : null;
+    // A sidebar topic drags from anywhere on its row; a click that barely moves still opens it.
+    const source = event.button === 0 && event.target.closest('[data-drag-topic], #topic-navigation [data-topic-row]');
+    pending = source ? { source, id: source.dataset.dragTopic || source.dataset.topicRow, x: event.clientX, y: event.clientY } : null;
   });
   document.addEventListener('pointermove', event => {
     if (pending && Math.hypot(event.clientX - pending.x, event.clientY - pending.y) >= THRESHOLD) start(event);
