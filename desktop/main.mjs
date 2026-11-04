@@ -95,6 +95,8 @@ async function start() {
   });
   installMenu(); await createWindow();
   void updater.check().catch(log);
+  // Keep looking while the app stays open, so a new release shows up without a restart.
+  setInterval(() => void updater.check().catch(log), 4 * 60 * 60 * 1000);
   // Only a previously chosen set of accounts may sync on launch. Deep scans are never automatic.
   if (library.store.get('desktop_auto_sync') !== 'false' && !process.env.SAVEX_DESKTOP_DISABLE_AUTO_SYNC) {
     const previous = (await api('/sync')).job;

@@ -163,6 +163,22 @@ modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#
 
 modal.addEventListener('close', () => clearInterval(updatePoll));
 
+// The desktop app downloads and verifies new versions by itself; once one is ready,
+// a round button beside the name offers to install it.
+let appUpdate = null;
+function renderUpdateButton() {
+  const button = $('.update-button'); if (!button) return;
+  const ready = appUpdate?.phase === 'ready' && !!appUpdate.availableVersion;
+  button.hidden = !ready; if (!ready) return;
+  const label = `Install saveXtension ${appUpdate.availableVersion}`;
+  button.setAttribute('aria-label', label); button.title = `Version ${appUpdate.availableVersion} is ready · click to install`;
+}
+async function refreshUpdate() {
+  if (!window.saveXDesktop?.updateStatus) return;
+  try { appUpdate = await window.saveXDesktop.updateStatus(); } catch { return; }
+  renderUpdateButton();
+}
+if (window.saveXDesktop?.updateStatus) { void refreshUpdate(); setInterval(refreshUpdate, 60 * 1000); addEventListener('focus', refreshUpdate); }
 async function boot() {
   try {
     const session = await api('/session'); state.name = session.name; state.localMode = session.localMode; configureEmbeds(session.embedOrigin);
@@ -532,7 +548,7 @@ function render() {
   const posts = allPosts(), live = posts.filter(p => !p.archived);
   app.innerHTML = `<div class="workspace">
     <aside class="sidebar">
-      <div class="sidebar-header"><a href="/" class="brand">${icon('bookmark')}<span>save<span class="accent">X</span>tension</span></a><button class="icon-button settings-button" data-action="settings" aria-label="Settings & backups" title="Settings & backups">${icon('settings')}</button></div>
+      <div class="sidebar-header"><div class="sidebar-brand"><a href="/" class="brand">${icon('bookmark')}<span>save<span class="accent">X</span>tension</span></a><button type="button" class="update-button" data-action="install-update" hidden>${icon('download')}</button></div><button class="icon-button settings-button" data-action="settings" aria-label="Settings & backups" title="Settings & backups">${icon('settings')}</button></div>
       <nav aria-label="Library">
         <div class="source-nav">
           <div class="sidebar-tabs-bar"><div class="sidebar-tabs" role="tablist" aria-label="Browse saves by">
@@ -586,6 +602,7 @@ function render() {
   // The fade under the pinned tabs appears only once rows actually slide beneath them.
   $('.sidebar nav')?.addEventListener('scroll', event => { event.currentTarget.classList.toggle('is-scrolled', event.currentTarget.scrollTop > 0); renderSidebarMarkers(); }, { passive: true });
   ['.sidebar', '.sidebar-header', '.sidebar nav'].forEach(selector => { const element = $(selector); if (element) sidebarObserver.observe(element); });
+  renderUpdateButton();
   if (focusId && document.getElementById(focusId)) { const next = document.getElementById(focusId); next.focus({ preventScroll: true }); if (typeof selection === 'number' && next.type === 'text') next.setSelectionRange(selection, selection); }
 }
 function renderResults(restoreView) {
@@ -1650,6 +1667,7 @@ document.addEventListener('click', async e => {
         break;
       }
       case 'add-collection': addCollection(button); break;
+      case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
       case 'remove-topic': removeTopicDialog(Number(button.closest('[data-post-id]').dataset.postId), button.dataset.topicName); break;
       case 'retry-preview': retryEmbed(button.closest('.save-card')?.querySelector('.native-embed') || $('#modal .native-embed')); break;
