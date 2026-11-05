@@ -179,6 +179,8 @@ export class TopicLibrary {
   }
   assign({ postIds, topicIds, mode = 'add' }) {
     this.requirePosts(postIds); for (const id of topicIds) this.requireTopic(id);
+    // Nothing to add or remove: don't journal it or mark these saves curated.
+    if (!topicIds.length && mode !== 'replace') return { updated: 0, changeId: null };
     return this.change(`${mode}_topics`, () => {
       for (const postId of new Set(postIds)) {
         if (mode === 'replace') this.db.prepare('DELETE FROM post_topics WHERE post_id=?').run(postId);
@@ -260,10 +262,12 @@ export class TopicLibrary {
     const row = this.accessibleChanges().find(r => r.id === id && !r.undone);
     if (!row) throw new HttpError(404, 'Change unavailable or already undone.');
     const changes = JSON.parse(row.changes), noteIds = changes.filter(c => c.key.startsWith('post:') && c.after?.notes !== undefined).map(c => c.after.id);
+    // A note edit's only affected field is the note, so later topic changes don't block undoing it.
+    const noteOnly = c => c.after?.notes !== undefined && equal({ ...c.before, notes: 0 }, { ...c.after, notes: 0 });
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const current = snapshot(this.db, noteIds);
-      if (changes.some(c => !equal(current.get(c.key) ?? null, c.after))) throw new HttpError(409, 'These fields changed again. Undo newer changes first.');
+      if (changes.some(c => noteOnly(c) ? current.get(c.key)?.notes !== c.after.notes : !equal(current.get(c.key) ?? null, c.after))) throw new HttpError(409, 'These fields changed again. Undo newer changes first.');
       // Restore catalog before memberships; delete newly-created topics last.
       const restored = changes.filter(c => c.key.startsWith('topic:') && c.before);
       for (const c of restored) {
@@ -273,6 +277,7 @@ export class TopicLibrary {
       for (const c of restored) this.db.prepare('UPDATE topics SET parent_id=?,position=? WHERE id=?').run(c.before.parent_id ?? null, c.before.position ?? null, c.before.id);
       for (const c of changes.filter(c => c.key.startsWith('post:'))) {
         const p = c.before;
+        if (noteOnly(c)) { this.db.prepare('UPDATE posts SET notes=?,updated_at=? WHERE id=?').run(p.notes,updatedTime(this.db.prepare('SELECT updated_at FROM posts WHERE id=?').get(p.id).updated_at),p.id); continue; }
         this.db.prepare('DELETE FROM post_topics WHERE post_id=?').run(p.id);
         for (const t of p.topics) this.db.prepare('INSERT INTO post_topics VALUES(?,?)').run(p.id,t);
         this.db.prepare('UPDATE posts SET topics_curated=?,topics=?,updated_at=? WHERE id=?').run(p.curated,JSON.stringify(topicNames(this.db,p.id)),updatedTime(this.db.prepare('SELECT updated_at FROM posts WHERE id=?').get(p.id).updated_at),p.id);

@@ -8,8 +8,18 @@ test('canonical URLs remove tracking and unify X/Twitter identities', () => {
   assert.equal(canonicalPost('https://x.com/i/web/status/123456789').externalId, '123456789');
   assert.equal(canonicalPost('https://www.instagram.com/reel/AbC_-123/?igsh=secret').url, 'https://www.instagram.com/reel/AbC_-123/');
 });
+test('Instagram links that put the creator first resolve to the same post', () => {
+  for (const [link, url] of [
+    ['https://www.instagram.com/creator/reel/AbC_-123/?igsh=secret', 'https://www.instagram.com/reel/AbC_-123/'],
+    ['https://instagram.com/creator.name/p/AbC/', 'https://www.instagram.com/p/AbC/'],
+    ['https://www.instagram.com/creator/reels/AbC', 'https://www.instagram.com/reel/AbC/'],
+    ['https://www.instagram.com/creator/tv/AbC/', 'https://www.instagram.com/tv/AbC/'],
+    // A post whose shortcode happens to be a route name is still that post.
+    ['https://www.instagram.com/p/reel/', 'https://www.instagram.com/p/reel/']
+  ]) assert.equal(canonicalPost(link).url, url);
+});
 test('rejects unsupported, deceptive and credential-bearing URLs', () => {
-  for (const url of ['javascript:alert(1)', 'https://instagram.com.evil.com/p/abc', 'https://x.com@evil.com/a/status/1', 'https://x.com:444/a/status/1', 'https://x.com/a', 'https://www.instagram.com/username/saved/']) assert.throws(() => canonicalPost(url));
+  for (const url of ['javascript:alert(1)', 'https://instagram.com.evil.com/p/abc', 'https://x.com@evil.com/a/status/1', 'https://x.com:444/a/status/1', 'https://x.com/a', 'https://www.instagram.com/username/saved/', 'https://www.instagram.com/stories/tv/3456789012345678902/', 'https://www.instagram.com/stories/creator/3456789012345678902/', 'https://www.instagram.com/creator/', 'https://www.instagram.com/a/b/p/AbC/']) assert.throws(() => canonicalPost(url));
 });
 test('thumbnail allowlist and plain local topic suggestions', () => {
   assert.equal(imageUrl('https://pbs.twimg.com/media/abc.jpg'), 'https://pbs.twimg.com/media/abc.jpg');

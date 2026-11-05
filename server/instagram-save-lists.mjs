@@ -10,7 +10,14 @@ export const instagramSaveVisible = (store, post) => visibleInstagramSaves([post
 export function hiddenInstagramSaveIds(store) {
   const lists = instagramSaveLists(store);
   if (!Object.keys(lists).length) return [];
-  const posts = store.posts({ scope: 'all' }), visible = new Set(visibleInstagramSaves(posts, lists).map(post => post.id));
+  // This runs on most MCP calls, so load only what visibleInstagramSaves reads instead of hydrating every save.
+  const collections = new Map();
+  for (const { post_id, id, account } of store.db.prepare('SELECT m.post_id,c.id,c.account FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id').all()) {
+    if (!collections.has(post_id)) collections.set(post_id, []);
+    collections.get(post_id).push({ id, account });
+  }
+  const posts = store.db.prepare('SELECT id,platform,accounts FROM posts').all().map(post => ({ ...post, accounts: JSON.parse(post.accounts), collections: collections.get(post.id) || [] }));
+  const visible = new Set(visibleInstagramSaves(posts, lists).map(post => post.id));
   return posts.filter(post => !visible.has(post.id)).map(post => post.id);
 }
 export const instagramCollectionVisible = (store, collection) => {

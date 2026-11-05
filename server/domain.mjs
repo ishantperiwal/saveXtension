@@ -15,7 +15,8 @@ export function canonicalPost(input) {
     if (match) return { platform: 'x', externalId: match[1], url: `https://x.com/i/status/${match[1]}` };
   }
   if (host === 'instagram.com') {
-    const match = url.pathname.match(/^\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)(?:\/|$)/);
+    // Collection grids put the creator first; /stories/<account>/ is never a post.
+    const match = url.pathname.match(/^\/(?:(?!stories\/)[\w.]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]+)(?:\/|$)/);
     if (match) return { platform: 'instagram', externalId: match[2], url: `https://www.instagram.com/${match[1] === 'reels' ? 'reel' : match[1]}/${match[2]}/` };
   }
   if (isPinterestHost(host)) {

@@ -101,6 +101,69 @@ test('topic batches are atomic, rename and merge preserve IDs, curated choices s
     assert.equal(store.post(hidden.id).notes,'SECRET private note');
   } finally{store.close();}
 });
+test('search finds non-ASCII text in any case, in saves and topic names, and ASCII and literal matching are unchanged',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([
+      {url:'https://x.com/alice/status/1',text:'École Polytechnique'},
+      {url:'https://x.com/alice/status/2',text:'Москва and friends'},
+      {url:'https://x.com/alice/status/3',text:'Prix É100%_ exact'},
+      {url:'https://x.com/alice/status/4',text:'plain ASCII words'}
+    ]);
+    const api=mcpLibrary(store),{topic}=api.topics.create({name:'Éducation'}),total=query=>api.search({query}).total;
+    api.topics.assign({postIds:[store.posts().find(p=>p.url.endsWith('/4')).id],topicIds:[topic.id]});
+    for(const query of ['École','école','ÉCOLE','Москва','москва','МОСКВА','É100%_','é100%_','Éducation','ÉDUCATION','éducation','ascii','PLAIN','POLYTECHNIQUE']) assert.equal(total(query),1,query);
+    // Wildcards stay literal in a non-ASCII query.
+    for(const query of ['É%','é_00','ÉCOLES']) assert.equal(total(query),0,query);
+    const first=api.search({query:'é',limit:1}),second=api.search({query:'é',limit:5,cursor:first.nextCursor});
+    assert.equal(first.total,3);assert.equal(second.saves.length,2);assert.equal(new Set([...first.saves,...second.saves].map(s=>s.id)).size,3);
+  } finally{store.close();}
+});
+test('a caption cut at the search limit never splits an emoji',()=>{
+  const store=new Store(':memory:');
+  try {
+    const text=`${'x'.repeat(599)}😀 and more`;
+    store.importPosts([{url:'https://x.com/alice/status/1',text}]);
+    const api=mcpLibrary(store),[row]=api.search({}).saves;
+    assert.equal(row.text.isWellFormed(),true);assert.equal(row.text.length,600);assert.equal(row.textTruncated,true);
+    assert.equal(api.getSave(row.id).text,text);
+  } finally{store.close();}
+});
+test('topicIds stay in the same order as topics, including after a rename',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([{url:'https://x.com/alice/status/1',text:'one'}]);
+    const api=mcpLibrary(store),{id}=store.posts()[0];
+    // Enough topics that random UUID order cannot match name order by chance.
+    const ids=['Zebra','Apple','Mango','banana','Cherry','Yarrow','Fig','Olive'].map(name=>api.topics.create({name}).topic.id);
+    api.topics.assign({postIds:[id],topicIds:ids});
+    const aligned=save=>assert.deepEqual(save.topicIds.map(t=>api.topics.requireTopic(t).name),save.topics);
+    aligned(api.getSave(id));aligned(api.search({}).saves[0]);
+    api.topics.update({topicId:ids[1],name:'Zzz'});aligned(api.getSave(id));
+  } finally{store.close();}
+});
+test('an empty add or remove changes nothing, and an empty replace still clears topics',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([{url:'https://x.com/alice/status/1',text:'one'}]);
+    const lib=new TopicLibrary(store),{id}=store.posts()[0],before=store.post(id);
+    for(const args of [{},{mode:'add'},{mode:'remove'}]) assert.deepEqual(lib.assign({postIds:[id],topicIds:[],...args}),{updated:0,changeId:null});
+    assert.deepEqual(store.post(id),before);assert.deepEqual(lib.history(),[]);
+    const cleared=lib.assign({postIds:[id],topicIds:[],mode:'replace'});assert.equal(cleared.updated,1);assert(cleared.changeId);assert.equal(store.post(id).topicsCurated,true);
+  } finally{store.close();}
+});
+test('undoing a note ignores later topic changes and invalidates the old updatedAt',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([{url:'https://x.com/alice/status/1',text:'one',notes:'original'}]);
+    const lib=new TopicLibrary(store),{id,updatedAt}=store.posts()[0];
+    const {changeId}=lib.notes({postId:id,notes:'edited',expectedUpdatedAt:updatedAt}),{topic}=lib.create({name:'Later'});
+    lib.assign({postIds:[id],topicIds:[topic.id]});
+    const held=store.post(id).updatedAt;lib.undo(changeId);
+    const restored=store.post(id);assert.equal(restored.notes,'original');assert.deepEqual(restored.topics,['Later']);assert.equal(restored.topicsCurated,true);
+    assert.throws(()=>lib.notes({postId:id,notes:'stale',expectedUpdatedAt:held}),/changed/);
+  } finally{store.close();}
+});
 async function freePort(){const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const port=s.address().port;await new Promise(r=>s.close(r));return port;}
 async function serve(t, options={}) {
   const port=await freePort(),origin=`http://localhost:${port}`,app=createApp({origin,...options});app.server.listen(port,'127.0.0.1');await once(app.server,'listening');
@@ -143,6 +206,38 @@ test('real MCP HTTP clients discover tools, resources and prompts; enable/disabl
   await assert.rejects(client.listTools());
   await app.configure(true);
   const second=new Client({name:'savex-reconnected',version:'1'},{mode:{pin:'2026-07-28'}});await second.connect(new StreamableHTTPClientTransport(new URL(`${app.url}/mcp`)));assert((await second.listTools()).tools.length>=12);await second.close();
+});
+test('advertised tool schemas leave out generated regexes, while the server still enforces them with a useful message',async t=>{
+  const app=await serve(t);
+  app.store.importPosts([{url:'https://x.com/alice/status/1',text:'one'}]);
+  assert.equal((await app.configure(true)).status,200);
+  const client=new Client({name:'savex-test',version:'1.0.0'});
+  t.after(()=>client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${app.url}/mcp`)));
+  const schemas=JSON.stringify((await client.listTools()).tools.map(tool=>tool.inputSchema));
+  assert(!schemas.includes('"pattern"'));assert(schemas.includes('"format":"date-time"'));assert(schemas.includes('"format":"uuid"'));
+  const search=addedAfter=>client.callTool({name:'search_saves',arguments:{addedAfter}});
+  assert(!(await search('2026-01-01T00:00:00Z')).isError);
+  // The schema no longer spells out these rules, so the server's own check has to stop them.
+  for(const value of ['2026-01-01','2026-01-01t00:00:00z']) {
+    const rejected=await search(value);assert.equal(rejected.isError,true,value);assert.match(rejected.content[0].text,/ISO 8601/);
+  }
+  assert.equal((await client.callTool({name:'update_topic',arguments:{topicId:'not-a-uuid'}})).isError,true);
+});
+test('get_save_by_url resolves creator-first Instagram links without reaching deselected saves',async t=>{
+  const app=await serve(t);
+  app.store.importPosts([
+    {url:'https://www.instagram.com/reel/Shown/',text:'visible reel',sourceAccount:'@one',collections:[{account:'@one',name:'Ideas',url:'https://www.instagram.com/one/saved/ideas/1/'}]},
+    {url:'https://www.instagram.com/reel/Unseen/',text:'SECRET reel',sourceAccount:'@one',collections:[{account:'@one',name:'Private',url:'https://www.instagram.com/one/saved/private/2/'}]}
+  ]);
+  setInstagramSaveList(app.store,{account:'@one',collectionIds:[app.store.instagramCollections().find(c=>c.name==='Ideas').id]});
+  assert.equal((await app.configure(true)).status,200);
+  const client=new Client({name:'savex-test',version:'1.0.0'});
+  t.after(()=>client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${app.url}/mcp`)));
+  const lookup=name=>client.callTool({name:'get_save_by_url',arguments:{url:`https://www.instagram.com/creator/reel/${name}/?igsh=secret`}});
+  assert.equal((await lookup('Shown')).structuredContent.saves[0].url,'https://www.instagram.com/reel/Shown/');
+  const unseen=await lookup('Unseen');assert.equal(unseen.isError,true);assert(!JSON.stringify(unseen).includes('SECRET'));
 });
 test('MCP setting persists, defaults off for a new library, and is unavailable in authenticated hosting mode',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'savex-mcp-'));t.after(()=>rm(dir,{recursive:true,force:true}));

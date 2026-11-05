@@ -76,8 +76,10 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://i.pinimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-src ${preview.origin || "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     const requestOrigin = req.headers.origin;
+    // An unparseable target must not reject this handler: Node would exit the process.
+    let path;
+    try { path = new URL(req.url, appOrigin).pathname; } catch { return json(res, { error: 'Invalid request.' }, 400); }
     // Extension origins receive CORS only for their limited token-authenticated endpoints.
-    const path = new URL(req.url, appOrigin).pathname;
     const isExtensionRoute = path.startsWith('/api/extension/');
     if (isExtensionRoute && extensionOrigin(requestOrigin)) {
       res.setHeader('Access-Control-Allow-Origin', requestOrigin);

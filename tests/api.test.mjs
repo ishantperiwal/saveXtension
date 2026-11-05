@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { request } from 'node:http';
 import { createApp } from '../server/app.mjs';
 
 test('authenticated library → pair → incremental sync → revoke, with origin and device isolation', async () => {
@@ -37,5 +38,27 @@ test('authenticated library → pair → incremental sync → revoke, with origi
     assert.equal((await req('/logout', {})).status, 200); assert.equal((await req('/posts')).status, 401);
     assert.equal((await req('/login', { password: 'wrong' })).status, 401);
     assert.equal((await req('/login', { password: 'a long secure password' })).status, 200);
+  } finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.store.close(); }
+});
+
+test('a malformed request target gets a 400 and leaves the server running', async () => {
+  const app = createApp({ origin: 'http://localhost:3220' });
+  app.server.listen(3220, '127.0.0.1'); await once(app.server, 'listening');
+  // fetch would normalize these targets, so they go through a raw request.
+  const send = path => new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: 3220, path, headers: { Host: 'localhost:3220' } }, res => {
+      let body = ''; res.on('data', part => { body += part; }); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    // Without the guard the handler never answers, so fail here instead of hanging the run.
+    req.setTimeout(2000, () => req.destroy(new Error(`No response to ${path}`)));
+    req.on('error', reject); req.end();
+  });
+  try {
+    for (const target of ['//', 'http://', '//[']) {
+      const response = await send(target);
+      assert.equal(response.status, 400); assert.equal(JSON.parse(response.body).error, 'Invalid request.');
+      assert.equal(response.headers['x-content-type-options'], 'nosniff');
+      assert.equal((await send('/api/session')).status, 200);
+    }
   } finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.store.close(); }
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '../server/store.mjs';
-import { instagramSaveLists, setInstagramSaveList } from '../server/instagram-save-lists.mjs';
+import { hiddenInstagramSaveIds, instagramSaveLists, setInstagramSaveList } from '../server/instagram-save-lists.mjs';
 import { syncQueue } from '../server/sync.mjs';
 import { visibleInstagramSaves } from '../public/instagram-save-lists.js';
 const folder = (id, account='me') => ({ externalId:String(id),name:`Collection ${id}`,url:`https://www.instagram.com/${account}/saved/folder/${id}/` });
@@ -70,6 +70,32 @@ test('list visibility keeps shared membership, other owners, X and Chrome while 
   assert.equal(visibleInstagramSaves(posts,{}).length,8);
   assert.deepEqual(visibleInstagramSaves(posts,{'@me':[1]},['instagram:@me']).filter(p=>p.platform==='instagram'&&p.accounts.includes('@me')).map(p=>p.id),[1]);
   assert.deepEqual(visibleInstagramSaves(posts,{'@me':[1],'@other':[3]}).map(p=>p.id),[1,6,7,8]);
+});
+
+test('hidden IDs match the rule run on full saves, and the rule reads only what the narrow query loads',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([
+      {url:'https://www.instagram.com/p/Picked/',sourceAccount:'@Me',collections:[{account:'@Me',name:'Picked',url:'https://www.instagram.com/me/saved/picked/100/'}]},
+      {url:'https://www.instagram.com/p/Unpicked/',sourceAccount:'@Me',collections:[{account:'@Me',name:'Unpicked',url:'https://www.instagram.com/me/saved/unpicked/200/'}]},
+      {url:'https://www.instagram.com/p/NoFolder/',sourceAccount:'@Me'},
+      {url:'https://www.instagram.com/p/Archived/',sourceAccount:'@Me',archived:true},
+      {url:'https://www.instagram.com/p/Shared/',accounts:['@Me','@other']},
+      {url:'https://www.instagram.com/p/Other/',sourceAccount:'@other'},
+      {url:'https://x.com/alice/status/1',sourceAccount:'@Me'},
+      {url:'https://www.pinterest.com/pin/123/',sourceAccount:'@Me'},
+      {platform:'chrome',url:'https://example.org/guide'}
+    ]);
+    setInstagramSaveList(store,{account:'@Me',collectionIds:[store.instagramCollections().find(c=>c.name==='Picked').id]});
+    const full=store.posts({scope:'all'}),lists=instagramSaveLists(store),visible=new Set(visibleInstagramSaves(full,lists).map(p=>p.id)),hidden=hiddenInstagramSaveIds(store);
+    assert.deepEqual([...hidden].sort(),full.filter(p=>!visible.has(p.id)).map(p=>p.id).sort());
+    assert.deepEqual(full.filter(p=>hidden.includes(p.id)).map(p=>p.url.split('/').at(-2)).sort(),['Archived','NoFolder','Unpicked']);
+    // The narrow query must load every field the rule reads, or deselected saves would silently appear.
+    const read=new Set(),watch=(value,prefix='')=>new Proxy(value,{get:(target,key)=>{if(typeof key==='string')read.add(prefix+key);return target[key];}});
+    visibleInstagramSaves(full.map(p=>watch({...p,collections:p.collections.map(c=>watch(c,'collections.'))})),lists);
+    assert(read.has('collections.id'));
+    assert.deepEqual([...read].filter(field=>!['id','platform','accounts','collections','collections.id','collections.account'].includes(field)),[]);
+  } finally{store.close();}
 });
 
 test('HTTP selection updates are returned by library reads and applied to new sync jobs',async()=>{
