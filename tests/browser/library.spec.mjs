@@ -14,10 +14,6 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Settings & backups', exact: true })).toBeVisible();
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Settings & backups' }).click();
-  await page.getByLabel('Library name').fill('My inspiration');
-  await page.getByRole('button', { name: 'Save name' }).click();
-  expect(await page.evaluate(async () => (await (await fetch('/api/session')).json()).name)).toBe('My inspiration');
   await expect(page.locator('.library-name')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Favorites/ })).toHaveCount(0);
   await expect(page.locator('.archive-nav')).toBeVisible();
@@ -51,6 +47,7 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
   await page.screenshot({ path: 'test-results/local-library-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: 'Settings & backups' }).click();
+  await page.getByRole('button', { name: 'Backup', exact: true }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: 'Export library' }).click()]);
   const backup = JSON.parse(await readFile(await download.path(), 'utf8')); expect(backup.posts.find(post => post.id === fixture.id).notes).toBe('Try on Sunday');
   expect(errors).toEqual([]);

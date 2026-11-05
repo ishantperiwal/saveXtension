@@ -1,8 +1,8 @@
 # saveXtension
 
-Your Instagram saves and X bookmarks in one searchable library, on your computer.
+Your Instagram saves, X bookmarks and Pinterest pins in one searchable library, on your computer.
 
-Download for Mac (Apple Silicon) or Windows (64-bit) at **[ishantperiwal.github.io/saveXtension](https://ishantperiwal.github.io/saveXtension/)**. Sign in to X and Instagram inside the app; Chrome bookmarks are read straight from Chrome, including bookmarks synced from your other devices when Chrome sync is on. No browser extension is needed.
+Download for Mac (Apple Silicon) or Windows (64-bit) at **[ishantperiwal.github.io/saveXtension](https://ishantperiwal.github.io/saveXtension/)**. Sign in to X, Instagram and Pinterest inside the app; Chrome bookmarks are read straight from Chrome, including bookmarks synced from your other devices when Chrome sync is on. No browser extension is needed.
 
 The minimal download page lives in `website/`. `node scripts/build-download-page.mjs` generates `dist/downloads/` with links to the latest stable installer assets. The Download page workflow deploys to GitHub Pages after page changes or a successful Desktop installers run, so new releases refresh both download buttons without a browser-side GitHub API request.
 
@@ -10,7 +10,7 @@ The minimal download page lives in `website/`. `node scripts/build-download-page
 
 The Electron desktop app bundles its runtime and local server. Install the Mac DMG by dragging **saveXtension** to **Applications**, or run the Windows EXE installer. Opening the app starts the library automatically. Opening it again brings the existing window forward rather than starting a second server.
 
-Connect X and Instagram in **Settings → Accounts** (or follow the first Sync prompt). Each account signs in on its platform’s own page inside the desktop app and uses a separate persistent Electron session. Login sessions remain local across app restarts; reconnect if a platform expires the session or requests a check. The app does not copy Chrome cookies, store passwords in its library, or include social sessions in JSON exports or MCP responses.
+Connect X, Instagram and Pinterest in **Settings → Accounts** (or follow the first Sync prompt). With the optional Chrome extension connected (**Settings → Chrome extension**), adding an account can use your existing login in Chrome instead of a password: when you start that sign-in, the extension hands the app that one site's cookies, once. They go into that account's own session on your computer, are never written to the library, and Google's cookies are never included. Each account signs in on its platform’s own page inside the desktop app and uses a separate persistent Electron session. Login sessions remain local across app restarts; reconnect if a platform expires the session or requests a check. The app does not copy Chrome cookies, store passwords in its library, or include social sessions in JSON exports or MCP responses.
 
 Social scans, collection refreshes, metadata capture and confirmed unsaves run in hidden, sandboxed Electron windows with background throttling disabled. They reuse the shared collector and exact-account verification logic, preserve source ordering, and close their temporary pages after completion, failure or Stop. An unsave still requires confirmation and two account-matched unsaved observations after a verification reload before removing a local source save. Each account’s session is independent of Chrome and of the other accounts.
 
@@ -105,7 +105,7 @@ The sidebar control starts the selected sources:
 
 The installation dialog checks for readiness and starts the requested sync automatically when setup finishes. Closing that dialog cancels the pending request. Downloads do not repeat when you use Check installation; Download again and Reinstall remain available explicitly.
 
-Sign in to X or Instagram in Chrome normally. Social passwords and cookies are not sent to the library. Chrome still requires you to complete extension installation and permission approval yourself.
+Sign in to X or Instagram in Chrome normally. In this browser-extension setup, social passwords and cookies are not sent to the library. Chrome still requires you to complete extension installation and permission approval yourself.
 
 The same manual sync controls work from another browser or the Codex in-app browser when a connected Chrome helper is online.
 

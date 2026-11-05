@@ -26,14 +26,16 @@ Use these gates in order. Do not skip a gate because the server is reachable.
 
 7. Report evidence, not a success assumption. Say "Connected and verified" only after a successful in-client library_overview result. Otherwise use "Configured; verification pending" or "Failed." Include the client/version, reference, config shape and scope/path, validation and registration evidence, elapsed time, exact redacted failure details and the next action. Do not expose credentials or saved-post contents. Do not claim this session is connected until you have verified it.`;
 }
-export async function mountMcpSettings(root, { api, toast, esc, icon }) {
-  root.innerHTML = '<h3>MCP</h3><p class="muted" role="status">Loading…</p>';
+// The switch and copy button live in the section's header bar; the rest stays in its body.
+export async function mountMcpSettings(root, { api, toast, esc, icon, header }) {
+  root.innerHTML = '<p class="muted" role="status">Loading…</p>';
   let status;
-  try { status = await api('/mcp'); } catch (error) { root.innerHTML = `<h3>MCP</h3><p role="alert">${esc(error.message)}</p>`; return; }
+  try { status = await api('/mcp'); } catch (error) { root.innerHTML = `<p role="alert">${esc(error.message)}</p>`; return; }
   if (!root.isConnected) return;
   if (!status.available) { root.hidden = true; return; }
-  root.innerHTML = `<div class="mcp-setting-heading"><div><h3>MCP</h3><p class="muted">Use your saves in your AI app.</p></div><label class="mcp-switch"><input id="mcp-enabled" type="checkbox" role="switch" aria-label="Enable MCP server" ${status.enabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div id="mcp-details" ${status.enabled ? '' : 'hidden'}><div role="group" aria-label="Copy a connection prompt"><button type="button" class="mcp-copy-prompt" data-copy-mcp-prompt><span>Copy connection prompt</span>${icon('copy')}</button></div></div><p class="form-error" id="mcp-error" role="alert"></p>`;
-  const find = s => root.querySelector(s), toggle = find('#mcp-enabled');
+  root.innerHTML = '<p class="muted">Use your saves in your AI app.</p><p class="form-error" id="mcp-error" role="alert"></p>';
+  header.innerHTML = `<div id="mcp-details" ${status.enabled ? '' : 'hidden'}><div role="group" aria-label="Copy a connection prompt"><button type="button" class="icon-button mcp-copy-prompt" data-copy-mcp-prompt aria-label="Copy connection prompt" title="Copy connection prompt">${icon('copy')}</button></div></div><label class="mcp-switch"><input id="mcp-enabled" type="checkbox" role="switch" aria-label="Enable MCP server" ${status.enabled ? 'checked' : ''}><span aria-hidden="true"></span></label>`;
+  const find = s => root.querySelector(s) || header.querySelector(s), toggle = find('#mcp-enabled');
   toggle.onchange = async () => {
     const requested = toggle.checked; toggle.disabled = true; find('#mcp-error').textContent = '';
     try { status = await api('/mcp', { method:'POST',body:{enabled:requested} }); find('#mcp-details').hidden = !status.enabled; toggle.checked = status.enabled; }
@@ -50,16 +52,16 @@ export async function mountMcpSettings(root, { api, toast, esc, icon }) {
         const field = document.createElement('textarea');
         field.value = value; field.tabIndex = -1; field.setAttribute('aria-hidden', 'true');
         field.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
-        // A modal makes outside fields inert; keep the temporary copy field
-        // inside the active dialog and restore the button's focus afterward.
-        root.append(field);
+        // A modal makes outside fields inert, and a collapsed section hides its body; keep
+        // the temporary copy field in the visible bar and restore the button's focus afterward.
+        header.append(field);
         try { field.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
         finally { field.remove(); focused?.focus({preventScroll:true}); }
       }
       toast('Connection copied', false, 'bottom-center', 'Paste into any MCP-compatible AI app on this computer.');
     } catch { toast('Couldn’t copy. Try again.', true, 'bottom-center'); }
   }
-  for (const button of root.querySelectorAll('[data-copy-mcp-prompt]')) {
+  for (const button of header.querySelectorAll('[data-copy-mcp-prompt]')) {
     button.onclick = async () => {
       const focused = document.activeElement === button;
       button.disabled = true;

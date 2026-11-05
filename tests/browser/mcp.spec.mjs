@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
+
 test('Settings enables local MCP, copies a universal connection prompt, reflects LLM topic edits and blocks archived saves',async({page,context,request})=>{
   const origin='http://localhost:3211';
   const post=async(path,data)=>request.post(`${origin}${path}`,{headers:{Origin:origin},data});
@@ -44,7 +45,7 @@ test('Settings enables local MCP, copies a universal connection prompt, reflects
   expect(prompt).toContain('Configured; verification pending');
   expect(prompt).toContain('unless I explicitly stop you');
   await expect(copyButton).not.toHaveClass(/is-copied/);
-  await expect(copyButton).toHaveText('Copy connection prompt');
+  await expect(copyButton).toHaveAttribute('aria-label', 'Copy connection prompt');
   await expect(page.locator('#toast')).toContainText('Connection copied');
   await expect(page.locator('#toast .toast-detail')).toHaveText('Paste into any MCP-compatible AI app on this computer.');
   await expect(page.locator('#toast')).toHaveClass(/bottom-center/);

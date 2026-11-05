@@ -31,6 +31,12 @@ function fixtureSetup(ses) {
   });
 }
 
+// Settings is still animating back from behind a sheet just after one closes; click once it's still.
+async function closeSettings(page) {
+  await expect.poll(() => page.locator('#modal').evaluate(el => el.getAnimations().length + (el.dataset.stacking ? 1 : 0)), { timeout: 5000 }).toBe(0);
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(page.locator('#modal')).toBeHidden();
+}
 test('native sessions persist, two X accounts scan without focusing Chrome, and unsave verifies the correct isolated account', { timeout: 120000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'savex-native-')), appPath = join(dir, 'application'); await mkdir(appPath);
   for (const name of ['desktop', 'server', 'public', 'extension']) await cp(resolve(name), join(appPath, name), { recursive: true });
@@ -49,14 +55,25 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
     await expect.poll(async () => (await status()).nativeSocial?.online).toBe(true);
     await page.getByRole('button', { name: 'Settings & backups' }).click();
     for (const handle of ['alpha', 'beta']) {
-      const [login] = await Promise.all([desktop.waitForEvent('window'), page.getByRole('button', { name: 'Add X account', exact: true }).click()]);
+      await page.getByRole('button', { name: 'Add X account', exact: true }).click();
+      const [login] = await Promise.all([desktop.waitForEvent('window'), page.getByRole('button', { name: 'Sign in manually', exact: true }).click()]);
       await login.getByRole('button', { name: `Sign in @${handle}`, exact: true }).click();
       await expect.poll(() => page.evaluate(() => window.saveXDesktop.socialAccounts())).toContainEqual(expect.objectContaining({ platform: 'x', handle: `@${handle}`, status: 'connected' }));
       await expect.poll(() => login.isClosed()).toBe(true);
     }
     const accounts = await page.evaluate(() => window.saveXDesktop.socialAccounts()); assert.equal(accounts.length, 2);
+    // Browse opens the account's own site in a window that stays open, once per account.
+    const before = desktop.windows().length;
+    const [browsing] = await Promise.all([desktop.waitForEvent('window'), page.evaluate(id => window.saveXDesktop.browseSocial(id), accounts[0].id)]);
+    await browsing.waitForLoadState('domcontentloaded');
+    assert.match(browsing.url(), /^https:\/\/x\.com\//);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    assert.equal(browsing.isClosed(), false, 'it isn’t a sign-in window that closes itself');
+    await page.evaluate(id => window.saveXDesktop.browseSocial(id), accounts[0].id);
+    assert.equal(desktop.windows().length, before + 1, 'a second click reuses the window');
+    await browsing.close();
     assert.notEqual(accounts[0].id, accounts[1].id);
-    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+    await closeSettings(page);
     const seed = Array.from({ length: 7 }, (_, index) => ({ url: `https://x.com/creator/status/${400003 + index}`, accounts: ['@alpha', '@beta'] }));
     await page.request.post(origin + '/api/posts/import', { headers, data: { posts: seed } });
     for (const account of ['@alpha', '@beta']) {
@@ -79,10 +96,11 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
     // Instagram discovers native collections, records their membership, fetches
     // captions and verifies an unsave in its own persistent account session.
     await page.getByRole('button', { name: 'Settings & backups' }).click();
-    const [igLogin] = await Promise.all([desktop.waitForEvent('window'), page.getByRole('button', { name: 'Add Instagram account', exact: true }).click()]);
+    await page.getByRole('button', { name: 'Add Instagram account', exact: true }).click();
+    const [igLogin] = await Promise.all([desktop.waitForEvent('window'), page.getByRole('button', { name: 'Sign in manually', exact: true }).click()]);
     await igLogin.getByRole('button', { name: 'Sign in @iguser', exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.saveXDesktop.socialAccounts())).toContainEqual(expect.objectContaining({ platform: 'instagram', handle: '@iguser', status: 'connected' }));
-    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+    await closeSettings(page);
     const collectionReply = await (await page.request.post(origin + '/api/extension/instagram-collections', { headers, data: { account: '@iguser', collections: [{ name: 'Design', url: 'https://www.instagram.com/iguser/saved/design/123/', externalId: '123' }] } })).json();
     const collection = collectionReply.collections[0];
     const { runId: igSeed } = await (await page.request.post(origin + '/api/extension/runs', { headers, data: { platform: 'instagram', account: '@iguser', collectionId: collection.id } })).json();

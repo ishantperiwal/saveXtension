@@ -70,6 +70,7 @@ async function start() {
         clipboard.writeText(message.text); return true;
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
       case 'chromeBookmarksFound': return readChromeBookmarks().then(() => true, () => false);
+      case 'openDownloads': { const error = await shell.openPath(app.getPath('downloads')); if (error) throw new Error(error); return true; }
       case 'saveHelper': {
         const destination = helperFolder();
         await cp(library.helperPath, destination, { recursive: true, force: true });
@@ -78,6 +79,7 @@ async function start() {
       case 'connect': return connect(message.type);
       case 'socialAccounts': return social.status();
       case 'connectSocial': return social.connect(message.options);
+      case 'browseSocial': return social.browse(message.id);
       case 'disconnectSocial': return social.disconnect(message.id);
       case 'wakeSocial': social.wake(); return true;
       case 'returnAfterUnsave': {

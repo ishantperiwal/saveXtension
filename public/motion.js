@@ -93,7 +93,8 @@ window.addEventListener('resize', () => { for (const stage of stages.keys()) cle
 // re-checks the size, so content that changed mid-glide gets a follow-up.
 export function glideSize(element, { enabled = () => true, duration = 260 } = {}) {
   let last = null, running = null;
-  const size = () => { const { width, height } = element.getBoundingClientRect(); return { width, height }; };
+  // Layout size, so a surface that's merely scaled or moved doesn't count as resized.
+  const size = () => ({ width: element.offsetWidth, height: element.offsetHeight });
   const start = (from, to) => {
     const overflow = element.style.overflow; element.style.overflow = 'hidden';
     observer.unobserve(element);

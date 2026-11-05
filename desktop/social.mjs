@@ -92,6 +92,24 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     await ses.cookies.flushStore();
     if (!win.isDestroyed()) void win.loadURL(home(profile.platform)).catch(() => {});
   }
+  // A connected account's own site in a normal window, signed in with its saved session.
+  // One window per account; links to other sites open in the browser.
+  const browsers = new Map();
+  function browseAccount(id) {
+    const profile = accounts.find(item => item.id === id && item.status === 'connected');
+    if (!profile) throw new Error('Connect this account first.');
+    let win = browsers.get(id);
+    if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); return true; }
+    win = new BrowserWindow({ width: 1100, height: 900, title: `${platformLabel(profile.platform)} · ${profile.handle}`, backgroundColor: '#ffffff', autoHideMenuBar: true, webPreferences: { session: profileSession(profile), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false } });
+    const outside = url => { if (/^https?:/.test(url)) void shell.openExternal(url).catch(onError); };
+    win.webContents.on('will-navigate', (event, url) => { if (!socialUrl(url, profile.platform, true)) { event.preventDefault(); outside(url); } });
+    win.webContents.on('will-attach-webview', event => event.preventDefault());
+    win.webContents.setWindowOpenHandler(({ url }) => { if (socialUrl(url, profile.platform)) void win.loadURL(url).catch(onError); else outside(url); return { action: 'deny' }; });
+    win.on('closed', () => browsers.delete(id));
+    browsers.set(id, win);
+    void win.loadURL(profile.platform === 'x' ? 'https://x.com/home' : profile.platform === 'pinterest' ? 'https://www.pinterest.com/' : 'https://www.instagram.com/').catch(() => {});
+    return true;
+  }
   const chromeProfile = () => join(app.getPath('userData'), 'chrome-sign-in');
   const openChromes = new Set();
   async function signInWithChrome(login) {
@@ -326,11 +344,11 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     return publicAccounts();
   }
   return {
-    status: publicAccounts, connect, wake, openPost,
+    status: publicAccounts, connect, wake, openPost, browse: browseAccount,
     async disconnect(id) {
       const profile = accounts.find(item => item.id === id); if (!profile) throw new Error('Connection not found.');
       if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before disconnecting.');
-      logins.get(id)?.win.close();
+      logins.get(id)?.win.close(); browsers.get(id)?.destroy();
       await profileSession(profile).clearStorageData(); accounts = accounts.filter(item => item.id !== id); publish(); wake();
       // With nothing left connected, the app keeps no Google sign-in either.
       if (!accounts.length) await rm(chromeProfile(), { recursive: true, force: true }).catch(onError);
@@ -346,7 +364,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       for (const { win, timer } of logins.values()) { clearInterval(timer); win.removeAllListeners('closed'); win.destroy(); }
       logins.clear();
       for (const value of work.values()) value.win.destroy(); work.clear();
-      for (const viewer of viewers.values()) if (!viewer.isDestroyed()) viewer.destroy();
+      for (const viewer of [...viewers.values(), ...browsers.values()]) if (!viewer.isDestroyed()) viewer.destroy();
       for (const child of openChromes) child.kill();
       await worker.terminate();
     }

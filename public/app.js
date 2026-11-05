@@ -163,7 +163,7 @@ function showModal(content, wide = false) {
   $('.modal-close', modal).onclick = () => modal.close();
 }
 // Dialogs glide to fit new content. The enlarged post has its own entrance and resizing embeds.
-glideSize(modal, { enabled: () => modal.open && !modal.classList.contains('post-preview-dialog') });
+glideSize(modal, { enabled: () => modal.open && !modal.dataset.stacking && !modal.dataset.settling && !modal.classList.contains('post-preview-dialog') });
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
 modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; });
 
@@ -187,7 +187,7 @@ async function refreshUpdate() {
 if (window.saveXDesktop?.updateStatus) { void refreshUpdate(); setInterval(refreshUpdate, 60 * 1000); addEventListener('focus', refreshUpdate); }
 async function boot() {
   try {
-    const session = await api('/session'); state.name = session.name; state.localMode = session.localMode; configureEmbeds(session.embedOrigin);
+    const session = await api('/session'); state.localMode = session.localMode; configureEmbeds(session.embedOrigin);
     if (!session.authenticated) return authScreen(session.setupRequired);
     const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
@@ -646,12 +646,13 @@ function showingChromeSetup() {
   return !!window.saveXDesktop?.chromeBookmarksFound && !!state.sync?.nativeSocial?.enabled && !state.demo && !state.archive && !state.query.trim()
     && selectedSource() === 'chrome' && !allPosts().some(post => post.platform === 'chrome' && !post.archived);
 }
-function chromeHelperSteps(finish) {
+function chromeHelperSteps() {
+  const step = (done, content, action = '') => `<li class="${done ? 'is-done' : ''}"><div class="chrome-setup-step"><div>${content}</div>${action}</div></li>`;
   return `<ol class="chrome-setup-steps">
-        <li class="${chromeSetup.saved ? 'is-done' : ''}"><div><strong>Download the extension</strong><p>${chromeSetup.saved ? `Downloaded to <b>Downloads › saveXtension Chrome helper</b>.` : 'A folder named <b>saveXtension Chrome helper</b> goes to your Downloads.'}</p></div><button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}Download</button></li>
-        <li><div><strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p></div><div class="chrome-setup-buttons"><button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button><button class="text-button" type="button" data-action="copy-chrome-extensions">Copy address</button></div></li>
-        <li><div><strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p></div></li>
-        <li><div><strong>Click Load unpacked and choose the folder</strong><p>Pick <b>saveXtension Chrome helper</b> in your Downloads folder. ${finish}</p></div></li>
+        ${step(chromeSetup.saved, `<strong>Download the extension</strong><p>${chromeSetup.saved ? 'Downloaded to <b>Downloads › saveXtension Chrome helper</b>.' : 'A folder named <b>saveXtension Chrome helper</b> goes to your Downloads.'}</p>`, `<button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}Download</button>`)}
+        ${step(false, '<strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p>', '<button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button>')}
+        ${step(false, '<strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p>')}
+        ${step(false, '<strong>Click Load unpacked and choose the folder</strong><p>Pick <b>saveXtension Chrome helper</b> from your Downloads.</p>', '<button class="secondary" type="button" data-action="open-downloads">Open Downloads folder</button>')}
       </ol>`;
 }
 function refreshSetupPanel() { renderChromeHelperPage(); renderChromeHelperSettings(); if ($('.source-connect')) renderSourceConnect(); else if (showingChromeSetup()) renderChromeSetup(); }
@@ -666,27 +667,98 @@ function chromeHelperRow(from) {
   const hint = current === 'connected' ? 'Adding an account uses your sign-in in Chrome, with no password.' : 'Connect it to add accounts using your sign-in in Chrome, with no password.';
   return `<div class="chrome-helper-row" title="${hint}"><span class="chrome-helper-status is-${current}"><span class="chrome-setup-dot" aria-hidden="true"></span>Chrome extension<span class="chrome-helper-state">${label}</span></span>${current === 'connected' ? '' : `<button class="text-button" type="button" data-action="chrome-helper-page" data-from="${from}">${current === 'outdated' ? 'Update' : 'Connect'}</button>`}</div>`;
 }
+const chromeLinkVisual = () => `<span class="chrome-link-visual" aria-hidden="true"><span class="chrome-link-node">${sourceIcon('chrome')}</span><span class="chrome-link-path"><i></i><i></i><i></i></span><span class="chrome-link-node">${icon('bookmark')}</span></span>`;
 function renderChromeHelperSettings() {
-  const root = $('#chrome-helper-settings'); if (!root) return;
-  const html = chromeHelperRow('settings');
-  if (root.dataset.html !== html) { root.innerHTML = html; root.dataset.html = html; }
+  const status = $('#chrome-helper-settings'), about = $('#chrome-helper-about'); if (!status || !about) return;
+  const current = chromeHelperState(), label = { connected: 'Connected', outdated: 'Needs update', disconnected: 'Not connected' }[current];
+  const statusHtml = `<span class="chrome-helper-status is-${current}"><span class="chrome-setup-dot" aria-hidden="true"></span><span class="chrome-link-label">${label}</span></span>`;
+  const aboutHtml = current === 'connected'
+    ? '<p class="settings-panel-text">Adding an account now uses your sign-in in Chrome, with no password. For X, switch to that account in Chrome first.</p>'
+    : `<p class="settings-panel-text">${current === 'outdated' ? 'Your extension needs a quick update before it can do this.' : 'Add accounts in one click using your Chrome logins, with no passwords.'}</p><button class="secondary" type="button" data-action="chrome-helper-page" data-from="settings">${current === 'outdated' ? 'Update extension' : 'Connect extension'}</button>`;
+  if (status.dataset.html !== statusHtml) { status.innerHTML = statusHtml; status.dataset.html = statusHtml; }
+  if (about.dataset.html !== aboutHtml) { about.innerHTML = aboutHtml; about.dataset.html = aboutHtml; }
+}
+// Adding an account without the extension first offers the frictionless way, or the normal login.
+let pendingSignIn = null;
+function extensionReadyFor(platform) { const helper = state.sync?.chromeBrowser; return !!helper?.online && !!helper.chromeSessionSites?.includes(platform); }
+function connectAccount(options, onStart = () => {}) {
+  const start = async () => { onStart(); try { return await window.saveXDesktop.connectSocial(options); } catch (failure) { toast(failure.message, true); } };
+  if (extensionReadyFor(options.platform)) return start();
+  pendingSignIn = { name: platformName(options.platform), start };
+  signInPrompt();
+}
+function presentSheet(content) {
+  sheet.innerHTML = `<button class="icon-button modal-close" type="button" data-action="close-sheet" aria-label="Close dialog">${icon('close')}</button>${content}`;
+  if (!sheet.open) sheet.showModal();
+  if (modal.open && !modal.classList.contains('is-behind')) sinkModal();
+}
+function signInPrompt() {
+  chromeHelperFrom = '';
+  presentSheet(`<span class="chrome-setup-icon" aria-hidden="true">${sourceIcon('chrome')}</span><h2 id="sheet-title" class="sheet-prompt-title">Use your Chrome login <br>for ${esc(pendingSignIn.name)}?</h2><p class="chrome-setup-lead">Connect the Chrome extension to use that login here, with no password.</p><div class="sheet-actions"><button class="primary" type="button" data-action="chrome-helper-page" data-from="signin">Connect extension and use Chrome login</button><button class="secondary" type="button" data-action="continue-sign-in">Sign in manually</button></div>`);
 }
 let chromeHelperFrom = '';
+// A sheet slides up over whatever is open. Settings stays alive underneath, sunk back and dimmed.
+const sheet = $('#sheet');
+glideSize(sheet);
 function chromeHelperPage(from) {
   chromeHelperFrom = from;
-  const settings = from === 'settings', title = 'Connect the Chrome extension', bookmarks = from === 'bookmarks';
-  showModal(`<button class="text-button chrome-helper-back" type="button" data-action="chrome-helper-back" data-from="${esc(from)}" aria-label="${settings ? 'Back to settings' : 'Back'}">${icon('chevron')}${settings ? 'Settings' : 'Back'}</button><h2>${title}</h2><p class="chrome-setup-lead">${bookmarks ? 'The extension shares your Chrome bookmarks with saveXtension. It’s a one-time setup.' : 'If you’re signed in to X, Instagram or Pinterest in Chrome, the extension can pass that sign-in to saveXtension, so you don’t need a password. It’s a one-time setup.'}</p><div id="chrome-helper-page"></div><p class="chrome-setup-note">If Developer mode is greyed out, your organization doesn’t allow extensions on this computer.</p>`);
-  modal.classList.add('chrome-helper-dialog');
+  const label = from === 'settings' ? 'Settings' : 'Back';
+  presentSheet(`<button class="text-button chrome-helper-back" type="button" data-action="chrome-helper-back" aria-label="${from === 'settings' ? 'Back to settings' : 'Back'}">${icon('chevron')}${label}</button><h2 id="sheet-title">Connect the Chrome extension</h2><div id="chrome-helper-page"></div>`);
   renderChromeHelperPage();
 }
+// The dialog below tucks behind the sheet like a stacked card: resized to the sheet's height and
+// lined up so only a sliver of its top edge shows above it.
+const SHEET_PEEK = 14;
+function placeModalBehindSheet() {
+  const sheetHeight = sheet.offsetHeight, height = Math.max(40, sheetHeight - 24);
+  modal.style.height = `${height}px`;
+  modal.style.translate = `0 ${(innerHeight - sheetHeight) / 2 - SHEET_PEEK - (innerHeight - height) / 2}px`;
+}
+function sinkModal() {
+  clearTimeout(modalRiseTimer);
+  modal.dataset.stacking = 'true';
+  modal.style.height = `${modal.offsetHeight}px`; void modal.offsetHeight;
+  modal.classList.add('is-behind');
+  placeModalBehindSheet();
+}
+let modalRiseTimer;
+function raiseModal() {
+  if (!modal.classList.contains('is-behind')) return;
+  const current = modal.offsetHeight;
+  modal.style.height = ''; const natural = modal.offsetHeight;
+  modal.style.height = `${current}px`; void modal.offsetHeight;
+  modal.classList.remove('is-behind');
+  modal.style.translate = ''; modal.style.height = `${natural}px`;
+  modalRiseTimer = setTimeout(() => { modal.style.height = ''; delete modal.dataset.stacking; }, 400);
+}
+new ResizeObserver(() => { if (modal.classList.contains('is-behind')) placeModalBehindSheet(); }).observe(sheet);
+addEventListener('resize', () => { if (modal.classList.contains('is-behind')) placeModalBehindSheet(); }, { passive: true });
+function closeSheet() {
+  pendingSignIn = null;
+  if (!sheet.open || sheet.dataset.closing) return;
+  raiseModal();
+  sheet.classList.add('is-closing');
+  const finish = () => { sheet.close(); sheet.classList.remove('is-closing'); delete sheet.dataset.closing; };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+  sheet.dataset.closing = 'true';
+  const leaving = sheet.animate([{ translate: '0 0' }, { translate: '0 100vh' }], { duration: 280, easing: 'cubic-bezier(.4,0,.8,.6)', fill: 'forwards' });
+  leaving.onfinish = () => { finish(); leaving.cancel(); };
+}
+sheet.addEventListener('cancel', event => { event.preventDefault(); closeSheet(); });
+sheet.addEventListener('click', event => { if (event.target !== sheet) return; const box = sheet.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeSheet(); });
 function renderChromeHelperPage() {
   const root = $('#chrome-helper-page'); if (!root) return;
-  const current = chromeHelperState(), bookmarks = chromeHelperFrom === 'bookmarks', finish = bookmarks ? 'Your bookmarks start importing right away.' : 'Then come back and add your account.';
+  const current = chromeHelperState();
   // Any connected extension can share bookmarks, so that page has done its job: show the import.
-  if (bookmarks && current !== 'disconnected') { modal.close(); return; }
-  const html = current === 'connected'
-    ? '<p class="chrome-setup-status is-connected" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Connected. Adding an account now uses your sign-in in Chrome. For X, switch to that account in Chrome first.</p>'
-    : `${current === 'outdated' ? '<p class="chrome-setup-note">Your extension needs updating. Download it again, then load that folder in place of the old one.</p>' : ''}${chromeHelperSteps(finish)}${current === 'disconnected' ? '<p class="chrome-setup-status is-waiting" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Waiting for Chrome… This page updates on its own.</p>' : ''}`;
+  if (chromeHelperFrom === 'bookmarks' && current !== 'disconnected') { closeSheet(); return; }
+  const [title, detail] = {
+    connected: ['Connected to Chrome', 'Adding an account now uses your sign-in there. For X, switch to that account in Chrome first.'],
+    outdated: ['Your extension needs updating', 'Download it again and load that folder in place of the old one.'],
+    disconnected: ['Waiting for Chrome', 'This connects by itself once the extension is loaded.']
+  }[current];
+  const link = `<div class="chrome-link is-${current}" role="status" aria-live="polite">${chromeLinkVisual()}<div class="chrome-link-text"><strong>${title}</strong><span>${detail}</span></div></div>`;
+  const carryOn = current === 'connected' && pendingSignIn ? `<div class="sheet-actions"><button class="primary" type="button" data-action="continue-sign-in">Continue to ${esc(pendingSignIn.name)}</button></div>` : '';
+  const html = current === 'connected' ? `${link}${carryOn}` : `${chromeHelperSteps()}${link}`;
   if (root.dataset.html !== html) { root.innerHTML = html; root.dataset.html = html; }
 }
 function renderChromeSetup() {
@@ -1314,7 +1386,7 @@ function setupDialog(mode, targets, download = false, syncMode = 'quick', reques
     showModal('<h2>Connect accounts</h2><p>Sign in once. Your accounts stay connected on this computer.</p><section id="native-connect-panel" class="section-gap"></section><p class="setup-status" id="setup-status" role="status">Your scan starts after your accounts are connected.</p>');
     modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingSyncRequest = request; state.pendingMode = syncMode;
     const handles = value => Array.isArray(value) ? value : value?.startsWith('@') ? [value] : [];
-    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount), pinterest: handles(request.pinterestAccount) }, onChange: () => void syncStatus() });
+    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, connect: options => connectAccount(options), platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount), pinterest: handles(request.pinterestAccount) }, onChange: () => void syncStatus() });
     return;
   }
   const missing = mode === 'missing', offline = mode === 'offline', chromeBookmarks = targets.includes('chrome');
@@ -1627,7 +1699,6 @@ async function toggleArchive(id) {
 }
 function mountUpdateSettings() {
   if (!window.saveXDesktop?.updateStatus) return;
-  $('#library-form').insertAdjacentHTML('afterend', '<section class="app-updates settings-section" aria-labelledby="app-update-heading"><div class="app-update-heading"><h3 id="app-update-heading">App version</h3><span class="fine-print" id="app-update-current" role="status" aria-live="polite" hidden>· Up to date</span><span class="fine-print" id="app-update-version"></span></div><p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button></section>');
   const section = $('.app-updates'), button = $('#app-update-button'), progress = $('#app-update-progress');
   let latest, reading = false;
   function render(status) {
@@ -1663,25 +1734,38 @@ function mountUpdateSettings() {
   };
   void refreshUpdate(); updatePoll = setInterval(refreshUpdate, 1000);
 }
-// From Settings to one connected account's saves in the library.
-function browseAccount(platform, handle) {
-  state.archive = false; state.query = ''; const search = $('#search'); if (search) search.value = '';
-  state.filters = { ...defaultFilters(), sources: [platform], accounts: [`${platform}:${handle.toLowerCase()}`] };
-  modal.close(); selectSidebarView('accounts'); updateCollection();
+// Settings sections are containers that open and close; which ones are open is remembered.
+const openSettingsPanels = (() => { try { const saved = JSON.parse(localStorage.getItem('savex-settings-open')); if (Array.isArray(saved)) return new Set(saved); } catch { /* First visit. */ } return new Set(['accounts']); })();
+function settingsPanel(key, title, { className = '', detail = '', aside = '', headingId = '' }, body) {
+  const open = openSettingsPanels.has(key), bodyId = `settings-panel-${key}`;
+  return `<section class="settings-panel ${className} ${open ? 'is-open' : ''}" data-panel="${key}"><header class="settings-panel-header"><h3 ${headingId ? `id="${headingId}"` : ''}><button class="settings-panel-toggle" type="button" data-action="toggle-settings-panel" aria-expanded="${open}" aria-controls="${bodyId}">${esc(title)}${detail}</button></h3><div class="settings-panel-aside">${aside}</div>${icon('chevron', 'settings-panel-chevron')}</header><div class="settings-panel-body" id="${bodyId}"><div class="settings-panel-inner">${body}</div></div></section>`;
 }
+function toggleSettingsPanel(button) {
+  const panel = button.closest('.settings-panel'), open = panel.classList.toggle('is-open');
+  button.setAttribute('aria-expanded', String(open));
+  if (open) openSettingsPanels.add(panel.dataset.panel); else openSettingsPanels.delete(panel.dataset.panel);
+  try { localStorage.setItem('savex-settings-open', JSON.stringify([...openSettingsPanels])); } catch { /* Keep this session's choice. */ }
+  // The panel animates its own height and the dialog follows along, so the dialog needn't glide too.
+  modal.dataset.settling = 'true'; clearTimeout(settingsSettleTimer);
+  settingsSettleTimer = setTimeout(() => { delete modal.dataset.settling; }, 340);
+}
+let settingsSettleTimer;
 async function settingsDialog() {
   if (state.localMode) {
-    showModal(`<h2>Settings</h2><form id="library-form"><label>Library name<input name="name" value="${esc(state.name)}" maxlength="50" placeholder="My saves"></label><button class="primary" type="submit">Save name</button></form><section class="settings-section"><h3>Backup</h3><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div></section>`);
+    const desktop = !!window.saveXDesktop;
+    showModal(`<h2>Settings</h2><div class="settings-panels">
+      ${window.saveXDesktop?.socialAccounts ? settingsPanel('extension', 'Chrome extension', { aside: '<div id="chrome-helper-settings"></div>' }, '<div id="chrome-helper-about"></div>') : ''}
+      ${window.saveXDesktop?.socialAccounts ? settingsPanel('accounts', 'Accounts', { className: 'native-account-settings', detail: '<span class="settings-heading-detail" id="settings-account-count"></span>' }, '<div id="native-account-settings-list"></div>') : ''}
+      ${settingsPanel('mcp', 'MCP', { }, '<div class="mcp-settings"></div>')}
+      ${desktop && window.saveXDesktop.updateStatus ? settingsPanel('updates', 'App version', { className: 'app-updates', headingId: 'app-update-heading', aside: '<span class="settings-panel-note" id="app-update-current" role="status" aria-live="polite" hidden>· Up to date</span><span class="settings-panel-note" id="app-update-version"></span>' }, '<p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button>') : ''}
+      ${settingsPanel('backup', 'Backup', { }, `<div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div>`)}
+    </div>`);
     modal.classList.add('settings-dialog');
-    $('#library-form').onsubmit = async e => { e.preventDefault(); try { const result = await api('/library', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); state.name = result.name; modal.close(); render(); toast('Library name saved.'); } catch (error) { toast(error.message, true); } };
-    const mcpSection = document.createElement('section'); mcpSection.className = 'mcp-settings settings-section';
-    $('#library-form').insertAdjacentElement('afterend', mcpSection);
-    void mountMcpSettings(mcpSection, { api, toast, esc, icon });
+    const mcpSection = $('.mcp-settings', modal);
+    void mountMcpSettings(mcpSection, { api, toast, esc, icon, header: $('[data-panel="mcp"] .settings-panel-aside', modal) }).then(() => { if (mcpSection.hidden) mcpSection.closest('.settings-panel').hidden = true; });
     if (window.saveXDesktop?.socialAccounts) {
-      const section = document.createElement('section'); section.className = 'native-account-settings settings-section';
-      section.innerHTML = '<div class="native-accounts-heading"><h3>Accounts<span class="settings-heading-detail" id="settings-account-count"></span></h3><div id="chrome-helper-settings"></div></div><div id="native-account-settings-list"></div>';
-      $('#library-form').insertAdjacentElement('afterend', section);
-      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, onBrowse: browseAccount, onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.length}`; void syncStatus(); } });
+      const section = $('.native-account-settings', modal);
+      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, browse: true, connect: options => connectAccount(options), onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.filter(account => account.status === 'connected').length} connected`; void syncStatus(); } });
       renderChromeHelperSettings();
     }
     mountUpdateSettings(); renderSync(); return;
@@ -1821,14 +1905,17 @@ document.addEventListener('click', async e => {
         break;
       }
       case 'add-collection': addCollection(button); break;
-      case 'connect-source': sourceConnect.awaiting = button.dataset.platform; renderSourceConnect(); await window.saveXDesktop.connectSocial({ platform: button.dataset.platform }); break;
+      case 'connect-source': { const platform = button.dataset.platform; await connectAccount({ platform }, () => { sourceConnect.awaiting = platform; renderSourceConnect(); }); break; }
       case 'sync-source': await startSync('quick', sourceSyncRequest(button.dataset.platform)); renderSourceConnect(); break;
       case 'import-chrome': await startSync('quick', { ...selectedSyncRequest(), targets: ['chrome'] }); renderChromeSetup(); break;
+      case 'toggle-settings-panel': toggleSettingsPanel(button); break;
       case 'chrome-helper-page': chromeHelperPage(button.dataset.from || ''); break;
-      case 'chrome-helper-back': if (button.dataset.from === 'settings') await settingsDialog(); else modal.close(); break;
+      case 'chrome-helper-back': if (chromeHelperFrom === 'signin' && pendingSignIn) signInPrompt(); else closeSheet(); break;
+      case 'close-sheet': closeSheet(); break;
+      case 'continue-sign-in': { const pending = pendingSignIn; closeSheet(); await pending?.start(); break; }
       case 'save-chrome-helper': try { chromeSetup.saved = (await window.saveXDesktop.saveHelper()).path; refreshSetupPanel(); } catch (failure) { toast(failure.message, true); } break;
+      case 'open-downloads': try { await window.saveXDesktop.openDownloads(); } catch (failure) { toast(failure.message, true); } break;
       case 'open-chrome-extensions': try { await window.saveXDesktop.openExtensions(); } catch (failure) { toast(failure.message, true); } break;
-      case 'copy-chrome-extensions': try { await window.saveXDesktop.copyText('chrome://extensions'); button.textContent = 'Copied'; } catch (failure) { toast(failure.message, true); } break;
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
       case 'remove-topic': removeTopicDialog(Number(button.closest('[data-post-id]').dataset.postId), button.dataset.topicName); break;

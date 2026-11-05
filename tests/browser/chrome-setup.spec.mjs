@@ -6,7 +6,7 @@ test('the Chrome page guides loading the helper when Chrome’s bookmarks aren�
     const known = {
       chromeBookmarksFound: async () => false, helperInfo: async () => ({ version: '1.0.0', path: '/helper' }),
       saveHelper: async () => { window.calls.push('save'); return { path: '/Users/me/Downloads/saveXtension Chrome helper' }; },
-      openExtensions: async () => { window.calls.push('open'); return true; }, copyText: async text => { window.calls.push(`copy:${text}`); return true; },
+      openExtensions: async () => { window.calls.push('open'); return true; }, openDownloads: async () => { window.calls.push('downloads'); return true; }, copyText: async text => { window.calls.push(`copy:${text}`); return true; },
       wakeSocial: async () => { window.calls.push('wake'); return true; }
     };
     window.saveXDesktop = new Proxy(known, { get: (target, key) => target[key] || (async () => null) });
@@ -22,17 +22,20 @@ test('the Chrome page guides loading the helper when Chrome’s bookmarks aren�
   await expect(panel.locator('.chrome-helper-row')).toContainText('Not connected');
   await expect(panel.locator('.chrome-setup-steps'), 'the steps have their own page').toHaveCount(0);
   await panel.getByRole('button', { name: 'Connect', exact: true }).click();
-  const setup = page.locator('#modal');
+  const setup = page.locator('#sheet');
   await expect(setup.locator('.chrome-setup-steps > li')).toHaveCount(4);
-  await expect(setup.locator('.chrome-setup-steps > li').last()).toContainText('Your bookmarks start importing right away.');
-  await expect(setup).toContainText('If Developer mode is greyed out');
+  await expect(setup.locator('.chrome-setup-warning')).toHaveCount(0);
+  const stepOne = setup.locator('.chrome-setup-step').first(), text = await stepOne.locator('p').boundingBox(), button = await stepOne.getByRole('button', { name: 'Download', exact: true }).boundingBox();
+  expect(button.y, 'the button sits below its step’s text').toBeGreaterThanOrEqual(text.y + text.height);
   await expect(setup.getByRole('status')).toContainText('Waiting for Chrome');
-  await setup.getByRole('button', { name: 'Download' }).click();
+  await expect(setup.locator('.chrome-setup-lead'), 'only the steps and the status').toHaveCount(0);
+  await expect(setup.getByRole('button', { name: 'Copy address' })).toHaveCount(0);
+  await setup.getByRole('button', { name: 'Download', exact: true }).click();
   await expect(setup.locator('.chrome-setup-steps > li').first()).toContainText('Downloads › saveXtension Chrome helper');
   await expect(setup.locator('.chrome-setup-steps > li').first()).toHaveClass(/is-done/);
   await setup.getByRole('button', { name: 'Open in Chrome' }).click();
-  await setup.getByRole('button', { name: 'Copy address' }).click();
-  await expect.poll(() => page.evaluate(() => window.calls)).toEqual(['save', 'open', 'copy:chrome://extensions']);
+  await setup.getByRole('button', { name: 'Open Downloads folder' }).click();
+  await expect.poll(() => page.evaluate(() => window.calls)).toEqual(['save', 'open', 'downloads']);
   // Chrome loads the extension: the setup page closes by itself and the import takes over.
   status.chromeBrowser = { online: true, bookmarksReady: true };
   await expect(setup).not.toBeVisible({ timeout: 5000 });
