@@ -75,7 +75,8 @@ The server advertises its tools, resource guide and an **organize_library** prom
 | --- | --- |
 | `library_overview` | Active counts, source accounts, date coverage, topics, Instagram collections and Chrome folders. |
 | `search_saves` | Paginated summaries with original URLs; combine text, source, saved-by account, topic, source collection, folder, kind, note presence, unorganized and date filters. |
-| `get_saves`, `get_save_by_url` | Full captured captions/text, original links, media references, author, saved-by accounts, notes, tags, topics, dates and source memberships. |
+| `get_saves`, `get_save_by_url` | Full captured captions/text, original links, a `savedImageUrl` for the local image copy that works while saveXtension is running, media references, author, saved-by accounts, notes, tags, topics, dates and source memberships. |
+| `get_save_images` | The saved cover image of up to 8 saves, returned as images for vision-capable models. A video has one preview frame at most. |
 | `list_topics`, `create_topic`, `update_topic` | Browse and create local topics; rename them or edit descriptions. |
 | `set_save_topics` | Atomically add, remove or replace memberships for up to 200 saves. An empty replacement clears topics. |
 | `merge_topics`, `delete_topic` | Merge duplicate topics; delete an empty topic without deleting saves. |
@@ -163,13 +164,13 @@ Posts load live from their platforms. While an embed is queued or loading, its c
 
 Confirmed failed previews automatically retry while visible: after 5 seconds, then 10, 20 and at most 30 seconds between continued failures. Retries pause offscreen, behind an open dialog, while offline or while the app is hidden. They share the six-load preview budget and yield to fresh visible previews. Healthy players and attempts still loading remain intact. Manual Retry is always available and resets the delay. Platform error messages inside a cross-origin widget cannot always be detected; those may still need manual Retry.
 
-Links, searchable metadata, classifications and your annotations stay in SQLite. Post images and video are not copied into the library; the old generated image cache is removed on upgrade. Richer metadata capture is best effort.
+Links, searchable metadata, classifications and your annotations stay in SQLite. Each save's cover image is also copied to an `images` folder beside the library while its link still works, because Instagram links expire within days. Other carousel images and videos are not copied. A failed image is tried again when a sync brings a new link, or after a day. In the desktop app, a separate background task then goes back to the posts whose links have expired, one at a time with long gaps, ticked collections first. It runs only when no scan, unsave or sign-in is running, gives way as soon as one starts, stops for a day on a login or security check, and gives up on a post after three tries. Turn it off with **Library → Recover expired images in the background**. The old generated image cache is removed on upgrade. Richer metadata capture is best effort.
 
 ## Backups
 
-**Settings & backups → Export library** downloads JSON with your saves and annotations. **Settings → Import a file** accepts saveXtension JSON backups, JSON/HTML/TXT URL lists and supported X archive JS data files. ZIP archives must be extracted first; imported scripts are never executed.
+**Settings & backups → Export library** downloads JSON with your saves and annotations. Saved images are left out to keep it small, so a restored library downloads them again from any links that still work, and a sync can bring new links for posts that still exist. **Settings → Import a file** accepts saveXtension JSON backups, JSON/HTML/TXT URL lists and supported X archive JS data files. ZIP archives must be extracted first; imported scripts are never executed.
 
-For a full library database backup, stop the server and copy the entire `data/` folder. Data is stored in `data/savextension.sqlite`.
+For a full library database backup, stop the server and copy the entire `data/` folder. Data is stored in `data/savextension.sqlite`, and saved images in `data/images/`.
 
 ## Local configuration
 

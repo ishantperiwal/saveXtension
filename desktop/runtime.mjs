@@ -113,7 +113,7 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
   let instance, origin;
   for (let offset = 0; offset < 20; offset++) {
     origin = `http://localhost:${initialPort + offset}`;
-    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), origin, localMode: true, nativeTransport });
+    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), origin, localMode: true, nativeTransport });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(initialPort + offset, '127.0.0.1', resolve); });
       break;

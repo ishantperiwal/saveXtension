@@ -7,6 +7,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
 import { previewServer } from './embeds.mjs';
 import { websitePreviews } from './website-previews.mjs';
+import { savedImages } from './saved-images.mjs';
+import { BUSY } from '../public/busy-messages.js';
 import { noteLinkAssets } from './note-link-assets.mjs';
 import { instagramSaveLists, setInstagramSaveList } from './instagram-save-lists.mjs';
 import { syncQueue } from './sync.mjs';
@@ -18,19 +20,21 @@ const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport } = {}) {
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, imageDownload } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
   const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync);
-  const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, 'Wait for the current unsave to finish.'); return sync.enqueue(...args); };
+  const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, BUSY.scan.title); return sync.enqueue(...args); };
   // Discard the generated image cache; previews are served by the platforms.
   store.db.exec('DROP TABLE IF EXISTS media_cache');
   const preview = previewServer(new URL(origin).origin);
   const websites=websitePreviews(store,{download:websiteDownload});
+  const images = savedImages(store, { dir: imagesDir, download: imageDownload });
+  store.onPostsImported = images.schedule; store.onPostDelete = images.forget;
 
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
-  const mcp = createLibraryMcp(store, { origin: appOrigin, localMode });
+  const mcp = createLibraryMcp(store, { origin: appOrigin, localMode, images });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -242,6 +246,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const image=await websites.image(post.url);if(!image)throw new HttpError(404,'No website image available.');
           res.writeHead(200,{'Content-Type':image.type,'Content-Length':image.bytes.length,'Cache-Control':'private, max-age=1800'});res.end(image.bytes);return;
         }
+        const imagePath=path.match(/^\/api\/posts\/(\d+)\/image$/);
+        if(imagePath&&req.method==='GET'){
+          if(req.headers['sec-fetch-site']==='cross-site')throw new HttpError(403,'Saved images are available only in your library.');
+          const image=await images.read(Number(imagePath[1]));if(!image)throw new HttpError(404,'No saved image.');
+          res.writeHead(200,{'Content-Type':image.type,'Content-Length':image.bytes.length,'Cache-Control':'private, max-age=1800'});res.end(image.bytes);return;
+        }
         const unsaveAck=path.match(/^\/api\/unsave\/([a-f0-9]+)\/ack$/);
         if(localMode && unsaveAck && req.method==='POST'){await body(req);return json(res,unsaves.acknowledge(unsaveAck[1]));}
         const unsavePost = path.match(/^\/api\/posts\/(\d+)\/unsave(?:\/(prepare))?$/);
@@ -255,7 +265,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const result = req.method === 'DELETE'
             ? topicLibrary.delete({ topicId: topic[1] }, { removeMemberships: true })
             : await (async input => Object.hasOwn(input, 'parentId') ? topicLibrary.move({ topicId: topic[1], parentId: input.parentId }) : topicLibrary.update({ topicId: topic[1], name: input.name }))(await body(req));
-          return json(res, { ...result, posts: store.posts({ scope: 'all' }), topics: topicCatalog(store.db) });
+          return json(res, { ...result, posts: images.annotate(store.posts({ scope: 'all' })), topics: topicCatalog(store.db) });
         }
         if (localMode && path === '/api/library' && req.method === 'POST') {
           const input = await body(req); store.set('name', text(input.name, 50) || 'My saves');
@@ -269,7 +279,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (path === '/api/instagram-save-list' && req.method === 'POST') return json(res, { instagramSaveLists: setInstagramSaveList(store, await body(req)) });
         if (path === '/api/posts' && req.method === 'GET') {
           const scope = new URL(req.url, appOrigin).searchParams.get('scope') || 'active';
-          return json(res, { embedOrigin: preview.origin, posts: store.posts({ scope }), runs: store.runs(), instagramCollections: store.instagramCollections(), instagramSaveLists: instagramSaveLists(store), topics: topicCatalog(store.db) });
+          return json(res, { embedOrigin: preview.origin, posts: images.annotate(store.posts({ scope })), runs: store.runs(), instagramCollections: store.instagramCollections(), instagramSaveLists: instagramSaveLists(store), topics: topicCatalog(store.db) });
         }
         if (path === '/api/posts/import' && req.method === 'POST') {
           const input = await body(req);
@@ -312,7 +322,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       if (!(e instanceof HttpError)) console.error(e);
     }
   });
-  server.on('listening', () => preview.start());
-  server.on('close', () => { preview.close(); void mcp.close(); });
-  return { server, store, setupCode, mcp, sync, unsaves };
+  server.on('listening', () => { preview.start(); images.schedule(); });
+  server.on('close', () => { preview.close(); images.close(); void mcp.close(); });
+  return { server, store, setupCode, mcp, sync, unsaves, images };
 }

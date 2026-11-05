@@ -102,6 +102,25 @@ test('Pinterest appears in the desktop sidebar with boards as sub-rows that filt
   expect(queued[0]).toMatchObject({ targets: ['pinterest'], pinterestAccount: '@maker', pinterestCollectionId: 40, mode: 'quick' });
 });
 
+test('a refused action says what is blocked and why, stays above dialogs, and offers Stop scan', async ({ page }) => {
+  const { state } = await desktopLibrary(page, [], [xPost]), stops = [];
+  await page.route('**/api/sync/stop', route => { stops.push(true); state.job = null; return route.fulfill({ json: { job: null } }); });
+  state.job = { id: 'running', status: 'running', targets: ['x'], xAccount: 'current', mode: 'quick', results: [] };
+  await page.reload();
+  await page.evaluate(() => { window.saveXDesktop.connectSocial = async () => { throw new Error("Error invoking remote method 'savex-desktop': Error: Can’t connect an account during a scan or unsave"); }; });
+  await page.locator('[data-nav-account="pinterest:*"]').click();
+  await page.getByRole('region', { name: 'Connect Pinterest', exact: true }).getByRole('button', { name: 'Sign in to Pinterest', exact: true }).click();
+  await page.getByRole('button', { name: 'Sign in manually', exact: true }).click();
+  const notice = page.locator('#toast');
+  await expect(notice).toBeVisible(); await expect(notice).toHaveClass(/error/);
+  await expect(notice).toContainText('Can’t connect an account during a scan or unsave');
+  await expect(notice).toContainText('Scans and unsaves use your signed-in accounts');
+  await expect(notice).not.toContainText('Error invoking');
+  await notice.getByRole('button', { name: 'Stop scan', exact: true }).click();
+  await expect.poll(() => stops.length).toBe(1);
+  await expect(notice).toBeHidden();
+});
+
 test('without a Pinterest account its empty page offers sign-in', async ({ page }) => {
   const { connections } = await desktopLibrary(page, [], [xPost]);
   await page.locator('[data-nav-account="pinterest:*"]').click();

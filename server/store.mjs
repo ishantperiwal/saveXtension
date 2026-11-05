@@ -206,6 +206,7 @@ export class Store {
         }
       }
       this.db.exec('COMMIT');
+      this.onPostsImported?.();
       return result;
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
   }
@@ -235,6 +236,7 @@ export class Store {
       else if(JSON.stringify(changes)!==row.changes)this.db.prepare('UPDATE mcp_changes SET changes=? WHERE id=?').run(JSON.stringify(changes),row.id);
     }
     for(const key of [`detail:${post.url}`,`detail-attempt:${post.url}`,...post.accounts.map(account=>`unsave-attempt:${account.toLowerCase()}:${post.url}`)])this.db.prepare('DELETE FROM settings WHERE key=?').run(key);
+    this.onPostDelete?.(id);
     this.db.prepare('DELETE FROM posts WHERE id=?').run(id);
   }
   startRun(deviceId, platform, account, mode = 'quick', collectionId = null) {

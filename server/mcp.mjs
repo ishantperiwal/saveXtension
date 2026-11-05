@@ -27,12 +27,13 @@ const searchSchema = z.object({
   orderBy: z.enum(['addedAt','savedAt','updatedAt','publishedAt']).default('savedAt'),
   limit: z.number().int().min(1).max(100).default(30), cursor: z.string().max(2000).optional()
 }).strict();
+const MODEL_IMAGE_TYPES = new Set(['image/jpeg','image/png','image/webp','image/gif']), MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const UNAVAILABLE = 'Save unavailable. Archived saves and Instagram or Pinterest saves hidden in saveXtension are excluded.';
 const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
-function availability(p) {
-  return { capturedText: !!p.text, originalUrl: true, mediaReferences: p.media.length, videoAnalysis: 'not_provided', access: 'Original post and media may require login or may no longer be available.' };
+function availability(p, savedImage) {
+  return { capturedText: !!p.text, originalUrl: true, mediaReferences: p.media.length, savedImage, videoAnalysis: 'not_provided', access: 'Original post and media may require login or may no longer be available.' };
 }
-export function mcpLibrary(store) {
+export function mcpLibrary(store, { images, origin } = {}) {
   const hidden = () => hiddenInstagramSaveIds(store), topics = new TopicLibrary(store, { hidden }), db = store.db;
   // SQLite's lower() and LIKE fold only ASCII, so non-ASCII queries compare through this instead.
   db.function('savex_fold', { deterministic: true }, value => value.toLowerCase());
@@ -40,8 +41,9 @@ export function mcpLibrary(store) {
   function getSave(postId) {
     const p = store.post(postId);
     if (!p || p.archived || !instagramSaveVisible(store, p)) throw new HttpError(404, UNAVAILABLE);
+    const saved = !!images?.has(p.id);
     // Ordered like topics, so the two arrays line up.
-    return { ...p, topicIds: db.prepare('SELECT m.topic_id FROM post_topics m JOIN topics t ON t.id=m.topic_id WHERE m.post_id=? ORDER BY t.name_key').all(p.id).map(t => t.topic_id), contentAvailability: availability(p) };
+    return { ...p, topicIds: db.prepare('SELECT m.topic_id FROM post_topics m JOIN topics t ON t.id=m.topic_id WHERE m.post_id=? ORDER BY t.name_key').all(p.id).map(t => t.topic_id), savedImageUrl: saved && origin ? `${origin}/api/posts/${p.id}/image` : null, contentAvailability: availability(p, saved) };
   }
   function search(input) {
     const args = searchSchema.parse(input), clauses = [shown], params = [JSON.stringify(hidden())];
@@ -94,15 +96,15 @@ export function mcpLibrary(store) {
   }
   return { topics,getSave,search,overview };
 }
-export function createLibraryMcp(store, { origin, localMode }) {
-  const library=mcpLibrary(store); let handler=null,node=null,lastActivity=null;
+export function createLibraryMcp(store, { origin, localMode, images }) {
+  const library=mcpLibrary(store,{images,origin}); let handler=null,node=null,lastActivity=null;
   const enabled=()=>localMode && store.get('mcp_enabled')==='true';
   const requireEnabled=()=>{ if(!enabled()) throw new HttpError(503,'MCP server is disabled. Enable it in saveXtension Settings.'); };
   function factory() {
     requireEnabled();
     const server=new McpServer({ name:'saveXtension', version }, { instructions,maxToolInputElements:2000 });
     const register=(name,description,schema,run,write=false)=>server.registerTool(name,{ description,inputSchema:schema,annotations:{ readOnlyHint:!write,destructiveHint:write,idempotentHint:!write,openWorldHint:false } },async args=>{
-      try { requireEnabled(); lastActivity=new Date().toISOString(); return result(run(args)); }
+      try { requireEnabled(); lastActivity=new Date().toISOString(); const output=await run(args); return output?.content?output:result(output); }
       catch(e){ if(e instanceof HttpError || e instanceof z.ZodError) return { isError:true,content:[{ type:'text',text:e.message }] }; console.error('MCP tool failed',name,e); return { isError:true,content:[{type:'text',text:'Local library operation failed.'}] }; }
     });
     register('library_overview','Get accessible counts, source accounts, Instagram collections, Chrome folders, date coverage and local topics. All counts exclude archive.',z.object({}).strict(),()=>library.overview());
@@ -114,6 +116,16 @@ export function createLibraryMcp(store, { origin, localMode }) {
       if(!args.platform || args.platform==='chrome') { try { candidates.push(canonicalBookmark(args.url)); } catch{} }
       const saves=candidates.flatMap(c=>dbRows(store,c)).map(row=>library.getSave(row.id));
       if(!saves.length) throw new HttpError(404,UNAVAILABLE); return {saves};
+    });
+    // Content only: clients that prefer structuredContent would otherwise drop the images.
+    register('get_save_images','See the saved cover image of up to 8 accessible saves, returned as images for vision-capable models. Use it when a caption is too thin to tell what a save shows. A save has one image at most, and for a video that is one preview frame. contentAvailability.savedImage shows which saves already have a copy, and get_saves gives each copy a savedImageUrl that does not expire while saveXtension is running. Entire request fails if any save is unavailable.',z.object({postIds:z.array(id).min(1).max(8)}).strict(),async({postIds})=>{
+      const content=[];let budget=MAX_IMAGE_BYTES;
+      for(const postId of new Set(postIds)){
+        const p=library.getSave(postId),image=await images?.ensure(postId),fits=!!image&&MODEL_IMAGE_TYPES.has(image.type)&&image.bytes.length<=budget;
+        content.push({type:'text',text:JSON.stringify({id:p.id,platform:p.platform,url:p.url,kind:p.kind,image:fits?'attached':image?'omitted, request it separately':'unavailable',savedImageUrl:image&&origin?`${origin}/api/posts/${p.id}/image`:null})});
+        if(fits){budget-=image.bytes.length;content.push({type:'image',data:image.bytes.toString('base64'),mimeType:image.type});}
+      }
+      return {content};
     });
     register('list_topics','List local topic IDs, names, descriptions and active-save counts. Empty topics created by the user or an LLM remain visible.',z.object({}).strict(),()=>({topics:library.topics.catalog()}));
     register('create_topic','Create a local cross-platform topic. Does not modify Instagram collections or Chrome folders.',z.object({name:z.string().min(1).max(80),description:z.string().max(2000).default('')}).strict(),args=>library.topics.create(args),true);
@@ -127,7 +139,7 @@ export function createLibraryMcp(store, { origin, localMode }) {
     server.registerResource('library-guide','savextension://guide',{mimeType:'text/plain',description:'How to use this reference library and its boundaries.'},uri=>{requireEnabled();return {contents:[{uri:uri.href,mimeType:'text/plain',text:instructions}]};});
     server.registerResource('library-overview','savextension://library',{mimeType:'application/json',description:'Current accessible library inventory.'},uri=>{requireEnabled();return {contents:[{uri:uri.href,mimeType:'application/json',text:JSON.stringify(library.overview())}]};});
     server.registerResource('saved-post',new ResourceTemplate('savextension://saves/{id}',{list:undefined}),{mimeType:'application/json',description:'Full metadata for an active save by numeric ID.'},(uri,{id:postId})=>{requireEnabled();if(!/^\d+$/.test(String(postId)))throw new HttpError(404,'Save unavailable.');return {contents:[{uri:uri.href,mimeType:'application/json',text:JSON.stringify(library.getSave(Number(postId)))}]};});
-    server.registerPrompt('organize_library',{description:'Organize saved references into reusable topics using available evidence.',argsSchema:z.object({focus:z.string().max(1000).optional()})},({focus})=>({messages:[{role:'user',content:{type:'text',text:`Review my saveXtension library${focus?` with this focus: ${focus}`:''}. Inspect existing topics first; reuse them when appropriate and create coherent new topics across sources where useful. Fetch full captions and metadata, follow original links with your own tools when needed, and distinguish observed content from inference. Never claim video analysis from a URL alone. Add topics in batches without removing existing organization unless I request a reorganization. Use local notes only when asked to persist analysis, preserving existing notes. Report which topics and memberships changed, uncertainties, and change IDs for undo.`}}]}));
+    server.registerPrompt('organize_library',{description:'Organize saved references into reusable topics using available evidence.',argsSchema:z.object({focus:z.string().max(1000).optional()})},({focus})=>({messages:[{role:'user',content:{type:'text',text:`Review my saveXtension library${focus?` with this focus: ${focus}`:''}. Inspect existing topics first; reuse them when appropriate and create coherent new topics across sources where useful. Fetch full captions and metadata, look at saved images with get_save_images when a caption is too thin, follow original links with your own tools when needed, and distinguish observed content from inference. Never claim video analysis from a URL alone. Add topics in batches without removing existing organization unless I request a reorganization. Use local notes only when asked to persist analysis, preserving existing notes. Report which topics and memberships changed, uncertainties, and change IDs for undo.`}}]}));
     return server;
   }
   function start(){if(!handler){handler=createMcpHandler(factory);node=toNodeHandler(handler);}}

@@ -1,5 +1,6 @@
 // Account passwords stay on the platform's own page. This panel handles only
 // public handles and connection state returned by the desktop process.
+import { busyNotice } from './busy-messages.js';
 export function mountSocialAccounts(root, { esc, icon, sourceIcon, onChange = () => {}, platforms = ['x', 'instagram', 'pinterest'], expected = {}, browse = false, chooseCollections = null, connect = options => window.saveXDesktop.connectSocial(options) }) {
   let signature = '', loading = false, timer;
   const name = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram';
@@ -31,7 +32,7 @@ export function mountSocialAccounts(root, { esc, icon, sourceIcon, onChange = ()
       if (button.dataset.disconnect) await window.saveXDesktop.disconnectSocial(button.dataset.disconnect);
       else await connect({ platform: button.dataset.connect || button.dataset.platform, id: button.dataset.reconnect, expectedHandle: button.dataset.expected });
       await refresh();
-    } catch (failure) { error.textContent = failure.message; }
+    } catch (failure) { const notice = busyNotice(failure.message); error.textContent = notice ? `${notice.title}. ${notice.why}` : failure.message; }
     finally { if (button.isConnected) button.disabled = false; }
   });
   void refresh();

@@ -10,7 +10,8 @@ const secure = process.env.COOKIE_SECURE === 'true';
 if (new URL(origin).protocol === 'https:' && !secure) throw new Error('Set COOKIE_SECURE=true when APP_ORIGIN uses HTTPS.');
 const localMode = process.env.AUTH_REQUIRED !== 'true';
 if (localMode && !['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error('Local mode must listen on loopback.');
-const app = createApp({ dataPath: resolve(process.env.DATA_DIR || 'data', 'savextension.sqlite'), origin, secure, localMode });
+const dataDir = resolve(process.env.DATA_DIR || 'data');
+const app = createApp({ dataPath: resolve(dataDir, 'savextension.sqlite'), imagesDir: resolve(dataDir, 'images'), origin, secure, localMode });
 app.server.listen(port, host, () => {
   console.log(`\n  saveXtension → ${origin}\n`);
   if (!localMode && !app.store.get('password')) console.log(`  First-time setup code: ${app.setupCode}\n  Enter this code in the web app, then choose your password.\n`);

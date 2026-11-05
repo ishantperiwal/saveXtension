@@ -669,6 +669,8 @@ dialog.settings-dialog::-webkit-scrollbar { display: none; width: 0; height: 0; 
 #toast.bottom-center { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; max-width: calc(100vw - 32px); border-radius: 999px; }
 #toast.bottom-center.with-detail { width: max-content; border-radius: 18px; text-align: center; }
 .toast-detail { display: block; margin-top: 3px; font-size: 11px; line-height: 16px; opacity: .75; }
+#toast.error .toast-detail { opacity: .9; }
+.toast-action { display: block; margin: 8px auto 2px; padding: 4px 12px; border: 1px solid currentColor; border-radius: 999px; color: inherit; background: none; font: inherit; font-size: 12px; font-weight: 500; line-height: 16px; cursor: pointer; }
 @keyframes sync-toast-in { from { opacity: 0; transform: translateX(calc(100% + 32px)); } }
 @media (prefers-reduced-motion: reduce) { .sync-toast { animation: none; transition: none; } }
 @keyframes toast-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }

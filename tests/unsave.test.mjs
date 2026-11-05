@@ -6,6 +6,7 @@ import {unsaveQueue} from '../server/unsave.mjs';
 import {TopicLibrary} from '../server/topics.mjs';
 import {createApp} from '../server/app.mjs';
 import {once} from 'node:events';
+import {BUSY,busyNotice} from '../public/busy-messages.js';
 const seed=(store,platform='x',accounts=['@one'])=>{store.importPosts([{url:platform==='x'?'https://x.com/i/status/12345':'https://www.instagram.com/p/ExactPost/',accounts,notes:'Private note to delete',topics:['Design'],topicsCurated:true}]);return store.posts()[0];};
 const setup=()=>{const store=new Store(':memory:'),sync=syncQueue(store),queue=unsaveQueue(store,sync);sync.heartbeat({instance:'browser',ready:true,unsave:true});return{store,sync,queue};};
 const evidence=job=>[Date.now()-500,Date.now()].map(checkedAt=>({state:'unsaved',account:job.account,externalId:job.external_id,checkedAt}));
@@ -76,4 +77,22 @@ test('HTTP endpoints prevent cross-origin confirmation, serialize sync with unsa
     assert.equal((await request(`/extension/unsaves/${job.id}/finish`,{instance:'browser',status:'succeeded',observations:evidence(job)},true)).status,200);assert.equal(app.store.post(p.id),null);
     await request(`/unsave/${job.id}/ack`,{});assert.equal((await request('/sync')).data.unsave,null);
   }finally{await app.mcp.close();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
+});
+
+test('a refused unsave or scan names what is running, in the words the library explains',async()=>{
+  const app=createApp({origin:'http://localhost:3221'});app.server.listen(3221,'127.0.0.1');await once(app.server,'listening');
+  try{
+    assert.equal(Object.values(BUSY).filter(notice=>notice.title&&notice.why).length,Object.keys(BUSY).length);
+    assert.equal(busyNotice(`Error invoking remote method 'savex-desktop': Error: ${BUSY.update.title}`),BUSY.update);assert.equal(busyNotice('Something else went wrong.'),null);
+    const first=seed(app.store),second=seed(app.store,'instagram');
+    app.sync.heartbeat({instance:'browser',ready:true,unsave:true});
+    const proof=app.unsaves.prepare(first.id);
+    const scan=app.sync.enqueue(['chrome']);assert.equal(scan.status,'queued');
+    assert.throws(()=>app.unsaves.confirm(first.id,{nonce:proof.nonce,confirmed:true,account:'@one'}),{message:BUSY.unsave.title});
+    app.sync.cancel();
+    app.unsaves.confirm(first.id,{nonce:proof.nonce,confirmed:true,account:'@one'});
+    assert.throws(()=>app.unsaves.confirm(second.id,{nonce:app.unsaves.prepare(second.id).nonce,confirmed:true,account:'@one'}),{message:BUSY.unsaveAgain.title});
+    const refused=await fetch('http://127.0.0.1:3221/api/sync',{method:'POST',headers:{Origin:'http://localhost:3221','Content-Type':'application/json'},body:JSON.stringify({targets:['chrome']})});
+    assert.equal(refused.status,409);assert.equal((await refused.json()).error,BUSY.scan.title);
+  }finally{await app.mcp.close();app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
 });

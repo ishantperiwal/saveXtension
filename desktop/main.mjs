@@ -7,6 +7,7 @@ import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinteres
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
+import { BUSY } from '../public/busy-messages.js';
 import { readChromeBookmarks } from './chrome-bookmarks.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -102,7 +103,7 @@ async function start() {
       }
       case 'installUpdate': {
         if (updater.status().phase !== 'ready') throw new Error('Download and verify an update first.');
-        if (['queued', 'running'].includes((await api('/sync')).job?.status)) throw new Error('Finish or stop syncing before installing the update.');
+        if (['queued', 'running'].includes((await api('/sync')).job?.status)) throw new Error(BUSY.update.title);
         const result = await dialog.showMessageBox(window, { type: 'info', message: 'Open the installer and quit saveXtension?', detail: process.platform === 'darwin' ? 'Drag the new app into Applications and replace the existing copy. Your library and notes stay on this computer. Open saveXtension again after installation.' : 'Follow the installer to update saveXtension, then open it again. Your library and notes stay on this computer.', buttons: ['Open installer and quit', 'Cancel'], defaultId: 0, cancelId: 1 });
         if (result.response !== 0) return false;
         await updater.install(); app.quit(); return true;
@@ -217,6 +218,7 @@ function installMenu() {
     ...(process.platform === 'darwin' ? [{ label: 'saveXtension', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'Library', submenu: [{ label: 'Open library', accelerator: 'CmdOrCtrl+Shift+L', click: safe(createWindow) }, { label: 'Import existing library…', click: safe(importLibrary) }, { label: 'Show library folder', click: safe(() => shell.openPath(userData)) }, { type: 'separator' },
       { label: 'Quick sync when app opens', type: 'checkbox', checked: library.store.get('desktop_auto_sync') !== 'false', click: item => library.store.set('desktop_auto_sync', String(item.checked)) },
+      { label: 'Recover expired images in the background', type: 'checkbox', checked: library.store.get('image_recovery') !== 'false', click: item => library.store.set('image_recovery', String(item.checked)) },
       ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]) ] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },

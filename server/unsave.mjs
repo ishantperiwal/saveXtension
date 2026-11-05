@@ -1,3 +1,4 @@
+import { BUSY } from '../public/busy-messages.js';
 import { randomBytes } from 'node:crypto';
 import { HttpError, text } from './domain.mjs';
 export function unsaveQueue(store, sync) {
@@ -22,7 +23,7 @@ export function unsaveQueue(store, sync) {
   }
   const busy = () => ['queued','running'].includes(status()?.status);
   const diagnostics=()=>{try{const value=JSON.parse(store.get('unsave_diagnostics')||'[]');return Array.isArray(value)?value.slice(-10):[];}catch{return[];}};
-  function checkIdle() { if (busy() || ['queued','running'].includes(sync.status().job?.status)) throw new HttpError(409,'Wait for the current refresh or unsave to finish.'); }
+  function checkIdle() { if (busy()) throw new HttpError(409,BUSY.unsaveAgain.title); if (['queued','running'].includes(sync.status().job?.status)) throw new HttpError(409,BUSY.unsave.title); }
   function owned(id, instance) { const job=status(); if (!job || job.id!==id || job.owner!==instance) throw new HttpError(404,'Unsave request not found for this browser.'); if(job.status!=='running')throw new HttpError(409,'This unsave request has ended.'); return job; }
   return {
     status,busy,diagnostics,

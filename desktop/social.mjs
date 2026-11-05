@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, session, ipcMain, shell } from 'electron';
 import { isPinterestHost } from '../public/pinterest-host.js';
+import { BUSY } from '../public/busy-messages.js';
+import { imageRecovery } from '../server/image-recovery.mjs';
 import { Worker } from 'node:worker_threads';
 import { readFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -309,10 +311,38 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
   };
   ipcMain.handle('savex-social-collector', collectorHandler);
 
+  // Reads one post in its own hidden window. A scan's windows and queue are never touched.
+  async function recoverPost({ platform, url, accounts: savedBy }, signal) {
+    const connected = accounts.filter(item => item.platform === platform && item.status === 'connected');
+    const profile = connected.find(item => savedBy.some(handle => handle.toLowerCase() === item.handle.toLowerCase())) || connected[0];
+    if (!profile || !socialUrl(url, platform)) return { status: 'unavailable' };
+    const value = { win: makeWindow(profile, false), profile };
+    const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); });
+    try {
+      await Promise.race([value.win.loadURL(url).catch(() => {}), pause(20000)]);
+      if (!sources.has('extractors.js')) sources.set('extractors.js', await readFile(join(extensionRoot, 'extractors.js'), 'utf8'));
+      const deadline = Date.now() + 8000;
+      while (!signal.aborted && Date.now() < deadline) {
+        const current = value.win.webContents.getURL();
+        if (/\/accounts\/login|\/challenge|\/checkpoint|\/i\/flow\/login/.test(new URL(current || url).pathname)) return { status: 'check' };
+        if (socialUrl(current, platform)) {
+          const post = await evaluate(value, `${sources.get('extractors.js')};globalThis.SaveXExtractors.detail(document,${JSON.stringify(platform)},${JSON.stringify(url)})`).catch(() => null);
+          if (post) return { status: 'found', post };
+        }
+        await pause(700);
+      }
+      return { status: 'missing' };
+    } finally { if (!value.win.isDestroyed()) value.win.destroy(); }
+  }
+  const recovery = imageRecovery({
+    store: library.store, images: library.images, visit: recoverPost, onError,
+    blocked: () => closed || logins.size > 0 || ['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy(),
+    ...(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS ? { delay: Number(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS), gap: 200, jitter: 0, poll: 200, idle: 200 } : {})
+  });
   async function connect({ platform, id, expectedHandle } = {}) {
     if (!platforms.has(platform)) throw new Error('Choose X, Instagram or Pinterest.');
     if (expectedHandle && !handlePattern(platform).test(expectedHandle)) throw new Error('Choose a valid account handle.');
-    if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before connecting accounts.');
+    if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error(BUSY.connect.title);
     let profile = id ? accounts.find(item => item.id === id && item.platform === platform) : accounts.find(item => item.platform === platform && (expectedHandle ? item.handle.toLowerCase() === expectedHandle.toLowerCase() : !item.handle));
     if (id && !profile) throw new Error('Account connection not found.');
     if (!profile) { profile = { id: randomUUID(), platform, handle: expectedHandle || '', name: '', status: 'needs-login' }; accounts.push(profile); publish(); }
@@ -347,7 +377,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     status: publicAccounts, connect, wake, openPost, browse: browseAccount,
     async disconnect(id) {
       const profile = accounts.find(item => item.id === id); if (!profile) throw new Error('Connection not found.');
-      if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before disconnecting.');
+      if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error(BUSY.disconnect.title);
       logins.get(id)?.win.close(); browsers.get(id)?.destroy();
       await profileSession(profile).clearStorageData(); accounts = accounts.filter(item => item.id !== id); publish(); wake();
       // With nothing left connected, the app keeps no Google sign-in either.
@@ -355,7 +385,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       return publicAccounts();
     },
     async close() {
-      closed = true; clearTimeout(restartTimer); library.bookmarks.cancel(); ipcMain.removeHandler('savex-social-collector');
+      closed = true; await recovery.stop(); clearTimeout(restartTimer); library.bookmarks.cancel(); ipcMain.removeHandler('savex-social-collector');
       const activeUnsave = library.unsaves.status();
       if (activeUnsave?.status === 'running' && activeUnsave.owner === transport.instance) library.unsaves.finish(activeUnsave.id, transport.instance, { status: 'failed', message: 'saveXtension closed before the unsave was verified. Check the original post before trying again.' });
       library.store.db.prepare("UPDATE sync_runs SET status='cancelled',finished_at=?,message='Stopped when saveXtension closed. Imported saves are kept.' WHERE status='running'").run(new Date().toISOString());

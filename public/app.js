@@ -1,4 +1,5 @@
 import { unsaveDialog } from './unsave.js';
+import { busyNotice } from './busy-messages.js';
 import { orderLibraryPosts, xSequenceAccount } from './source-order.js';
 import { openCollectionPicker, closeCollectionPicker } from './collection-picker.js';
 import { instagramSaveList, visibleInstagramSaves } from './instagram-save-lists.js';
@@ -107,7 +108,16 @@ function restoreModalToast() {
   if (el.matches(':popover-open')) el.hidePopover();
   el.removeAttribute('popover'); el.className = ''; toastHome.append(el); clearTimeout(toastTimer);
 }
+function hideToast() {
+  const el = $('#toast');
+  clearTimeout(toastTimer);
+  if (el.matches(':popover-open')) el.hidePopover();
+  el.removeAttribute('popover'); el.className = ''; if (el.parentElement !== toastHome) toastHome.append(el);
+}
 function toast(message, error = false, position = '', detail = '') {
+  // A refusal says why, stays long enough to read, and shows above any open dialog.
+  const notice = error ? busyNotice(message) : null;
+  if (notice) { message = notice.title; detail = notice.why; position = 'bottom-center'; }
   const el = $('#toast');
   if (el.matches(':popover-open')) el.hidePopover();
   el.removeAttribute('popover');
@@ -118,12 +128,13 @@ function toast(message, error = false, position = '', detail = '') {
     const description = document.createElement('span');
     description.className = 'toast-detail'; description.textContent = detail; el.append(description);
   }
+  if (notice && ['queued', 'running'].includes(state.sync?.job?.status)) {
+    const stop = document.createElement('button');
+    stop.className = 'toast-action'; stop.dataset.action = 'stop-sync'; stop.textContent = 'Stop scan'; el.append(stop);
+  }
   // Centered feedback must remain visible above a modal's top layer.
   if (position === 'bottom-center' && el.showPopover) { el.setAttribute('popover', 'manual'); el.showPopover(); }
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => {
-    if (el.matches(':popover-open')) el.hidePopover();
-    el.removeAttribute('popover'); el.className = ''; if (el.parentElement !== toastHome) toastHome.append(el);
-  }, 4200);
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, notice ? 9000 : 4200);
 }
 async function api(path, { method = 'GET', body, keepalive = false } = {}) {
   const res = await fetch(`/api${path}`, { method, credentials: 'same-origin', keepalive, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -979,7 +990,7 @@ function embedMetadata(p, full = false) {
   const handle = p.author ? `@${String(p.author).replace(/^@+/, '')}` : '';
   const name = p.authorName || handle || platformName(p.platform);
   const caption = p.text || (p.title !== p.authorName ? p.title : '') || '';
-  const image = p.thumbnail || p.media?.[0];
+  const image = p.localImage || p.thumbnail || p.media?.[0];
   const published = Number.isFinite(Date.parse(p.publishedAt));
   const date = published ? p.publishedAt : libraryAddedAt(p);
   const dated = Number.isFinite(Date.parse(date));
@@ -1961,7 +1972,7 @@ document.addEventListener('click', async e => {
         if (request) await startSync(job.mode === 'deep' ? 'deep' : 'quick', request);
         break;
       }
-      case 'stop-sync': await api('/sync/stop', { method: 'POST', body: {} }); wakeExtension(); await syncStatus(); break;
+      case 'stop-sync': hideToast(); await api('/sync/stop', { method: 'POST', body: {} }); wakeExtension(); await syncStatus(); break;
       case 'connect': await connectDialog(); break;
       case 'settings': await settingsDialog(); break;
       case 'import': importDialog(); break;
