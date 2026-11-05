@@ -143,6 +143,7 @@ const notes = createNoteAutosave({
     const current = allPosts().find(p => p.id === post.id && p.url === post.url);
     const card = document.querySelector(`.save-card[data-post-id="${post.id}"]`);
     if (current && card) syncCardNote(card, current);
+    if (current) syncPreviewNote(current);
   }
 });
 function flushActiveNote() { if (activeNote) { void notes.flush(activeNote); activeNote = null; activeNoteScope = null; } }
@@ -617,6 +618,8 @@ function renderResults(restoreView) {
   const restoring = restoreView?.scope === pageKey;
   if (restoring) { resultsLimits.clear(); for (const [key, limit] of restoreView.limits) resultsLimits.set(key, limit); }
   resultsPosts = posts;
+  if (!posts.length && showingChromeSetup()) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); renderChromeSetup(); return; }
+  if (!posts.length && emptySourcePlatform()) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); renderSourceConnect(); return; }
   if (!posts.length) {
     moreResultsObserver?.disconnect();
     disposeCardLayout();
@@ -627,6 +630,69 @@ function renderResults(restoreView) {
     disposeEmbeds(); return;
   }
   renderResultsPage(!pageChanged && !restoring);
+}
+// The desktop app normally reads Chrome's bookmark file by itself. When Chrome keeps it
+// somewhere else (common on managed work computers), the Chrome page walks through
+// loading the small helper extension, then imports as soon as Chrome connects.
+const chromeSetup = { found: null, checking: false, saved: '' };
+function showingChromeSetup() {
+  return !!window.saveXDesktop?.chromeBookmarksFound && !!state.sync?.nativeSocial?.enabled && !state.demo && !state.archive && !state.query.trim()
+    && selectedSource() === 'chrome' && !allPosts().some(post => post.platform === 'chrome' && !post.archived);
+}
+function renderChromeSetup() {
+  const root = $('#results'); if (!root) return;
+  if (chromeSetup.found === null && !chromeSetup.checking) {
+    chromeSetup.checking = true;
+    void window.saveXDesktop.chromeBookmarksFound().then(found => { chromeSetup.found = found; }, () => { chromeSetup.found = false; }).finally(() => { chromeSetup.checking = false; if ($('.chrome-setup') || showingChromeSetup()) renderChromeSetup(); });
+  }
+  const sync = state.sync || {}, helper = sync.chromeBrowser, online = !!helper?.online, received = !!sync.chromeBookmarkTreeAt;
+  const job = sync.job, importing = ['queued', 'running'].includes(job?.status) && job.targets?.includes('chrome');
+  const importButton = `<button class="primary" type="button" data-action="import-chrome" ${importing || state.syncChecking ? 'disabled' : ''}>${importing ? 'Importing…' : 'Import bookmarks'}</button>`;
+  let body;
+  if (chromeSetup.found === null) body = '<p class="chrome-setup-lead">Looking for Chrome’s bookmarks…</p>';
+  else if (chromeSetup.found || received) body = `<p class="chrome-setup-lead">${chromeSetup.found ? 'Chrome’s bookmarks are on this computer.' : 'Chrome is connected.'} Bring them into your library; your Chrome bookmarks aren’t changed.</p><div class="chrome-setup-actions">${importButton}</div>`;
+  else {
+    const status = !online ? ['waiting', 'Waiting for Chrome… This page continues on its own once the helper is loaded.'] : helper.bookmarksReady ? ['connected', 'Chrome is connected. Reading your bookmarks…'] : ['connected', 'Chrome is connected. Allow bookmarks in the saveXtension helper to continue.'];
+    body = `<p class="chrome-setup-lead">saveXtension couldn’t find Chrome’s bookmarks on this computer. Work computers often keep them somewhere unusual. A small Chrome helper can share them instead. It’s a one-time, one-minute setup.</p>
+      <ol class="chrome-setup-steps">
+        <li class="${chromeSetup.saved ? 'is-done' : ''}"><div><strong>Save the helper to Downloads</strong><p>${chromeSetup.saved ? `Saved as <b>Downloads › saveXtension Chrome helper</b>.` : 'A folder named <b>saveXtension Chrome helper</b> appears in your Downloads.'}</p></div><button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}${chromeSetup.saved ? 'Show folder' : 'Save to Downloads'}</button></li>
+        <li><div><strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p></div><div class="chrome-setup-buttons"><button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button><button class="text-button" type="button" data-action="copy-chrome-extensions">Copy address</button></div></li>
+        <li><div><strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p></div></li>
+        <li><div><strong>Click Load unpacked and choose the folder</strong><p>Pick <b>Downloads › saveXtension Chrome helper</b>. Your bookmarks start importing right away.</p></div></li>
+      </ol>
+      <p class="chrome-setup-status is-${status[0]}" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>${status[1]}</p>
+      <p class="chrome-setup-note">If Developer mode is greyed out, your organization doesn’t allow extensions on this computer.</p>`;
+  }
+  const html = `<section class="chrome-setup" aria-labelledby="chrome-setup-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon('chrome')}</span><h2 id="chrome-setup-title">${chromeSetup.found === false && !received ? 'Connect Chrome to bring in your bookmarks' : 'Import your Chrome bookmarks'}</h2>${body}</section>`;
+  if (!root.querySelector(':scope > .chrome-setup') || root.dataset.chromeSetup !== html) { root.innerHTML = html; root.dataset.chromeSetup = html; }
+}
+// Refreshing everything in the desktop app covers what is connected and skips the rest;
+// connecting is offered on each source's own empty page instead.
+function connectedTargets(targets) {
+  const native = state.sync?.nativeSocial; if (!native?.enabled) return targets;
+  const connected = new Set(native.accounts.filter(account => account.status === 'connected').map(account => account.platform));
+  return targets.filter(target => target === 'chrome' || connected.has(target));
+}
+// An X or Instagram page with no saves offers to sign in, or to sync once signed in.
+const sourceConnect = { awaiting: null };
+function emptySourcePlatform() {
+  if (!state.sync?.nativeSocial?.enabled || state.demo || state.archive || state.query.trim()) return null;
+  const platform = selectedSource(), filters = state.filters;
+  if (!['x', 'instagram'].includes(platform) || filters.topics.length || filters.collections?.length || filters.collection || filters.accounts.some(value => value.startsWith(`${platform}:@`))) return null;
+  return allPosts().some(post => post.platform === platform && !post.archived) ? null : platform;
+}
+function sourceSyncRequest(platform) { return { ...selectedSyncRequest(), targets: [platform], xAccount: platform === 'x' ? 'all' : 'current', instagramAccount: 'current' }; }
+function renderSourceConnect() {
+  const root = $('#results'), platform = emptySourcePlatform(); if (!root || !platform) return;
+  const name = platform === 'x' ? 'X' : 'Instagram', what = platform === 'x' ? 'bookmarks' : 'saved posts';
+  const accounts = state.sync.nativeSocial.accounts.filter(account => account.platform === platform && account.status === 'connected');
+  const job = state.sync.job, syncing = state.syncChecking || ['queued', 'running'].includes(job?.status) && job.targets?.includes(platform);
+  // Signing in from this page brings the saves in as soon as the account connects.
+  if (accounts.length && sourceConnect.awaiting === platform && !syncing) { sourceConnect.awaiting = null; void startSync('quick', sourceSyncRequest(platform)); }
+  const html = accounts.length
+    ? `<section class="chrome-setup source-connect" aria-labelledby="source-connect-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon(platform)}</span><h2 id="source-connect-title">No ${name} saves yet</h2><p class="chrome-setup-lead">Connected as ${accounts.map(account => `<b>${esc(account.handle)}</b>`).join(', ')}. Bring in your ${what}; nothing on ${name} changes.</p><div class="chrome-setup-actions"><button class="primary" type="button" data-action="sync-source" data-platform="${platform}" ${syncing ? 'disabled' : ''}>${syncing ? 'Syncing…' : `Sync ${name} now`}</button></div></section>`
+    : `<section class="chrome-setup source-connect" aria-labelledby="source-connect-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon(platform)}</span><h2 id="source-connect-title">Connect ${name}</h2><p class="chrome-setup-lead">Sign in once and your ${name} ${what} show up here. You sign in on ${name}’s own page, so saveXtension never sees your password.</p><div class="chrome-setup-actions"><button class="primary" type="button" data-action="connect-source" data-platform="${platform}">Sign in to ${name}</button></div>${sourceConnect.awaiting === platform ? `<p class="chrome-setup-status is-waiting" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Finish signing in in the ${name} window. Your ${what} start syncing right after.</p>` : ''}</section>`;
+  if (!root.querySelector(':scope > .source-connect') || root.dataset.sourceConnect !== html) { root.innerHTML = html; root.dataset.sourceConnect = html; }
 }
 const CARD_BATCH_SIZE = 24;
 const resultsLimits = new Map();
@@ -1111,11 +1177,24 @@ function openPostPreview(card) {
   const post = allPosts().find(post => post.id === Number(card.dataset.postId)); if (!post) return;
   // The same actions as a feed card, in a column beside the post.
   const canUnsave = state.localMode && !state.demo && (post.accounts || []).some(account => /^@[\w.]+$/.test(account));
-  showModal(`<div class="post-preview-actions" data-post-id="${post.id}"><button class="icon-button preview-action" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button preview-action" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>${canUnsave ? `<button class="icon-button preview-action unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(post.platform)}" title="Unsave on ${platformName(post.platform)}">${icon('unsave')}</button>` : ''}</div><div class="post-preview">${nativePreview(post, true)}</div>`);
+  showModal(`<div class="post-preview-actions" data-post-id="${post.id}"><button class="icon-button preview-action" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button preview-action" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>${canUnsave ? `<button class="icon-button preview-action unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(post.platform)}" title="Unsave on ${platformName(post.platform)}">${icon('unsave')}</button>` : ''}</div><div class="post-preview-layout"><div class="post-preview">${nativePreview(post, true)}</div><section class="card-note post-preview-note" data-post-id="${post.id}" aria-label="Note"><label class="sr-only" for="preview-note">Note</label><textarea class="note-input" id="preview-note" name="notes" rows="4" maxlength="10000" placeholder="Add a note…" ${state.demo ? 'readonly' : ''}>${esc(notes.value(post))}</textarea><span class="note-status" role="status" aria-live="polite"></span></section></div>`);
   modal.className = 'post-preview-dialog'; renderSync();
+  // The note beside the post edits the same saved note as its card.
+  const field = $('#preview-note', modal);
+  field.onfocus = () => { activeNote = post; activeNoteScope = resultsScopeKey(); };
+  field.oninput = () => { if (state.demo) return; notes.edit(post, field.value); state.posts = notes.overlay(state.posts); };
+  field.onblur = () => { if (activeNote?.id === post.id) flushActiveNote(); };
+  $('.post-preview-note', modal).onclick = event => { if (event.target !== field) field.focus(); };
+  syncPreviewNote(post);
   mountEmbeds(modal, true);
 }
-modal.addEventListener('close', () => { if (modal.classList.contains('post-preview-dialog')) { disposeEmbeds(modal); modal.innerHTML = ''; modal.className = ''; } });
+function syncPreviewNote(post) {
+  const panel = modal.open && modal.querySelector(`.post-preview-note[data-post-id="${post.id}"]`); if (!panel) return;
+  const status = noteStates.get(noteKey(post)), label = $('.note-status', panel);
+  label.textContent = status === 'error' ? 'Not saved yet · retrying' : status === 'pending' || status === 'saving' ? 'Saving…' : '';
+  label.dataset.state = status || '';
+}
+modal.addEventListener('close', () => { if (modal.classList.contains('post-preview-dialog')) { flushActiveNote(); disposeEmbeds(modal); modal.innerHTML = ''; modal.className = ''; } });
 async function openUnsave(button) {
   const post=allPosts().find(post=>post.id===Number(button.closest('[data-post-id]').dataset.postId));if(!post||state.demo)return;
   await unsaveDialog(post,{api,showModal,modal,esc,icon,sourceIcon,onQueued:job=>{
@@ -1429,6 +1508,12 @@ async function syncStatus() {
   statusLoading = true;
   try {
     state.sync = await api('/sync'); renderSync(); void handleUnsaveStatus(state.sync.unsave);
+    if ($('.source-connect')) renderSourceConnect();
+    else if ($('.chrome-setup')) {
+      // The first copy from Chrome queues an import; wake the desktop worker so it starts now.
+      if (state.sync.job?.status === 'queued' && state.sync.job.targets?.includes('chrome')) void window.saveXDesktop?.wakeSocial?.();
+      renderChromeSetup();
+    }
     if (state.pendingTargets && modal.open && modal.dataset.syncSetup && !state.syncChecking) {
       const availability = currentAvailability(), targets = state.pendingTargets, mode = state.pendingMode, request = state.pendingSyncRequest;
       if (availability === 'ready') {
@@ -1667,6 +1752,12 @@ document.addEventListener('click', async e => {
         break;
       }
       case 'add-collection': addCollection(button); break;
+      case 'connect-source': sourceConnect.awaiting = button.dataset.platform; renderSourceConnect(); await window.saveXDesktop.connectSocial({ platform: button.dataset.platform }); break;
+      case 'sync-source': await startSync('quick', sourceSyncRequest(button.dataset.platform)); renderSourceConnect(); break;
+      case 'import-chrome': await startSync('quick', { ...selectedSyncRequest(), targets: ['chrome'] }); renderChromeSetup(); break;
+      case 'save-chrome-helper': try { chromeSetup.saved = (await window.saveXDesktop.saveHelperToDownloads()).path; renderChromeSetup(); } catch (failure) { toast(failure.message, true); } break;
+      case 'open-chrome-extensions': try { await window.saveXDesktop.openExtensions(); } catch (failure) { toast(failure.message, true); } break;
+      case 'copy-chrome-extensions': try { await window.saveXDesktop.copyText('chrome://extensions'); button.textContent = 'Copied'; } catch (failure) { toast(failure.message, true); } break;
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
       case 'remove-topic': removeTopicDialog(Number(button.closest('[data-post-id]').dataset.postId), button.dataset.topicName); break;
@@ -1687,7 +1778,7 @@ document.addEventListener('click', async e => {
         break;
       }
       case 'scan-options': allSourcesScanDialog(); break;
-      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: ['chrome', 'x', 'instagram'], xAccount: 'all' }); break;
+      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: connectedTargets(['chrome', 'x', 'instagram']), xAccount: 'all' }); break;
       case 'sync-options': syncOptionsDialog(); break;
       case 'sync': await startSync(); break;
       case 'deep-sync': await startSync('deep'); break;

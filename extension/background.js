@@ -408,6 +408,9 @@ async function checkJobs() {
     reachedLibrary=true;
     if (!desktop && response.desktopSocial) {
       if (job) { await closeOwned(); await chrome.storage.local.remove(['job', 'cancelRequested']); }
+      // The desktop app reads Chrome's bookmark file itself, but managed computers can keep it
+      // somewhere unexpected. Chrome's own copy is sent after any change so the app still finds it.
+      if (bookmarkAccess && (!response.chromeBookmarkTreeAt || await get('bookmarksDirty') !== false)) await sendBookmarkTree();
       if (response.bookmarkSetupRequested && !bookmarkAccess) await chrome.runtime.openOptionsPage();
       return;
     }
@@ -502,8 +505,16 @@ async function handle(message, sender) {
   if (message.type === 'OPEN_LIBRARY') { await chrome.tabs.create({ url: await origin() }); return {}; }
   throw new Error('Unknown extension action.');
 }
+const slimBookmark = node => node.url ? { title: node.title || '', url: node.url, dateAdded: node.dateAdded } : { title: node.title || '', children: (node.children || []).map(slimBookmark) };
+async function sendBookmarkTree() {
+  await chrome.storage.local.set({ bookmarksDirty: false });
+  try { await request('/bookmark-tree', { instance: await instanceId(), tree: (await chrome.bookmarks.getTree()).map(slimBookmark) }); }
+  catch (error) { await chrome.storage.local.set({ bookmarksDirty: true }); throw error; }
+}
+for (const event of ['onCreated', 'onRemoved', 'onChanged', 'onMoved', 'onImportEnded']) chrome.bookmarks?.[event]?.addListener(() => { void chrome.storage.local.set({ bookmarksDirty: true }); });
 async function initialize() {
   if (initialized) return; initialized = true;
+  if (!desktop) await chrome.storage.local.set({ bookmarksDirty: true });
   const orphan = await get('accountScanTabId'); if (orphan) { await closeWorkTab(orphan).catch(() => {}); await chrome.storage.local.remove('accountScanTabId'); }
   await cleanWorkTabs((await get('job'))?.ownedTabs || []);
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });

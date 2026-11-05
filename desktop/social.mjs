@@ -133,7 +133,9 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     accountError(message) { if (selected && /sign.?in|log.?in|reconnect|challenge|checkpoint/i.test(message)) { selected.status = 'needs-login'; publish(); } },
     // Bookmarks come from Chrome's own file, so they need no permission.
     permissions(value) { return value?.permissions ? true : accounts.some(item => item.status === 'connected'); },
-    bookmarks: () => readChromeBookmarks(),
+    // Chrome's own file first; if it isn't where Chrome normally keeps it, the copy the
+    // Chrome helper sent. Neither is there until Chrome is connected on the Chrome page.
+    bookmarks: () => readChromeBookmarks().catch(error => { const tree = library.sync.chromeBookmarks(); if (tree) return tree; throw error; }),
     openAccounts() { onChange(); return true; },
     'tabs.create'() {
       if (!selected) throw new Error('Choose a connected account first.');

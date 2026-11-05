@@ -31,6 +31,6 @@ export async function readChromeBookmarks(dir = chromeUserData()) {
     try { file = JSON.parse(await readFile(join(dir, profile.name, 'Bookmarks'), 'utf8')); } catch { continue; }
     roots.push(...['bookmark_bar', 'other', 'synced'].map(key => file.roots?.[key]).filter(Boolean).map(treeNode));
   }
-  if (!roots.length) throw new Error('No Chrome bookmarks were found on this computer.');
+  if (!roots.length) throw new Error('No Chrome bookmarks were found on this computer. Open Chrome bookmarks in saveXtension to connect Chrome.');
   return [{ title: '', children: roots }];
 }

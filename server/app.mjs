@@ -49,13 +49,13 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     if (!found) throw new HttpError(401, 'Extension disconnected. Pair it again from your library.');
     return found;
   }
-  async function body(req) {
+  async function body(req, limit = 4 * 1024 * 1024) {
     const type = req.headers['content-type'] || '';
     if (!type.startsWith('application/json')) throw new HttpError(415, 'Send JSON data.');
     const parts = []; let size = 0;
     for await (const part of req) {
       size += part.length;
-      if (size > 4 * 1024 * 1024) throw new HttpError(413, 'Import too large. Use batches of at most 200 posts.');
+      if (size > limit) throw new HttpError(413, 'Import too large. Use batches of at most 200 posts.');
       parts.push(part);
     }
     try {
@@ -136,6 +136,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const canWork = !nativeTransport || native;
           const claimedUnsave = canWork && input.claim && input.ready ? unsaves.claim(text(input.instance,100),input.unsave===true) : null;
           return json(res, { ...sync.status(), desktopSocial: !!nativeTransport, unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: canWork && input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: !nativeTransport && sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: !native && sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: canWork && !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { native, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+        }
+        if (localMode && nativeTransport && path === '/api/extension/bookmark-tree' && req.method === 'POST') {
+          if (req.headers['x-savex-native']) throw new HttpError(403, 'Only Chrome sends its bookmarks here.');
+          const input = await body(req, 24 * 1024 * 1024);
+          if (!Array.isArray(input.tree)) throw new HttpError(400, 'Send Chrome’s bookmark tree.');
+          return json(res, sync.setChromeBookmarks(input.tree));
         }
         if (localMode && path === '/api/extension/queue' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId) }); }
         if (localMode && path === '/api/extension/accounts' && req.method === 'POST') { const input = await body(req); return json(res, { xAccounts: !nativeTransport || req.headers['x-savex-native'] === nativeTransport.token ? sync.setAccounts(input) : sync.status().xAccounts }); }

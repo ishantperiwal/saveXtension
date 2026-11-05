@@ -23,6 +23,13 @@ export async function prepareHelper(source, destination, origin) {
   // Chrome ignores this metadata; the native Node worker needs an explicit ESM
   // boundary because this copied folder lives outside the application package.
   await writeFile(join(destination, 'package.json'), JSON.stringify({ type: 'module' }));
+  // The desktop helper exists to read bookmarks, so it asks for them when it's loaded
+  // instead of needing a second approval inside Chrome.
+  const manifestPath = join(destination, 'manifest.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.permissions = [...new Set([...(manifest.permissions || []), 'bookmarks'])];
+  manifest.optional_permissions = (manifest.optional_permissions || []).filter(permission => permission !== 'bookmarks');
+  if (!manifest.optional_permissions.length) delete manifest.optional_permissions;
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   for (const name of ['background.js', 'options.js', 'options.html']) {
     const path = join(destination, name), contents = await readFile(path, 'utf8');
     await writeFile(path, contents.replaceAll('http://localhost:3210', origin));

@@ -38,8 +38,18 @@ export function syncQueue(store, { native = false } = {}) {
       const chrome = browser && { ...browser, online: Date.now() - browser.seenAt < 90000 };
       const nativeOnline = !!nativeBrowser && Date.now() - nativeBrowser.seenAt < 90000;
       const connected = nativeAccounts.filter(account => account.status === 'connected');
-      return { job: latest(), browser: native ? { ...chrome, name: 'saveXtension', online: nativeOnline, ready: nativeOnline && connected.length > 0, unsave: nativeOnline, bookmarksSupported: true, bookmarksReady: nativeOnline, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true } : chrome, ...(native ? { nativeSocial: { enabled: true, online: nativeOnline, accounts: nativeAccounts }, chromeBrowser: chrome } : {}), xAccounts, accountScanRequested, lastSyncedAt: lastSync.get().at || null };
+      return { job: latest(), browser: native ? { ...chrome, name: 'saveXtension', online: nativeOnline, ready: nativeOnline && connected.length > 0, unsave: nativeOnline, bookmarksSupported: true, bookmarksReady: nativeOnline, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true } : chrome, ...(native ? { nativeSocial: { enabled: true, online: nativeOnline, accounts: nativeAccounts }, chromeBrowser: chrome, chromeBookmarkTreeAt: store.get('chrome_bookmark_tree_at') || null } : {}), xAccounts, accountScanRequested, lastSyncedAt: lastSync.get().at || null };
     },
+    // Chrome's own bookmark tree, sent by the helper extension for computers where the
+    // desktop app can't find Chrome's bookmark file. The first copy starts an import.
+    setChromeBookmarks(tree) {
+      const first = !store.get('chrome_bookmark_tree_at'), at = new Date().toISOString();
+      store.set('chrome_bookmark_tree', JSON.stringify(tree)); store.set('chrome_bookmark_tree_at', at);
+      const current = latest();
+      if (first && !(current && ['queued', 'running'].includes(current.status))) this.enqueue(['chrome']);
+      return { ok: true, at };
+    },
+    chromeBookmarks() { try { return JSON.parse(store.get('chrome_bookmark_tree') || 'null'); } catch { return null; } },
     configureNativeAccounts(accounts) { nativeAccounts = accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status })); },
     nativeHeartbeat(input) { nativeBrowser = { seenAt: Date.now() }; if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, input.instance); },
     nativeStopped() { nativeBrowser = null; },

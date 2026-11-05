@@ -38,6 +38,9 @@ test('desktop copies an existing library without modifying it or copying its que
     const helper = await readFile(join(desktop.helperPath, 'background.js'), 'utf8');
     assert(helper.includes(`const DEFAULT_ORIGIN = '${desktop.origin}'`));
     assert((await readFile(join(desktop.helperPath, 'options.js'), 'utf8')).includes(desktop.origin));
+    const helperManifest = JSON.parse(await readFile(join(desktop.helperPath, 'manifest.json'), 'utf8'));
+    assert(helperManifest.permissions.includes('bookmarks')); assert(!helperManifest.optional_permissions?.includes('bookmarks'));
+    assert(JSON.parse(await readFile(resolve('extension/manifest.json'), 'utf8')).optional_permissions.includes('bookmarks'), 'the store extension still asks separately');
     const post = desktop.store.posts()[0]; desktop.store.updatePost(post.id, { notes: 'New desktop note' });
     const origin = desktop.origin; await desktop.close();
     desktop = await startDesktopLibrary({ dataDir: dir, helperSource: resolve('extension'), preferredPort: 3260, legacyOrigin: 'http://localhost:3257' });

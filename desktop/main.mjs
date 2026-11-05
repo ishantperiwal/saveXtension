@@ -1,12 +1,13 @@
 import { app, BrowserWindow, Menu, dialog, shell, ipcMain, clipboard, session } from 'electron';
-import { mkdir, readFile, appendFile } from 'node:fs/promises';
-import { mkdirSync } from 'node:fs';
+import { mkdir, readFile, appendFile, cp } from 'node:fs/promises';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
+import { readChromeBookmarks } from './chrome-bookmarks.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -32,6 +33,7 @@ else {
   });
 }
 
+const helperDownload = () => join(app.getPath('downloads'), 'saveXtension Chrome helper');
 async function log(error) {
   try { await mkdir(userData, { recursive: true }); await appendFile(join(userData, 'desktop.log'), `${new Date().toISOString()} ${error?.stack || error}\n`); } catch { /* Keep the startup error visible even if the log cannot be written. */ }
 }
@@ -42,6 +44,9 @@ async function start() {
     legacyOrigin: process.env.SAVEX_DESKTOP_LEGACY_ORIGIN || 'http://localhost:3210',
     legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
   });
+  // A helper copy saved to Downloads is refreshed so Chrome's next reload loads this version.
+  const saved = library.store.get('desktop_helper_download');
+  if (saved && existsSync(join(saved, 'manifest.json'))) await cp(library.helperPath, saved, { recursive: true, force: true }).catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -60,6 +65,13 @@ async function start() {
         if (typeof message.text !== 'string' || message.text.length > 100000) throw new Error('Invalid clipboard text.');
         clipboard.writeText(message.text); return true;
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
+      case 'chromeBookmarksFound': return readChromeBookmarks().then(() => true, () => false);
+      case 'saveHelperToDownloads': {
+        const destination = helperDownload();
+        await cp(library.helperPath, destination, { recursive: true, force: true });
+        library.store.set('desktop_helper_download', destination); shell.showItemInFolder(destination);
+        return { path: destination };
+      }
       case 'connect': return connect(message.type);
       case 'socialAccounts': return social.status();
       case 'connectSocial': return social.connect(message.options);

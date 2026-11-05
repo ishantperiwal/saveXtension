@@ -486,6 +486,31 @@ button svg, a svg { pointer-events: none; }
 .bookmark-folders:empty { display: none; }
 .bookmark-folders > span { max-width: 100%; font-size: 12px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
 .empty-state, .no-results { padding: 96px 16px; text-align: center; }
+.chrome-setup { max-width: 560px; margin: 56px auto 48px; padding: 32px; border: 1px solid var(--line); border-radius: 24px; background: var(--paper); box-shadow: 0 10px 32px #2830230d; }
+.chrome-setup-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 16px; border-radius: 14px; background: var(--surface-soft); }
+.chrome-setup-icon :is(svg, img) { width: 24px; height: 24px; }
+.chrome-setup h2 { margin: 0 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; }
+.chrome-setup-lead { margin: 0; color: var(--secondary); font-size: 14px; line-height: 22px; }
+.chrome-setup-actions { margin-top: 20px; }
+.chrome-setup-steps { counter-reset: step; display: grid; gap: 4px; margin: 24px 0 0; padding: 0; list-style: none; }
+.chrome-setup-steps li { counter-increment: step; display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line); }
+.chrome-setup-steps li::before { content: counter(step); display: grid; place-items: center; flex-shrink: 0; align-self: flex-start; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-soft); color: var(--ink); font-size: 13px; font-weight: 600; }
+.chrome-setup-steps li.is-done::before { content: '✓'; background: var(--accent); color: var(--paper); }
+.chrome-setup-steps li > div:first-child { flex: 1; min-width: 0; }
+.chrome-setup-steps strong { font-size: 14px; font-weight: 600; }
+.chrome-setup-steps p { margin: 2px 0 0; color: var(--secondary); font-size: 13px; line-height: 20px; }
+.chrome-setup-steps code { padding: 1px 5px; border-radius: 5px; background: var(--surface-soft); font-size: 12px; }
+.chrome-setup-steps button { flex-shrink: 0; white-space: nowrap; }
+.chrome-setup-steps button .icon { width: 15px; height: 15px; margin-right: 6px; vertical-align: -3px; }
+.chrome-setup-buttons { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.chrome-setup-status { display: flex; align-items: center; gap: 10px; margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-soft); font-size: 13px; line-height: 20px; }
+.chrome-setup-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.chrome-setup-status.is-waiting .chrome-setup-dot { animation: chrome-setup-pulse 1.4s ease-in-out infinite; }
+.chrome-setup-status.is-connected .chrome-setup-dot { background: var(--accent); }
+.chrome-setup-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
+@keyframes chrome-setup-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .chrome-setup-status.is-waiting .chrome-setup-dot { animation: none; } }
+@media (max-width: 560px) { .chrome-setup { margin: 24px 0; padding: 22px 18px; } .chrome-setup-steps li { flex-wrap: wrap; } .chrome-setup-buttons { align-items: flex-start; } }
 .empty-state h2 { font-size: 20px; line-height: 28px; font-weight: 500; }
 .empty-actions { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; margin: 20px 0 16px; }
 .no-results p { color: var(--muted); margin-bottom: 8px; }
@@ -832,7 +857,7 @@ body.topic-dragging iframe { pointer-events: none; }
 /* Expanded post preview: opened from empty space in a grid card's frame. */
 .cards[data-view="grid"] > .save-card.has-native-embed .card-body { cursor: zoom-in; }
 /* The post floats on the backdrop with no frame of its own; the close button sits just outside it. */
-dialog.post-preview-dialog { max-width: 560px; max-height: none; padding: 0; overflow: visible; border: 0; background: transparent; box-shadow: none; animation: post-preview-in 220ms cubic-bezier(.22,.68,.2,1); }
+dialog.post-preview-dialog { max-width: 856px; max-height: none; padding: 0; overflow: visible; border: 0; background: transparent; box-shadow: none; animation: post-preview-in 220ms cubic-bezier(.22,.68,.2,1); }
 dialog.post-preview-dialog .post-preview { max-height: calc(100dvh - 128px); overflow-y: auto; border-radius: 16px; scrollbar-width: none; }
 dialog.post-preview-dialog .post-preview::-webkit-scrollbar { display: none; }
 dialog.post-preview-dialog .embed-stage { border-radius: 16px; }
@@ -894,6 +919,15 @@ dialog.post-preview-dialog .post-preview-actions .unsave-button:is(:hover, :focu
 /* Preview controls are frosted glass: dark enough to read over any card behind them. */
 dialog.post-preview-dialog .modal-close { border-color: #ffffff40; background: #1b201bb3; color: #fff; backdrop-filter: blur(14px) saturate(1.2); box-shadow: 0 4px 16px #0000004d; }
 dialog.post-preview-dialog .modal-close:is(:hover, :focus-visible) { border-color: #ffffff73; background: #2a312acc; color: #fff; }
+/* The note sits beside the post, as in the one-column feed; close sits just past it. */
+dialog.post-preview-dialog .post-preview-layout { display: grid; grid-template-columns: minmax(0, 560px) 280px; column-gap: 16px; align-items: start; }
+dialog.post-preview-dialog .post-preview-note { display: flex; flex-direction: column; min-height: 132px; max-height: calc(100dvh - 128px); overflow-y: auto; border: 1px solid #ece1a8; border-radius: 16px; cursor: text; }
+dialog.post-preview-dialog .post-preview-note .note-input { flex: 1; min-height: 88px; max-height: none; overflow: visible; }
+dialog.post-preview-dialog .post-preview-note .note-status:empty { display: none; }
+dialog.post-preview-dialog .modal-close { top: 0; right: -48px; width: 32px; height: 32px; padding: 7px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--secondary); box-shadow: 0 1px 4px #2830230a; backdrop-filter: none; }
+dialog.post-preview-dialog .modal-close:is(:hover, :focus-visible) { border-color: var(--line); background: var(--surface-soft); color: var(--ink); }
+@media (max-width: 1000px) { dialog.post-preview-dialog .post-preview-layout { grid-template-columns: minmax(0, 560px); row-gap: 12px; } dialog.post-preview-dialog { max-width: 560px; } }
+@media (max-width: 680px) { dialog.post-preview-dialog .modal-close { top: 8px; right: 8px; z-index: 2; } }
 /* The action column matches the one-column feed's round white buttons. */
 dialog.post-preview-dialog .post-preview-actions { left: -48px; gap: 6px; }
 dialog.post-preview-dialog .post-preview-actions .icon-button { width: 32px; height: 32px; padding: 7px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--secondary); box-shadow: 0 1px 4px #2830230a; backdrop-filter: none; }
