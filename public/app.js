@@ -252,7 +252,7 @@ function renderAccountNavigation() {
     root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
       const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
       const selection = instagramSaveList(account.value, state.instagramSaveLists), selected = selection.collectionIds;
-      const folders = account.platform === 'x' ? [] : collections.filter(collection => (collection.platform || 'instagram') === account.platform && account.value === `${account.platform}:${collection.account.toLowerCase()}` && (account.platform !== 'instagram' || selected === null || selected.includes(collection.id)));
+      const folders = account.platform === 'x' ? [] : collections.filter(collection => (collection.platform || 'instagram') === account.platform && account.value === `${account.platform}:${collection.account.toLowerCase()}` && (selected === null || selected.includes(collection.id)));
       const expanded = !collapsedInstagramAccounts.has(account.value), listId = `instagram-collections-${encodeURIComponent(account.value)}`;
       return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" ${folders.length ? `aria-expanded="${expanded}" aria-controls="${listId}"` : ''} title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle ${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} ${account.platform === 'pinterest' ? 'boards' : 'collections'}">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
     }).join('');
@@ -271,7 +271,7 @@ function accountMenu(trigger, point) {
   const refresh = mode => { void startSync(mode, accountRefreshRequest(value)).catch(error => toast(error.message, true)); };
   const busy = state.syncChecking || ['queued', 'running'].includes(state.sync?.job?.status);
   const items = [{ label: 'Quick scan and refresh', disabled: busy, run: () => refresh('quick') }, { label: 'Deep scan and refresh', disabled: busy, run: () => refresh('deep') }];
-  if (value.startsWith('instagram:')) items.push({ label: 'Customize save list', run: () => instagramSaveListDialog(value) });
+  if (/^(instagram|pinterest):@/.test(value)) items.push({ label: value.startsWith('pinterest:') ? 'Choose boards' : 'Choose collections', run: () => collectionsDialog(value) });
   closeSelect(); closeCollectionPicker(); openAccountMenu(trigger, items, point);
 }
 function collectionRefreshRequest(id) {
@@ -284,31 +284,41 @@ function collectionRefreshMenu(trigger,point) {
   const busy=state.syncChecking||['queued','running'].includes(state.sync?.job?.status)||['queued','running'].includes(state.sync?.unsave?.status);
   const refresh=mode=>{void startSync(mode,request).catch(error=>toast(error.message,true));};
   closeSelect();closeCollectionPicker();
-  openAccountMenu(trigger,[{label:'Quick scan and refresh',disabled:busy,run:()=>refresh('quick')},{label:'Deep scan and refresh',disabled:busy,run:()=>refresh('deep')}],point,'Collection options');
+  const platform=request.targets[0],value=`${platform}:${(request.pinterestAccount||request.instagramAccount).toLowerCase()}`;
+  openAccountMenu(trigger,[{label:'Quick scan and refresh',disabled:busy,run:()=>refresh('quick')},{label:'Deep scan and refresh',disabled:busy,run:()=>refresh('deep')},{label:platform==='pinterest'?'Choose boards':'Choose collections',run:()=>collectionsDialog(value)}],point,'Collection options');
 }
-function instagramSaveListDialog(value) {
-  const account = navigationAccounts().find(item => item.value === value);
-  if (!account) return;
-  const folders = state.instagramCollections.filter(item => value === `instagram:${item.account.toLowerCase()}`);
-  const selection = instagramSaveList(value, state.instagramSaveLists), selected = selection.collectionIds ?? folders.map(folder => folder.id);
+// Ticked collections and boards are what a refresh reads and the library shows. Unticking hides
+// saves without deleting them, so ticking again brings them straight back.
+function collectionsDialog(value, { label = '', fromSettings = false } = {}) {
+  const platform = value.slice(0, value.indexOf(':')), handle = value.slice(platform.length + 1), pinterest = platform === 'pinterest';
+  const noun = pinterest ? 'boards' : 'collections', source = pinterest ? 'Pinterest' : 'Instagram', allLabel = pinterest ? 'All pins' : 'All saves';
+  const folders = state.instagramCollections.filter(item => (item.platform || 'instagram') === platform && value === `${platform}:${item.account.toLowerCase()}`);
+  const selection = instagramSaveList(value, state.instagramSaveLists), before = new Set(selection.all ? folders.map(folder => folder.id) : selection.collectionIds);
   const counts = new Map();
   for (const post of state.posts.filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(item => item.id))) counts.set(id, (counts.get(id) || 0) + 1);
-  showModal(`<h2>Customize save list</h2><p class="save-list-account">${sourceIcon('instagram')}${esc(account.label)}</p><p class="fine-print">All includes every save. Collections choose the shortcuts below your account.</p><form id="instagram-save-list-form"><div class="save-list-choices" role="group" aria-label="Instagram save list"><label class="filter-choice"><input type="checkbox" name="collection" value="all" ${selection.all ? 'checked' : ''}><span>All</span></label>${folders.map(folder => `<label class="filter-choice"><input type="checkbox" name="collection" value="${folder.id}" ${selected.includes(folder.id) ? 'checked' : ''}><span><span>${esc(folder.name)}</span><span class="sync-account-count">${counts.get(folder.id) || 0}</span></span></label>`).join('')}</div>${!folders.length ? '<p class="fine-print">Refresh Instagram to discover its collections.</p>' : ''}<p id="save-list-error" class="form-error" role="alert"></p><div class="save-list-actions"><button type="button" class="secondary" id="cancel-save-list">Cancel</button><button type="submit" class="primary" id="apply-save-list">Apply</button></div></form>`);
+  const name = label || navigationAccounts().find(item => item.value === value)?.label || handle;
+  showModal(`<h2>Choose ${noun}</h2><p class="save-list-account">${sourceIcon(platform)}${esc(name)}</p><p class="fine-print">Only what’s ticked is fetched and shown. Unticked ${noun} are hidden, not deleted. ${allLabel} also includes anything outside your ${noun}.</p><form id="instagram-save-list-form"><div class="save-list-choices" role="group" aria-label="${source} ${noun}"><label class="filter-choice save-list-all"><input type="checkbox" name="collection" value="all" ${selection.all ? 'checked' : ''}><span><span>${allLabel}</span></span></label>${folders.map(folder => `<label class="filter-choice"><input type="checkbox" name="collection" value="${folder.id}" ${before.has(folder.id) ? 'checked' : ''}><span><span>${esc(folder.name)}</span><span class="sync-account-count">${counts.get(folder.id) || 0}</span></span></label>`).join('')}</div>${!folders.length ? `<p class="fine-print">Refresh ${source} to find its ${noun}.</p>` : ''}<p id="save-list-error" class="form-error" role="alert"></p><div class="save-list-actions"><button class="secondary" type="button" id="cancel-save-list">Cancel</button><button class="primary" id="apply-save-list">Save changes</button></div></form>`);
   const form = $('#instagram-save-list-form'), apply = $('#apply-save-list');
-  const inputs = [...form.querySelectorAll('[name="collection"]')], all = inputs.find(input => input.value === 'all');
+  const inputs = [...form.querySelectorAll('[name="collection"]')], all = inputs.find(input => input.value === 'all'), rows = inputs.filter(input => input !== all);
   form.onchange = event => {
+    if (event.target === all) { if (all.checked) rows.forEach(input => { input.checked = true; }); }
+    else if (!event.target.checked) all.checked = false;
     apply.disabled = !inputs.some(input => input.checked);
     $('#save-list-error').textContent = '';
   };
-  $('#cancel-save-list').onclick = () => modal.close();
+  const done = () => { if (fromSettings) void settingsDialog(); else modal.close(); };
+  $('#cancel-save-list').onclick = done;
   form.onsubmit = async event => {
     event.preventDefault(); apply.disabled = true;
     try {
-      const collectionIds = inputs.filter(input => input !== all && input.checked).map(input => Number(input.value));
-      const result = await api('/instagram-save-list', { method: 'POST', body: { account: value.slice('instagram:'.length), all: all.checked, collectionIds } });
+      const kept = new Set(rows.filter(input => input.checked).map(input => Number(input.value)));
+      const result = await api('/instagram-save-list', { method: 'POST', body: { platform, account: handle, collectionIds: all.checked ? null : [...kept] } });
       collectionVersion++; state.instagramSaveLists = result.instagramSaveLists;
-      state.archive = false; state.filters = { ...defaultFilters(), sources: ['instagram'], accounts: [value] };
-      modal.close(); updateCollection();
+      const hiddenNow = new Set(all.checked ? [] : folders.filter(folder => !kept.has(folder.id)).map(folder => String(folder.id)));
+      if (!fromSettings) { state.archive = false; state.filters = { ...defaultFilters(), sources: [platform], accounts: [value] }; }
+      else if ([state.filters.collection, ...(state.filters.collections || [])].some(id => hiddenNow.has(String(id)))) state.filters = defaultFilters();
+      if ([...kept].some(id => !before.has(id) && !counts.get(id))) toast(`Saved. Newly ticked ${noun} fill in on the next refresh.`);
+      done(); updateCollection();
     } catch (error) { $('#save-list-error').textContent = error.message; apply.disabled = false; }
   };
 }
@@ -1765,7 +1775,7 @@ async function settingsDialog() {
     void mountMcpSettings(mcpSection, { api, toast, esc, icon, header: $('[data-panel="mcp"] .settings-panel-aside', modal) }).then(() => { if (mcpSection.hidden) mcpSection.closest('.settings-panel').hidden = true; });
     if (window.saveXDesktop?.socialAccounts) {
       const section = $('.native-account-settings', modal);
-      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, browse: true, connect: options => connectAccount(options), onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.filter(account => account.status === 'connected').length} connected`; void syncStatus(); } });
+      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, browse: true, chooseCollections: ({ platform, handle }) => collectionsDialog(`${platform}:${handle.toLowerCase()}`, { label: handle, fromSettings: true }), connect: options => connectAccount(options), onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.filter(account => account.status === 'connected').length} connected`; void syncStatus(); } });
       renderChromeHelperSettings();
     }
     mountUpdateSettings(); renderSync(); return;
@@ -1983,12 +1993,12 @@ window.addEventListener('pagehide', () => { void notes.flushAll(); });
 setInterval(() => { if ($('#results') && state.localMode) syncStatus(); }, 2000);
 setInterval(() => { if (!document.hidden && !modal.open && $('#results')) refresh(true); }, 5000);
 const demoPosts = [
-  { id: -1, platform: 'x', title: '', text: 'The best AI workflow isn’t the one with the most tools.\n\nIt’s the one that removes the step you keep putting off. Start there.', author: 'example_creator', authorName: 'An example creator', topics: ['AI & models', 'Tools'], favorite: true },
+  { id: -1, platform: 'x', title: '', text: 'The best AI workflow isn’t the one with the most tools.\n\nIt’s the one that removes the step you keep putting off. Start there.', author: 'example_creator', authorName: 'An example creator', topics: ['Tech'], favorite: true },
   { id: -2, platform: 'instagram', title: 'A small collection of useful interfaces.', text: 'Save the details that make something feel effortless: clear labels, generous spacing, and one obvious next step.', author: 'design_example', authorName: 'Design example', topics: ['Design'], favorite: false },
-  { id: -3, platform: 'x', title: 'A learning list for the weekend', text: 'One paper. One working prototype. One thing you can explain to a friend.\n\nA little practice goes a long way.', author: 'learning_example', authorName: 'Learning example', topics: ['Research', 'Learning'], favorite: false },
-  { id: -4, platform: 'instagram', title: 'Your next side project starts here.', text: 'The idea you scribbled down. The tutorial you saved. The tiny problem you know how to fix. Put them in the same place.', author: 'build_example', authorName: 'Build example', topics: ['Coding', 'Business'], favorite: false },
-  { id: -5, platform: 'x', title: '', text: 'A note to future me:\n\nBookmark fewer things you feel you should read. Keep more things you actually want to try.', author: 'notes_example', authorName: 'Notes example', topics: ['Tools'], favorite: true },
-  { id: -6, platform: 'instagram', title: 'Make room for curiosity.', text: 'A useful idea can come from anywhere. Finding it again should be the easy part.', author: 'curious_example', authorName: 'Curiosity example', topics: ['Design', 'Learning'], favorite: false }
+  { id: -3, platform: 'x', title: 'A learning list for the weekend', text: 'One paper. One working prototype. One thing you can explain to a friend.\n\nA little practice goes a long way.', author: 'learning_example', authorName: 'Learning example', topics: ['Tech'], favorite: false },
+  { id: -4, platform: 'instagram', title: 'Your next side project starts here.', text: 'The idea you scribbled down. The tutorial you saved. The tiny problem you know how to fix. Put them in the same place.', author: 'build_example', authorName: 'Build example', topics: ['Tech', 'Business'], favorite: false },
+  { id: -5, platform: 'x', title: '', text: 'A note to future me:\n\nBookmark fewer things you feel you should read. Keep more things you actually want to try.', author: 'notes_example', authorName: 'Notes example', topics: ['Tech'], favorite: true },
+  { id: -6, platform: 'instagram', title: 'Make room for curiosity.', text: 'A useful idea can come from anywhere. Finding it again should be the easy part.', author: 'curious_example', authorName: 'Curiosity example', topics: ['Design'], favorite: false }
 ].map((p, i) => ({ thumbnail: '', kind: 'text', tags: [], accounts: ['@example'], notes: '', archived: false, savedAt: new Date(Date.now() - i * 86400000).toISOString(), url: p.platform === 'x' ? 'https://x.com' : 'https://www.instagram.com', ...p }));
 // Filter chips stay on one row beside the Filters button; the rest collapse
 // into "+N more", which opens the Filters dialog with everything selected.

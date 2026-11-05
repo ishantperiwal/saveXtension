@@ -14,7 +14,10 @@ test('rejects unsupported, deceptive and credential-bearing URLs', () => {
 test('thumbnail allowlist and plain local topic suggestions', () => {
   assert.equal(imageUrl('https://pbs.twimg.com/media/abc.jpg'), 'https://pbs.twimg.com/media/abc.jpg');
   for (const url of ['http://pbs.twimg.com/a', 'https://pbs.twimg.com.evil.com/a', 'data:image/svg+xml,<svg/>', 'https://127.0.0.1/admin', 'https://pbs.twimg.com:444/a']) assert.equal(imageUrl(url), '');
-  assert.deepEqual(topicsFor('A new AI coding tool from GitHub'), ['AI & models', 'Coding', 'Tools']);
+  assert.deepEqual(topicsFor('A new AI coding tool from GitHub'), ['Tech']);
+  assert.deepEqual(topicsFor('Figma tips for your startup'), ['Design', 'Business']);
+  assert.deepEqual(topicsFor('Easy weeknight recipe'), ['Lifestyle']);
+  assert.deepEqual(topicsFor('A quiet morning'), []);
   assert.equal(cleanPost({ url: 'https://x.com/a/status/1', text: '<script>text stays text</script>' }).text, '<script>text stays text</script>');
 });
 test('deduplicates across accounts and never erases better captures or edits', () => {

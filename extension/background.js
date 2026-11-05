@@ -84,13 +84,26 @@ async function instagramUrl(tabId) {
   }
   throw new Error('Couldn’t find your Instagram profile. Sign in to Instagram in Chrome, then try again.');
 }
-async function discoverInstagramCollections(tabId, allPostsUrl, platform = 'instagram') {
+// Reads the account's list page. Lists load in batches and can pause for longer than a few reads,
+// so ticked (required) IDs keep the read going until they appear or the deadline passes.
+function skippedWarning(saved, chosen, selected, label) {
+  const missing = saved.filter(item => selected.includes(item.id) && !chosen.includes(item)).map(item => item.name);
+  return `Skipped selected ${label} that couldn’t be found${missing.length ? `: ${missing.join(', ')}` : ''}.`;
+}
+async function discoverInstagramCollections(tabId, allPostsUrl, platform = 'instagram', required = []) {
   const name = sourceName(platform), folders = platform === 'pinterest' ? 'boards' : 'collections';
   await progress(`${name} · finding your saved ${folders}…`);
   await chrome.tabs.update(tabId, { url: `${allPostsUrl.replace(/\/all-posts\/$/, '/')}#savex-sync` });
   await sleep(500); await loaded(tabId);
   await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['background-render.js'] });
   const found = new Map(); let idle = 0, ready = false, account = '';
+  const upload = async () => {
+    const collections = [...found.values()]; let saved = [];
+    for (let i = 0; i < Math.max(1, collections.length); i += 1000) {
+      saved = (await request('/instagram-collections', { platform, account, collections: collections.slice(i, i + 1000) })).collections;
+    }
+    return saved;
+  };
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline && !(await stopped())) {
     // A site can still be redirecting (Pinterest to a regional host), which wipes injected
@@ -108,7 +121,12 @@ async function discoverInstagramCollections(tabId, allPostsUrl, platform = 'inst
     for (const collection of result.collections) found.set(collection.externalId, collection);
     ready ||= result.ready;
     idle = ready && before === found.size ? idle + 1 : 0;
-    if (idle >= 3) break;
+    if (idle >= 3) {
+      if (!required.length || !account) break;
+      const seen = new Set((await upload()).filter(collection => found.has(collection.externalId)).map(collection => collection.id));
+      if (required.every(id => seen.has(id))) break;
+      idle = 0;
+    }
     await chrome.scripting.executeScript({ target: { tabId }, func: () => {
       const root = document.scrollingElement || document.documentElement;
       root.scrollBy({ top: Math.max(500, innerHeight * .8), behavior: 'instant' });
@@ -118,12 +136,9 @@ async function discoverInstagramCollections(tabId, allPostsUrl, platform = 'inst
   }
   if (await stopped()) throw new Error(`Stopped. Previously saved ${folders} are kept.`);
   if (!ready || !account) throw new Error(`${name}’s ${platform === 'pinterest' ? 'board' : 'collection'} list did not finish loading. Try another sync.`);
-  const collections = [...found.values()]; let saved = [];
-  for (let i = 0; i < Math.max(1, collections.length); i += 1000) {
-    saved = (await request('/instagram-collections', { platform, account, collections: collections.slice(i, i + 1000) })).collections;
-  }
+  const saved = await upload();
   // Keep earlier folders if a partial catalog omitted them; only visit folders exposed this time.
-  return saved.filter(collection => found.has(collection.externalId));
+  return { collections: saved.filter(collection => found.has(collection.externalId)), saved };
 }
 let accountScanPromise = null, initialized = false;
 async function publishAccounts(catalog) {
@@ -248,8 +263,8 @@ async function startSource(platform, selectedAccount = null, collection = null) 
       const account = '@' + decodeURIComponent(new URL(url).pathname.split('/')[1]);
       if (job.instagramScope?.account && job.instagramScope.account !== 'current' && account.toLowerCase() !== job.instagramScope.account.toLowerCase()) throw new Error(`Sign into Instagram as ${job.instagramScope.account} before refreshing this account. No posts were imported.`);
       const selected = job.instagramScope?.selections?.[account.toLowerCase()];
-      let collections = [];
-      try { collections = await discoverInstagramCollections(tab.id, url); }
+      let collections = [], saved = [];
+      try { ({ collections, saved } = await discoverInstagramCollections(tab.id, url, 'instagram', selected || [])); }
       catch (error) {
         if (await stopped() || Array.isArray(selected)) throw error;
         job = await get('job'); job.instagramCollectionWarning = 'Instagram collections could not be read this time. Existing folders are kept; try another sync.';
@@ -259,7 +274,8 @@ async function startSource(platform, selectedAccount = null, collection = null) 
       if (!job.plan[job.index].collectionsDiscovered) {
         if (Array.isArray(selected)) {
           const chosen = collections.filter(item => selected.includes(item.id));
-          if (!chosen.length || chosen.length !== selected.length) throw new Error('Some selected Instagram collections could not be found. Customize your save list and try again.');
+          if (!chosen.length) throw new Error('None of the selected Instagram collections could be found. Choose your collections and try again.');
+          if (chosen.length !== selected.length) job.instagramCollectionWarning = skippedWarning(saved, chosen, selected, 'Instagram collections');
           job.plan.splice(job.index, 1, ...chosen.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
           collection = chosen[0]; url = collection.url;
         } else {
@@ -276,17 +292,28 @@ async function startSource(platform, selectedAccount = null, collection = null) 
     // then each board and the unorganized pins to record where every pin belongs.
     const handle = selectedAccount.slice(1);
     if (!collection && !job.plan[job.index].collectionsDiscovered) {
-      let boards = [];
-      try { boards = await discoverInstagramCollections(tab.id, `https://www.pinterest.com/${handle}/_boards/`, 'pinterest'); }
+      const selected = job.pinterestScope?.selections?.[selectedAccount.toLowerCase()];
+      let boards = [], saved = [];
+      try { ({ collections: boards, saved } = await discoverInstagramCollections(tab.id, `https://www.pinterest.com/${handle}/_boards/`, 'pinterest', selected || [])); }
       catch (error) {
-        if (await stopped()) throw error;
+        if (await stopped() || Array.isArray(selected)) throw error;
         console.warn(`Pinterest boards: ${error.message}`);
         job = await get('job'); job.pinterestBoardWarning = 'Pinterest boards could not be read this time. Existing boards are kept; try another sync.';
         await chrome.storage.local.set({ job });
       }
       job = await get('job');
-      job.plan.splice(job.index + 1, 0, ...boards.map(board => ({ platform, account: board.account, collection: board })));
-      job.plan[job.index].collectionsDiscovered = true;
+      if (Array.isArray(selected)) {
+        // Ticked boards replace the all-pins pass, so nothing else is read. A board can vanish
+        // (Unorganized empties out), which shouldn't stop the ones still there.
+        const chosen = boards.filter(board => selected.includes(board.id));
+        if (!chosen.length) throw new Error('None of the selected Pinterest boards could be found. Choose your boards and try again.');
+        if (chosen.length !== selected.length) job.pinterestBoardWarning = skippedWarning(saved, chosen, selected, 'Pinterest boards');
+        job.plan.splice(job.index, 1, ...chosen.map(board => ({ platform, account: board.account, collection: board })));
+        collection = chosen[0];
+      } else {
+        job.plan.splice(job.index + 1, 0, ...boards.map(board => ({ platform, account: board.account, collection: board })));
+        job.plan[job.index].collectionsDiscovered = true;
+      }
       await chrome.storage.local.set({ job });
     }
     await chrome.tabs.update(tab.id, { url: `${collection ? collection.url : `https://www.pinterest.com/${handle}/_pins/`}#savex-sync` }); await sleep(500); await loaded(tab.id);
@@ -301,7 +328,8 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   const { ids: knownIds } = await request(`/known?platform=${platform}&account=${encodeURIComponent(info.account)}${collection ? `&collectionId=${collection.id}` : ''}`);
   const { runId } = await request('/runs', { platform, account: info.account, mode, collectionId: collection?.id });
   const run = { runId, tabId: tab.id, platform, account: info.account, collectionId: collection?.id, collectionName: collection?.name, collectionWarning: platform === 'instagram' ? job.instagramCollectionWarning : platform === 'pinterest' ? job.pinterestBoardWarning : '', status: 'running', stage: 'collecting', imported: 0, updated: 0, rejected: 0, seen: 0, enriched: 0, posts: [], message: 'Finding your saved posts…', startedAt: Date.now() };
-  job = await get('job'); job.phase = 'collecting'; await chrome.storage.local.set({ job }); await setRun(run);
+  // A warning belongs to this run alone, not every collection or account after it.
+  job = await get('job'); job.phase = 'collecting'; job.instagramCollectionWarning = job.pinterestBoardWarning = ''; await chrome.storage.local.set({ job }); await setRun(run);
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['collector.js'] });
   const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_COLLECT', options: { runId, platform, mode, knownIds, collectionExternalId: collection?.externalId, maxPosts: mode === 'deep' ? 100000 : 500 } });
   if (!response?.ok) throw new Error(response?.error || 'Couldn’t start collection.');

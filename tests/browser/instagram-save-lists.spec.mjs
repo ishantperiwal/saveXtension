@@ -9,13 +9,14 @@ const posts=[
   {...base,id:5,platform:'x',accounts:['@writer'],url:'https://x.com/i/status/100000000',collections:[]},
   {...base,id:6,platform:'chrome',accounts:[],url:'https://example.org/',bookmarkTitle:'A bookmark',collections:[]}
 ];
-async function setup(page,fixtures=posts){
+async function setup(page,fixtures=posts,collections=folders){
   const model={lists:{},jobs:[]};
   await page.route('https://**/*',route=>route.abort());
-  await page.route('**/api/posts?scope=all',route=>route.fulfill({json:{posts:fixtures,runs:[],instagramCollections:folders,instagramSaveLists:model.lists}}));
+  await page.route('**/api/posts?scope=all',route=>route.fulfill({json:{posts:fixtures,runs:[],instagramCollections:collections,instagramSaveLists:model.lists}}));
   await page.route('**/api/instagram-save-list',async route=>{
     const input=route.request().postDataJSON();
-    if(input.collectionIds===null)delete model.lists[input.account];else model.lists[input.account]=input.all===undefined?input.collectionIds:{all:input.all,collectionIds:input.collectionIds};
+    const key=input.platform==='pinterest'?`pinterest:${input.account}`:input.account;
+    if(input.collectionIds===null)delete model.lists[key];else model.lists[key]=input.collectionIds;
     await route.fulfill({json:{instagramSaveLists:model.lists}});
   });
   await page.route('**/api/sync',async route=>{
@@ -25,19 +26,17 @@ async function setup(page,fixtures=posts){
   await page.goto('/');return model;
 }
 const account=page=>page.locator('[data-nav-account="instagram:@me"]');
-async function customize(page){await account(page).click({button:'right'});await page.getByRole('menuitem',{name:'Customize save list',exact:true}).click();}
+async function customize(page){await account(page).click({button:'right'});await page.getByRole('menuitem',{name:'Choose collections',exact:true}).click();}
 
-test('selected collections limit the library while account and chevron always toggle and remember collapse',async({page})=>{
+test('ticked collections limit the library while account and chevron always toggle and remember collapse',async({page})=>{
   const model=await setup(page);
-  await customize(page);await expect(page.getByRole('heading',{name:'Customize save list',exact:true})).toBeVisible();
-  await expect(page.getByRole('checkbox',{name:'All',exact:true})).toBeChecked();
-  await page.getByRole('checkbox',{name:'Design 2',exact:true}).check();
-  await expect(page.getByRole('checkbox',{name:'All',exact:true})).toBeChecked();
-  await page.getByRole('checkbox',{name:'Food 1',exact:true}).uncheck();
-  await page.getByRole('checkbox',{name:'All',exact:true}).uncheck();
-  await page.getByRole('checkbox',{name:'AI tools 1',exact:true}).check();
-  await page.getByRole('button',{name:'Apply',exact:true}).click();
-  expect(model.lists).toEqual({'@me':{all:false,collectionIds:[11,12]}});
+  await customize(page);await expect(page.getByRole('heading',{name:'Choose collections',exact:true})).toBeVisible();
+  const all=page.getByRole('checkbox',{name:'All saves',exact:true}),food=page.getByRole('checkbox',{name:'Food 1',exact:true});
+  await expect(all).toBeChecked();
+  for(const name of ['Design 2','AI tools 1','Food 1'])await expect(page.getByRole('checkbox',{name,exact:true})).toBeChecked();
+  await food.uncheck();await expect(all).not.toBeChecked();
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  expect(model.lists).toEqual({'@me':[11,12]});
   await expect(page.locator('.save-card')).toHaveCount(2);
   await expect(account(page).locator('.nav-count')).toHaveText('2');
   await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
@@ -50,25 +49,13 @@ test('selected collections limit the library while account and chevron always to
   await page.reload();await expect(toggle).toBeEnabled();await expect(list).toBeHidden();
   await toggle.click();await expect(list).toBeVisible();
   await page.setViewportSize({width:390,height:844});await customize(page);
-  await expect(page.getByRole('checkbox',{name:'Food 1',exact:true})).toBeVisible();
+  await expect(food).toBeVisible();await expect(food).not.toBeChecked();await expect(all).not.toBeChecked();
   await page.screenshot({path:'test-results/customize-instagram-save-list.png'});
-  await page.getByRole('checkbox',{name:'All',exact:true}).check();
-  await page.getByRole('button',{name:'Apply',exact:true}).click();
+  await all.check();await expect(food).toBeChecked();
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  expect(model.lists).toEqual({});
   await expect(page.locator('.save-card')).toHaveCount(4);await expect(toggle).toBeEnabled();
-  expect(model.lists).toEqual({'@me':{all:true,collectionIds:[11,12]}});
-  await expect(page.locator('[data-instagram-collection]')).toHaveCount(2);
-  await account(page).click();await expect(page.locator('.save-card')).toHaveCount(4);await expect(list).toBeHidden();
-  await expect(page.locator('[data-post-id="3"],[data-post-id="4"]')).toHaveCount(2);
-  await toggle.click();await expect(list).toBeVisible();
-  await page.reload();await customize(page);
-  await expect(page.getByRole('checkbox',{name:'All',exact:true})).toBeChecked();
-  await expect(page.getByRole('checkbox',{name:'Design 2',exact:true})).toBeChecked();
-  await expect(page.getByRole('checkbox',{name:'AI tools 1',exact:true})).toBeChecked();
-  await expect(page.getByRole('checkbox',{name:'Food 1',exact:true})).not.toBeChecked();
-  await page.getByRole('checkbox',{name:'All',exact:true}).uncheck();
-  await page.getByRole('button',{name:'Apply',exact:true}).click();
-  await account(page).click();await expect(page.locator('.save-card')).toHaveCount(2);await expect(list).toBeHidden();
-  await toggle.click();await expect(list).toBeVisible();
+  await expect(page.locator('[data-instagram-collection]')).toHaveCount(3);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
@@ -88,35 +75,64 @@ for(const [value,target] of [['x:@writer','x'],['instagram:@me','instagram'],['c
 test('context menu supports keyboard, dismissal, empty selection and cancelling without changing the list',async({page})=>{
   const model=await setup(page);await account(page).focus();await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menuitem',{name:'Quick scan and refresh',exact:true})).toBeFocused();
-  await page.keyboard.press('End');await expect(page.getByRole('menuitem',{name:'Customize save list',exact:true})).toBeFocused();
+  await page.keyboard.press('End');await expect(page.getByRole('menuitem',{name:'Choose collections',exact:true})).toBeFocused();
   await page.keyboard.press('Escape');await expect(page.getByRole('menu')).toHaveCount(0);await expect(account(page)).toBeFocused();
-  await customize(page);for(const box of await page.getByRole('checkbox').all())await box.uncheck();await expect(page.getByRole('button',{name:'Apply',exact:true})).toBeDisabled();
+  await customize(page);for(const box of await page.getByRole('checkbox').all())await box.uncheck();await expect(page.getByRole('button',{name:'Save changes',exact:true})).toBeDisabled();
   await page.getByRole('checkbox',{name:'Food 1',exact:true}).check();await page.getByRole('button',{name:'Cancel',exact:true}).click();expect(model.lists).toEqual({});
   await expect(page.locator('[data-instagram-collection]')).toHaveCount(3);
 });
 
 
-test('All works alone while individual collections only pin shortcuts when All is on',async({page})=>{
-  const model=await setup(page);await customize(page);
-  for(const name of ['Design 2','AI tools 1','Food 1'])await page.getByRole('checkbox',{name,exact:true}).uncheck();
-  await expect(page.getByRole('checkbox',{name:'All',exact:true})).toBeChecked();
-  await expect(page.getByRole('button',{name:'Apply',exact:true})).toBeEnabled();
-  await page.getByRole('button',{name:'Apply',exact:true}).click();
-  expect(model.lists).toEqual({'@me':{all:true,collectionIds:[]}});
-  await expect(page.locator('[data-instagram-collection]')).toHaveCount(0);
-  await account(page).click();await expect(page.locator('.save-card')).toHaveCount(4);
-  await customize(page);await page.getByRole('checkbox',{name:'Design 2',exact:true}).check();
-  await expect(page.getByRole('checkbox',{name:'All',exact:true})).toBeChecked();
-  await page.getByRole('button',{name:'Apply',exact:true}).click();
-  await expect(page.locator('.save-card')).toHaveCount(4);
-  const toggle=page.getByRole('button',{name:'Toggle Instagram collections for @me',exact:true});
-  await expect(page.locator('[data-instagram-collection="11"]')).toBeVisible();
-  await toggle.click();await expect(page.locator('[data-instagram-collection="11"]')).toBeHidden();
-  await toggle.click();await expect(page.locator('[data-instagram-collection="11"]')).toBeVisible();
-  await page.locator('[data-instagram-collection="11"]').click();await expect(page.locator('.save-card')).toHaveCount(2);
-  await account(page).click();await expect(page.locator('.save-card')).toHaveCount(4);
+test('collection rows open the same chooser, and individually ticking everything still leaves out saves in no collection',async({page})=>{
+  const model=await setup(page);
+  await page.locator('[data-instagram-collection="11"]').click({button:'right'});
+  await page.getByRole('menuitem',{name:'Choose collections',exact:true}).click();
+  await page.getByRole('checkbox',{name:'All saves',exact:true}).uncheck();
+  for(const name of ['Design 2','AI tools 1','Food 1'])await expect(page.getByRole('checkbox',{name,exact:true})).toBeChecked();
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  expect(model.lists).toEqual({'@me':[11,12,13]});
+  await expect(page.locator('.save-card')).toHaveCount(3);
+  await expect(page.locator('[data-post-id="4"]')).toHaveCount(0);
 });
 
+const boards=[{id:21,platform:'pinterest',account:'@me',name:'Rooms'},{id:22,platform:'pinterest',account:'@me',name:'Posters'}];
+const pins=[{...base,id:7,platform:'pinterest',accounts:['@me'],url:'https://www.pinterest.com/pin/7/',collections:[boards[0]]},{...base,id:8,platform:'pinterest',accounts:['@me'],url:'https://www.pinterest.com/pin/8/',collections:[boards[1]]}];
+
+test('Pinterest boards use their own list even when Instagram shares the handle',async({page})=>{
+  const model=await setup(page,[...posts,...pins],[...folders,...boards]);
+  await page.locator('[data-nav-account="pinterest:@me"]').click({button:'right'});
+  await page.getByRole('menuitem',{name:'Choose boards',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Choose boards',exact:true})).toBeVisible();
+  await expect(page.getByRole('checkbox',{name:'All pins',exact:true})).toBeChecked();
+  await page.getByRole('checkbox',{name:'Posters 1',exact:true}).uncheck();
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  expect(model.lists).toEqual({'pinterest:@me':[21]});
+  await expect(page.locator('[data-nav-account="pinterest:@me"] .nav-count')).toHaveText('1');
+  await expect(page.locator('[data-instagram-collection="22"]')).toHaveCount(0);
+  await expect(account(page).locator('.nav-count')).toHaveText('4');
+});
+
+test('Settings opens the chooser for connected Instagram and Pinterest accounts and returns to Settings',async({page})=>{
+  await page.addInitScript(()=>{
+    const known={helperInfo:async()=>({version:'1.0.0',path:'/helper'}),socialAccounts:async()=>[{id:'a',platform:'x',handle:'@writer',status:'connected'},{id:'b',platform:'pinterest',handle:'@Me',status:'connected'},{id:'c',platform:'instagram',handle:'@me',status:'connected'}]};
+    window.saveXDesktop=new Proxy(known,{get:(target,key)=>target[key]||(async()=>null)});
+  });
+  const model=await setup(page,[...posts,...pins],[...folders,...boards]);
+  const open=async()=>{await page.locator('[data-action="settings"]').first().click();const panel=page.getByRole('button',{name:/^Accounts/});if(await panel.getAttribute('aria-expanded')==='false')await panel.click();};
+  await open();
+  await expect(page.getByRole('button',{name:/for @writer/})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Choose collections for @me on Instagram',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Choose boards for @Me on Pinterest',exact:true}).click();
+  await page.getByRole('checkbox',{name:'Rooms 1',exact:true}).uncheck();
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  expect(model.lists).toEqual({'pinterest:@me':[22]});
+  await expect(page.getByRole('heading',{name:'Settings',exact:true})).toBeVisible();
+  await expect(page.locator('[data-nav-account="pinterest:@me"] .nav-count')).toHaveText('1');
+  await page.getByRole('button',{name:'Choose collections for @me on Instagram',exact:true}).click();
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Settings',exact:true})).toBeVisible();
+  expect(model.lists).toEqual({'pinterest:@me':[22]});
+});
 
 test('an account with All off does not inherit unselected saves through another owner',async({page})=>{
   const fixtures=posts.map(p=>p.id===3?{...p,accounts:['@me','@other']}:p);

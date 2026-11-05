@@ -63,14 +63,13 @@ export function imageUrl(value) {
   return '';
 }
 
+// Broad on purpose: a new library should read at a glance. Anything more specific is the
+// person's own topics to make.
 const TOPICS = [
-  ['AI & models', /\b(ai|artificial intelligence|llm|gpt|claude|gemini|openai|anthropic|model|inference|agent)\b/i],
-  ['Coding', /\b(code|coding|developer|programming|github|javascript|typescript|python|cursor|codex|react|api)\b/i],
-  ['Design', /\b(design|figma|typography|ui|ux|interface|animation|motion)\b/i],
-  ['Tools', /\b(tool|tools|app|apps|workflow|productivity|automation|extension)\b/i],
-  ['Research', /\b(research|paper|study|benchmark|arxiv|dataset)\b/i],
-  ['Learning', /\b(tutorial|learn|guide|course|how to|explained|tips)\b/i],
-  ['Business', /\b(startup|business|founder|marketing|revenue|launch|saas)\b/i]
+  ['Tech', /\b(ai|artificial intelligence|llm|gpt|claude|gemini|openai|anthropic|model|inference|agent|code|coding|developer|programming|github|javascript|typescript|python|cursor|codex|react|api|tool|tools|app|apps|software|workflow|productivity|automation|extension|research|paper|benchmark|arxiv|dataset)\b/i],
+  ['Design', /\b(design|designer|figma|typography|font|fonts|ui|ux|interface|animation|motion|logo|branding|illustration)\b/i],
+  ['Business', /\b(startup|startups|business|founder|founders|marketing|revenue|saas|finance|investing|career|careers|sales)\b/i],
+  ['Lifestyle', /\b(recipe|recipes|food|cooking|travel|fashion|outfit|outfits|fitness|workout|skincare|beauty|wellness|decor|interiors|gardening)\b/i]
 ];
 export function topicsFor(content) { return TOPICS.filter(([, regex]) => regex.test(content)).map(([name]) => name); }
 

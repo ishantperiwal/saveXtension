@@ -14,7 +14,7 @@ async function setup(page,{offline=false}={}){
 for(const mode of ['quick','deep'])test(`a collection right-click ${mode} refresh targets only that collection without changing the current view or preferences`,async({page})=>{
  const model=await setup(page),collection=page.locator('[data-instagram-collection="11"]');
  await collection.click({button:'right'});const menu=page.getByRole('menu',{name:'Collection options',exact:true});
- await expect(menu).toBeVisible();await expect(menu.getByRole('menuitem')).toHaveCount(2);await page.keyboard.press('Escape');await expect(collection).toBeFocused();
+ await expect(menu).toBeVisible();await expect(menu.getByRole('menuitem')).toHaveCount(3);await page.keyboard.press('Escape');await expect(collection).toBeFocused();
  await collection.click({button:'right'});await page.getByRole('menuitem',{name:`${mode==='quick'?'Quick':'Deep'} scan and refresh`,exact:true}).click();
  await expect.poll(()=>model.jobs).toEqual([{targets:['instagram'],xAccount:'current',instagramAccount:'@me',instagramCollectionId:11,mode}]);
  await expect(page.locator('[data-filter="all"]')).toHaveAttribute('aria-pressed','true');expect(model.preferences).toEqual({'@me':{all:true,collectionIds:[11,12]}});

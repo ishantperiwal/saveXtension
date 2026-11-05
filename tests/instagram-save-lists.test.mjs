@@ -22,6 +22,28 @@ test('save lists validate collection ownership, deduplicate, and restore All wit
   }finally{store.close();}
 });
 
+test('Pinterest boards keep their own list, scope sync jobs and hide pins without touching Instagram',()=>{
+  const store=new Store(':memory:');
+  try {
+    const board=(id)=>({externalId:`b${id}`,name:`Board ${id}`,url:`https://www.pinterest.com/me-1/b${id}/`});
+    const [rooms,posters]=store.upsertInstagramCollections('@me-1',[board(1),board(2)],'pinterest');
+    const [ideas]=store.upsertInstagramCollections('@other',[folder(100,'other')]);
+    assert.deepEqual(setInstagramSaveList(store,{platform:'pinterest',account:'@Me-1',collectionIds:[rooms.id]}),{'pinterest:@me-1':[rooms.id]});
+    assert.throws(()=>setInstagramSaveList(store,{platform:'pinterest',account:'@me-1',collectionIds:[ideas.id]}),/boards belonging/);
+    assert.throws(()=>setInstagramSaveList(store,{account:'@me-1',collectionIds:[rooms.id]}),/collections belonging/);
+    assert.throws(()=>setInstagramSaveList(store,{platform:'x',account:'@me-1',collectionIds:[rooms.id]}),/Instagram or Pinterest/);
+    const queue=syncQueue(store,{native:true});
+    assert.deepEqual(queue.enqueue(['pinterest']).pinterestScope,{selections:{'@me-1':[rooms.id]}});queue.cancel();
+    assert.deepEqual(queue.enqueue(['pinterest'],'current','quick','current',null,'@me-1').pinterestScope,{account:'@me-1',selections:{'@me-1':[rooms.id]}});queue.cancel();
+    assert.equal(queue.enqueue(['instagram']).instagramScope,null);queue.cancel();
+    const pin=(id,collections)=>({id,platform:'pinterest',accounts:['@me-1'],collections});
+    const lists=instagramSaveLists(store),pins=[pin(1,[{id:rooms.id,account:'@me-1'}]),pin(2,[{id:posters.id,account:'@me-1'}]),{id:3,platform:'instagram',accounts:['@me-1'],collections:[]}];
+    assert.deepEqual(visibleInstagramSaves(pins,lists).map(p=>p.id),[1,3]);
+    assert.deepEqual(setInstagramSaveList(store,{platform:'pinterest',account:'@me-1',collectionIds:null}),{});
+    assert.equal(queue.enqueue(['pinterest']).pinterestScope,null);queue.cancel();
+  }finally{store.close();}
+});
+
 test('limited jobs snapshot the list and require a helper that understands it',()=>{
   const store=new Store(':memory:');
   try {

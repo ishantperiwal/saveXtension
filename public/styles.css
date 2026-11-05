@@ -858,9 +858,13 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .collection-toggle:disabled { cursor: default; opacity: .35; }
 .save-list-account { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font: 13px/20px var(--mono); }
 .save-list-account .source-icon { width: 20px; height: 20px; }
-.save-list-choices { display: flex; flex-wrap: wrap; gap: 8px; max-height: 45vh; overflow-y: auto; padding: 4px 0; margin: 20px 0; }
-.save-list-choices .filter-choice > span { max-width: 100%; }
+.save-list-choices { display: flex; flex-direction: column; gap: 2px; max-height: 45vh; overflow-y: auto; padding: 4px 0; margin: 20px 0; }
+.save-list-choices .filter-choice { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 4px 10px; border-radius: 10px; }
+.save-list-choices .filter-choice:hover { background: var(--hover-soft); }
+.save-list-choices .filter-choice > input { position: static; flex: none; width: 16px; height: 16px; opacity: 1; accent-color: var(--accent); }
+.save-list-choices .filter-choice > span, .save-list-choices .filter-choice > input:checked + span, .save-list-choices .filter-choice:hover > span, .save-list-choices .filter-choice > input:focus-visible + span { flex: 1; justify-content: space-between; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; color: var(--ink); font-size: 13px; }
 .save-list-choices .filter-choice > span > span:first-child { overflow-wrap: anywhere; }
+.save-list-choices .save-list-all { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
 .save-list-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 
 .account-menu-item:disabled { opacity: .45; cursor: default; }

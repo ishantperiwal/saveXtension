@@ -1,3 +1,5 @@
+// Instagram lists are keyed by handle and Pinterest lists by pinterest:handle, so one handle
+// used on both sources keeps separate choices.
 export function instagramSaveList(account, lists = {}) {
   const handle = String(account).replace(/^instagram:/, '').toLowerCase();
   const value = lists[handle];
@@ -12,10 +14,10 @@ export function instagramSaveSelection(account, lists = {}) {
 }
 export function visibleInstagramSaves(posts, lists = {}, accounts = []) {
   return posts.filter(post => {
-    if (post.platform !== 'instagram' || !post.accounts?.length) return true;
+    if (!['instagram', 'pinterest'].includes(post.platform) || !post.accounts?.length) return true;
     return post.accounts.some(account => {
-      if (accounts.length && !accounts.some(value => value === 'instagram:*' || value.toLowerCase() === `instagram:${account.toLowerCase()}`)) return false;
-      const selected = instagramSaveSelection(account, lists);
+      if (accounts.length && !accounts.some(value => value === `${post.platform}:*` || value.toLowerCase() === `${post.platform}:${account.toLowerCase()}`)) return false;
+      const selected = instagramSaveSelection(`${post.platform}:${account}`, lists);
       return selected === null || (post.collections || []).some(collection => collection.account?.toLowerCase() === account.toLowerCase() && selected.includes(Number(collection.id)));
     });
   });

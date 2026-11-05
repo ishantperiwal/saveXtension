@@ -46,11 +46,11 @@ export function initializeTopics(db) {
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
 }
-export function topicCatalog(db, { all = false } = {}) {
+export function topicCatalog(db, { all = false, hidden = [] } = {}) {
   return db.prepare(`SELECT t.id,t.name,t.description,t.managed,t.parent_id AS parentId,t.created_at AS createdAt,t.updated_at AS updatedAt,
-    COUNT(CASE WHEN p.archived=0 THEN 1 END) AS count FROM topics t
+    COUNT(CASE WHEN p.archived=0 AND p.id NOT IN (SELECT value FROM json_each(?)) THEN 1 END) AS count FROM topics t
     LEFT JOIN post_topics m ON m.topic_id=t.id LEFT JOIN posts p ON p.id=m.post_id
-    GROUP BY t.id ${all ? '' : 'HAVING count>0 OR t.managed=1 OR EXISTS(SELECT 1 FROM topics c WHERE c.parent_id=t.id)'} ORDER BY t.position IS NULL, t.position, t.name_key`).all().map(({ managed, ...t }) => all ? { ...t, managed: !!managed, parent: t.parentId ? db.prepare('SELECT name FROM topics WHERE id=?').get(t.parentId)?.name : undefined, aliases: db.prepare('SELECT name_key FROM topic_aliases WHERE topic_id=?').all(t.id).map(a => a.name_key) } : t);
+    GROUP BY t.id ${all ? '' : 'HAVING count>0 OR t.managed=1 OR EXISTS(SELECT 1 FROM topics c WHERE c.parent_id=t.id)'} ORDER BY t.position IS NULL, t.position, t.name_key`).all(JSON.stringify(hidden)).map(({ managed, ...t }) => all ? { ...t, managed: !!managed, parent: t.parentId ? db.prepare('SELECT name FROM topics WHERE id=?').get(t.parentId)?.name : undefined, aliases: db.prepare('SELECT name_key FROM topic_aliases WHERE topic_id=?').all(t.id).map(a => a.name_key) } : t);
 }
 export function importTopicCatalog(db, inputs) {
   if (!Array.isArray(inputs) || inputs.length > 2000) throw new HttpError(400, 'Import up to 2,000 topics at a time.');
@@ -93,8 +93,9 @@ function snapshot(db, noteIds) {
 }
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export class TopicLibrary {
-  constructor(store) { this.store = store; this.db = store.db; }
-  catalog() { return topicCatalog(this.db); }
+  // hidden lists saves this reader may not see, beyond the archive. The library UI has none.
+  constructor(store, { hidden = () => [] } = {}) { this.store = store; this.db = store.db; this.hidden = hidden; }
+  catalog() { return topicCatalog(this.db, { hidden: this.hidden() }); }
   requireTopic(id) {
     const t = this.catalog().find(t => t.id === id);
     if (!t) throw new HttpError(404, 'Topic not found in the accessible library.');
@@ -103,8 +104,8 @@ export class TopicLibrary {
   requirePosts(ids) {
     const unique = [...new Set(ids)];
     if (!unique.length || unique.length > 200) throw new HttpError(400, 'Choose between 1 and 200 saves.');
-    const posts = unique.map(id => this.store.post(id));
-    if (posts.some(p => !p || p.archived)) throw new HttpError(404, 'One or more saves are unavailable. Archived saves are excluded.');
+    const posts = unique.map(id => this.store.post(id)), hidden = new Set(this.hidden());
+    if (posts.some(p => !p || p.archived || hidden.has(p.id))) throw new HttpError(404, 'One or more saves are unavailable. Archived saves are excluded.');
     return posts;
   }
   touchPosts(ids) {
@@ -249,8 +250,9 @@ export class TopicLibrary {
     return this.change('update_note', () => ({ save: this.store.updatePost(postId, { notes }) }), [postId]);
   }
   accessibleChanges() {
+    const hidden = new Set(this.hidden());
     return this.db.prepare('SELECT * FROM mcp_changes ORDER BY created_at DESC,rowid DESC LIMIT 100').all().filter(row => {
-      return JSON.parse(row.changes).filter(c => c.key.startsWith('post:')).every(c => this.db.prepare('SELECT 1 FROM posts WHERE id=? AND archived=0').get(Number(c.key.slice(5))));
+      return JSON.parse(row.changes).filter(c => c.key.startsWith('post:')).every(c => !hidden.has(Number(c.key.slice(5))) && this.db.prepare('SELECT 1 FROM posts WHERE id=? AND archived=0').get(Number(c.key.slice(5))));
     });
   }
   history(limit = 20) { return this.accessibleChanges().slice(0, limit).map(({ id, action, created_at, undone }) => ({ id, action, createdAt: created_at, undone: !!undone })); }

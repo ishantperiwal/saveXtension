@@ -1,4 +1,4 @@
-import { instagramSyncScope } from './instagram-save-lists.mjs';
+import { instagramSyncScope, saveListSelections } from './instagram-save-lists.mjs';
 import { isPinterestHost, PINTEREST_DOMAINS } from '../public/pinterest-host.js';
 
 // Each site's own domains, and how to tell its cookies apart. Google is never one of them.
@@ -10,10 +10,14 @@ const SESSION_SITES = {
 import { randomBytes } from 'node:crypto';
 import { HttpError, text } from './domain.mjs';
 
-// Which Pinterest account or single board a job covers; null means every connected account.
+// Which Pinterest account, ticked boards or single board a job covers; null means everything on every connected account.
 function pinterestSyncScope(store, account, collectionId, targets) {
   if (account !== 'current' && (typeof account !== 'string' || !/^@[\w.-]{1,100}$/.test(account))) throw new HttpError(400, 'Choose a Pinterest account.');
-  if (collectionId === null || collectionId === undefined) return account === 'current' ? null : { account };
+  if (collectionId === null || collectionId === undefined) {
+    const selections = saveListSelections(store, 'pinterest'), limited = Object.keys(selections).length > 0;
+    if (account === 'current') return limited ? { selections } : null;
+    return limited ? { account, selections } : { account };
+  }
   if (targets.length !== 1) throw new HttpError(400, 'A board refresh must target Pinterest only.');
   const collection = store.instagramCollections().find(item => item.id === collectionId && item.platform === 'pinterest');
   if (!collection) throw new HttpError(400, 'Choose a Pinterest board.');

@@ -102,3 +102,49 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     await context.close(); await rm(profile, { recursive: true, force: true });
   }
 });
+
+test('a ticked collection that loads late is still fetched, and one that is gone is skipped by name', async ({ baseURL }) => {
+  test.setTimeout(120000);
+  const profile = await mkdtemp(resolve(tmpdir(), 'savex-ig-late-'));
+  const extension = resolve(profile, 'extension'); await cp(resolve('extension'), extension, { recursive: true });
+  const backgroundPath = resolve(extension, 'background.js');
+  await writeFile(backgroundPath, (await readFile(backgroundPath, 'utf8')).replace("const DEFAULT_ORIGIN = 'http://localhost:3210'", `const DEFAULT_ORIGIN = ${JSON.stringify(baseURL)}`));
+  const manifest = JSON.parse(await readFile(resolve(extension, 'manifest.json'), 'utf8'));
+  manifest.host_permissions.push('https://x.com/*', 'https://www.instagram.com/*');
+  await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
+  const context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
+  const shell = body => `<html><head><meta charset="utf-8"></head><body><a href="/late_user/" aria-label="Profile"><img alt="late_user profile picture"></a><main>${body}</main></body></html>`;
+  // The second batch arrives well after the old stopping point of three quiet reads.
+  const catalog = `<a href="/late_user/saved/all-posts/" aria-label="All Posts">All Posts</a><a href="/late_user/saved/first/2001/" aria-label="First batch">First batch</a><div id="more"></div><script>setTimeout(()=>{document.getElementById('more').innerHTML='<a href="/late_user/saved/late/2002/" aria-label="Late batch">Late batch</a>'},6000)</script>`;
+  const visits = []; let page;
+  try {
+    await context.route('https://x.com/**', route => route.fulfill({ contentType: 'text/html', body: '<a data-testid="AppTabBar_Profile_Link" href="/test_account">Profile</a>' }));
+    await context.route('https://www.instagram.com/**', route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/embed.js') return route.abort();
+      if (path.includes('/saved/') && path !== '/late_user/saved/') visits.push(path);
+      const body = path === '/' ? shell('<a href="/late_user/saved/">Saved</a>') : path === '/late_user/saved/' ? shell(catalog) : shell('');
+      return route.fulfill({ contentType: 'text/html', body });
+    });
+    if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker');
+    page = await context.newPage(); await page.goto(`${baseURL}/`);
+    await page.evaluate(async () => {
+      const headers = { 'Content-Type': 'application/json' }, folder = (externalId, name, slug) => ({ externalId, name, url: `https://www.instagram.com/late_user/saved/${slug}/${externalId}/` });
+      const { collections } = await (await fetch('/api/extension/instagram-collections', { method: 'POST', headers, body: JSON.stringify({ account: '@late_user', collections: [folder('2001', 'First batch', 'first'), folder('2002', 'Late batch', 'late'), folder('2003', 'Deleted folder', 'gone')] }) })).json();
+      await fetch('/api/instagram-save-list', { method: 'POST', headers, body: JSON.stringify({ account: '@late_user', collectionIds: collections.filter(c => c.account === '@late_user').map(c => c.id) }) });
+    });
+    await page.reload();
+    await chooseSelect(page, 'Sync source', 'instagram');
+    await startQuickSync(page);
+    const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
+    await expect.poll(async () => (await job())?.status, { timeout: 100000 }).toBe('partial');
+    expect(visits.some(path => path.includes('/2001/'))).toBe(true);
+    expect(visits.some(path => path.includes('/2002/'))).toBe(true);
+    expect(visits.some(path => path.includes('/2003/'))).toBe(false);
+    const { message } = await job();
+    expect(message.match(/Skipped selected Instagram collections that couldn’t be found: Deleted folder\./g)).toHaveLength(1);
+  } finally {
+    if (page && !page.isClosed()) await page.evaluate(() => fetch('/api/sync/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).catch(() => {});
+    await context.close(); await rm(profile, { recursive: true, force: true });
+  }
+});

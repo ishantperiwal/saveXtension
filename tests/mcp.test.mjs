@@ -11,6 +11,8 @@ import { createApp } from '../server/app.mjs';
 import { Store } from '../server/store.mjs';
 import { TopicLibrary } from '../server/topics.mjs';
 import { mcpLibrary } from '../server/mcp.mjs';
+import { setInstagramSaveList } from '../server/instagram-save-lists.mjs';
+import { visibleInstagramSaves } from '../public/instagram-save-lists.js';
 
 function fixture(store) {
   store.importPosts([
@@ -21,6 +23,35 @@ function fixture(store) {
   ]);
   return store.posts({scope:'all'});
 }
+test('MCP shows only the saves the library shows when Instagram collections are deselected',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([
+      {url:'https://www.instagram.com/reel/Shown/',text:'visible reel',sourceAccount:'@one',savedAt:'2026-10-01T00:00:00Z',collections:[{account:'@one',name:'Ideas',url:'https://www.instagram.com/one/saved/ideas/1/'}]},
+      {url:'https://www.instagram.com/reel/Unseen/',text:'SECRET reel',sourceAccount:'@one',savedAt:'2026-10-02T00:00:00Z',collections:[{account:'@one',name:'Private',url:'https://www.instagram.com/one/saved/private/2/'}]},
+      {url:'https://www.instagram.com/reel/Other/',text:'other account reel',sourceAccount:'@two',savedAt:'2026-10-03T00:00:00Z'},
+      {url:'https://x.com/alice/status/123456',text:'bookmark',sourceAccount:'@one',savedAt:'2026-10-04T00:00:00Z'}
+    ]);
+    const posts=store.posts({scope:'all'}),unseen=posts.find(p=>p.url.includes('Unseen')),api=mcpLibrary(store);
+    const {topic}=api.topics.create({name:'Reels'});const {changeId}=api.topics.assign({postIds:posts.filter(p=>p.platform==='instagram').map(p=>p.id),topicIds:[topic.id]});
+    assert.equal(api.overview().total,4);assert.equal(api.topics.catalog().find(t=>t.id===topic.id).count,3);
+    const ideas=store.instagramCollections().find(c=>c.name==='Ideas');setInstagramSaveList(store,{account:'@one',collectionIds:[ideas.id]});
+    const overview=api.overview(),visible=visibleInstagramSaves(store.posts(),{'@one':[ideas.id]});
+    assert.equal(overview.total,visible.length);assert.equal(overview.total,3);
+    assert.equal(overview.platforms.find(p=>p.platform==='instagram').count,2);
+    assert.deepEqual(overview.accounts.filter(a=>a.platform==='instagram').map(a=>[a.handle,a.count]),[['@one',1],['@two',1]]);
+    assert.deepEqual(overview.instagramCollections.map(c=>c.name),['Ideas']);assert.equal(overview.dates.newestSavedAt,'2026-10-04T00:00:00.000Z');
+    assert.equal(api.search({}).total,3);assert.equal(api.search({query:'SECRET'}).total,0);
+    assert.equal(api.search({collectionIds:[store.instagramCollections().find(c=>c.name==='Private').id]}).total,0);
+    assert.equal(api.topics.catalog().find(t=>t.id===topic.id).count,2);
+    assert.throws(()=>api.getSave(unseen.id),/Save unavailable/);
+    assert.throws(()=>api.topics.assign({postIds:[unseen.id],topicIds:[]}),/unavailable/);
+    assert.throws(()=>api.topics.notes({postId:unseen.id,notes:'no',expectedUpdatedAt:unseen.updatedAt}),/unavailable/);
+    assert(!api.topics.history().some(c=>c.id===changeId));assert.throws(()=>api.topics.undo(changeId),/unavailable/);
+    setInstagramSaveList(store,{account:'@one',collectionIds:[ideas.id],all:true});
+    assert.equal(api.overview().total,4);assert.equal(api.getSave(unseen.id).id,unseen.id);assert(api.topics.history().some(c=>c.id===changeId));
+  } finally { store.close(); }
+});
 test('MCP library queries paginate, combine filters, expose full original references, and exclude archive',()=>{
   const store=new Store(':memory:');
   try {
