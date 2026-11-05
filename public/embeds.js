@@ -121,7 +121,7 @@ function load(holder, automatic = false) {
   item.loading = true; item.priority = false; item.automatic = automatic;
   animateEmbedStage(holder, () => { holder.dataset.embedState = 'loading'; holder.setAttribute('aria-busy', 'true'); holder.querySelector('.embed-error').hidden = true; loadingLabel(holder); });
   const frame = document.createElement('iframe');
-  frame.title = `${target.platform === 'x' ? 'X' : 'Instagram'} original post`;
+  frame.title = `${target.platform === 'x' ? 'X' : target.platform === 'pinterest' ? 'Pinterest' : 'Instagram'} original post`;
   frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin');
   frame.allow = 'fullscreen; encrypted-media; picture-in-picture'; frame.referrerPolicy = 'no-referrer';
   frame.onload = () => frame.contentWindow?.postMessage({ source: 'savex-library-theme', theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light' }, previewOrigin);

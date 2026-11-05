@@ -2,6 +2,9 @@
 (() => {
   if (globalThis.SaveXExtractors) return;
   const visibleText = el => (el?.innerText || el?.textContent || '').trim();
+  // Injected without modules, so this mirrors public/pinterest-host.js.
+  const pinterestHost = host => /^(?:[a-z]{2,3}\.)?pinterest\.(?:com|co\.uk|com\.au|com\.mx|co\.kr|ca|de|fr|es|it|pt|at|ch|cl|dk|ie|jp|kr|nz|ph|se|ru)$/.test(host);
+  const PINTEREST_PAGES = new Set(['pin', 'search', 'ideas', 'today', 'settings', 'business', 'topics', 'explore', 'videos', 'news_hub', 'login', '_']);
   function pageInfo(doc, location) {
     const host = location.hostname.replace(/^www\./, '').replace(/^mobile\./, '');
     const path = location.pathname;
@@ -18,7 +21,49 @@
       const collectionId = path.match(/\/saved\/(?:[^/]+\/)?(\d+)\/?$/)?.[1] || '';
       return { platform: 'instagram', account: `@${account}`, valid: true, collection: !!collectionId, collectionId };
     }
+    if (pinterestHost(host)) {
+      // /name/_pins/ lists everything, /name/_boards/ holds board cards and unorganized pins,
+      // and /name/board/ is one board. Every other /name/_tab/ is not a saved list.
+      const match = path.match(/^\/([\w.-]+)\/([^/]+)\/?$/);
+      if (match && !PINTEREST_PAGES.has(match[1]) && (!match[2].startsWith('_') || ['_pins', '_boards'].includes(match[2]))) {
+        const collectionId = match[2] === '_pins' ? '' : match[2] === '_boards' ? 'unorganized' : match[2];
+        return { platform: 'pinterest', account: `@${match[1]}`, valid: true, collection: !!collectionId, collectionId };
+      }
+    }
     return { valid: false, platform: null, account: '' };
+  }
+  function pinterestBoards(doc, location) {
+    const info = pageInfo(doc, location);
+    if (info.platform !== 'pinterest' || info.collectionId !== 'unorganized') return { account: '', ready: false, collections: [] };
+    const handle = info.account.slice(1), collections = new Map();
+    for (const anchor of doc.querySelectorAll('a[href]')) {
+      let url; try { url = new URL(anchor.getAttribute('href'), location.origin); } catch { continue; }
+      const match = url.pathname.match(/^\/([\w.-]+)\/([^/_][^/]*)\/?$/);
+      if (!match || match[1].toLowerCase() !== handle.toLowerCase() || !pinterestHost(url.hostname.replace(/^www\./, ''))) continue;
+      const card = anchor.closest('[data-test-id="profile-board-card"],[data-test-id="pwt-grid-item"]');
+      const name = visibleText((card || anchor).querySelector('[data-test-id="board-card-title"]')) || anchor.getAttribute('aria-label')?.trim() || '';
+      if (name && !collections.has(match[2])) collections.set(match[2], { externalId: match[2], name, url: `https://www.pinterest.com/${handle}/${match[2]}/` });
+    }
+    if (doc.querySelector('[data-test-id="unorganized-ideas-heading-container"]')) collections.set('unorganized', { externalId: 'unorganized', name: 'Unorganized', url: `https://www.pinterest.com/${handle}/_boards/` });
+    // A profile with no boards still shows its name, so an empty list is a real answer.
+    return { account: info.account, ready: !!doc.querySelector('[data-test-id="profile-name"],[data-test-id="profile-board-card"]'), collections: [...collections.values()] };
+  }
+  function pinterestPosts(doc, location = doc.location) {
+    // Only the list itself: a board's "More ideas" and other recommendations sit outside it.
+    const { collectionId } = pageInfo(doc, location);
+    const list = collectionId === 'unorganized' ? doc : doc.querySelector(collectionId ? '[data-test-id="board-feed"]' : '[data-test-id="user-profile-pin-grid"]');
+    const found = new Map();
+    for (const pin of list?.querySelectorAll('[data-test-id="pin"]') || []) {
+      const link = pin.querySelector('a[href*="/pin/"]'), id = pin.getAttribute('data-test-pin-id') || link?.getAttribute('href')?.match(/\/pin\/(?:[^/]*--)?(\d+)/)?.[1];
+      if (!id || !/^\d+$/.test(id) || found.has(id)) continue;
+      const img = pin.querySelector('img'), video = pin.querySelector('video,[data-test-id="pincard-video-with-link"]');
+      const title = (link?.getAttribute('aria-label') || '').replace(/\s*pin page$/i, '').trim();
+      const alt = (img?.getAttribute('alt') || '').replace(/^This contains an image of:\s*/i, '').trim();
+      const source = img?.getAttribute('src') || pin.querySelector('video')?.getAttribute('poster') || '';
+      const thumbnail = source.replace('/236x/', '/736x/');
+      found.set(id, { url: `https://www.pinterest.com/pin/${id}/`, author: '', authorName: '', text: /^untitled$/i.test(title) ? alt : title.length >= alt.length ? title : alt, thumbnail, media: thumbnail ? [thumbnail] : [], kind: video ? 'video' : 'image' });
+    }
+    return [...found.values()];
   }
   function instagramCollections(doc, location) {
     const info = pageInfo(doc, location);
@@ -119,9 +164,14 @@
       if (doc.querySelector('[data-testid="emptyState"]')) return 'empty';
       return !xPosts(doc).length && doc.querySelector('main article, main a[href*="/status/"] time') ? 'unreadable' : '';
     }
+    if (platform === 'pinterest') {
+      if (pinterestPosts(doc).length) return '';
+      if (doc.querySelector('[data-test-id="pin"]') || doc.querySelectorAll('img[src*="pinimg.com"]').length >= 3) return 'unreadable';
+      return doc.querySelector('[data-test-id="header-profile"]') ? 'empty' : '';
+    }
     const images = [...doc.querySelectorAll('main img[src]')].filter(img => !img.closest('header'));
     return !instagramPosts(doc).length && images.length >= 3 ? 'unreadable' : '';
   }
-  const layoutChanged = platform => `${platform === 'x' ? 'X' : 'Instagram'} loaded, but saveXtension couldn’t read the page. The site’s layout may have changed, so saveXtension needs an update. Nothing was removed.`;
-  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, xBookmarkState, diagnose, layoutChanged, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : instagramPosts(doc) };
+  const layoutChanged = platform => `${platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram'} loaded, but saveXtension couldn’t read the page. The site’s layout may have changed, so saveXtension needs an update. Nothing was removed.`;
+  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, pinterestBoards, xBookmarkState, diagnose, layoutChanged, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : platform === 'pinterest' ? pinterestPosts(doc) : instagramPosts(doc) };
 })();

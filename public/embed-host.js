@@ -52,6 +52,12 @@
       const frame = await window.twttr.widgets.createTweet(document.body.dataset.postId, root, { dnt: true, conversation: 'none', theme, align: 'center', width: 550 });
       if (frame) { keepBorder(frame); done(); } else fail(new Error('X did not provide an embed for this post.'));
     }).catch(fail);
+  } else if (document.body.dataset.platform === 'pinterest') {
+    // The widget replaces its link with the drawn pin; a pin it can't show keeps the link.
+    const drawn = () => { if (!ready && root.querySelector('[data-pin-log],span[data-pin-id],img')) done(); };
+    const mutation = new MutationObserver(drawn); mutation.observe(root, { childList: true, subtree: true });
+    load('https://assets.pinterest.com/js/pinit.js').then(drawn).catch(fail);
+    window.addEventListener('pagehide', () => mutation.disconnect());
   } else {
     const frames = new WeakSet(), loaded = new WeakSet();
     let renderedFrame;

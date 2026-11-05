@@ -8,6 +8,8 @@ export function syncAccountOptions(posts, catalog = {}, selected = []) {
   if (!handles.size || !catalog.active && selected?.includes('x:current')) options.unshift({ value: 'x:current', platform: 'x', label: 'Current X account', count: live.filter(post => post.platform === 'x' && (!catalog.active || (post.accounts || []).some(account => account.toLowerCase() === catalog.active.toLowerCase()))).length });
   const instagram = [...new Set(posts.filter(post => post.platform === 'instagram').flatMap(post => post.accounts || []))];
   options.unshift({ value: 'instagram:current', platform: 'instagram', label: instagram.length === 1 ? instagram[0] : 'Instagram', count: live.filter(post => post.platform === 'instagram').length });
+  const pins = live.filter(post => post.platform === 'pinterest');
+  if (pins.length) options.push({ value: 'pinterest:current', platform: 'pinterest', label: 'Pinterest', count: pins.length });
   options.push({ value: 'chrome:*', platform: 'chrome', label: 'Chrome', count: live.filter(post => post.platform === 'chrome').length });
   return options;
 }
@@ -27,7 +29,7 @@ export function legacySyncSelection(source, xAccount, catalog = {}) {
 
 export function syncSelectionRequest(selected, catalog = {}) {
   catalog ||= {};
-  const targets = ['chrome', 'x', 'instagram'].filter(platform => selected.some(value => value.startsWith(`${platform}:`)));
+  const targets = ['chrome', 'x', 'instagram', 'pinterest'].filter(platform => selected.some(value => value.startsWith(`${platform}:`)));
   const handles = selected.filter(value => value.startsWith('x:')).map(value => value.slice(2));
   const known = (catalog.accounts || []).map(account => account.handle.toLowerCase());
   let xAccount = handles[0] || 'current';

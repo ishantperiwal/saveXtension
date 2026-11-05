@@ -11,7 +11,7 @@
     return candidates.filter(el => el.scrollHeight > el.clientHeight + 100 && (el === root || /auto|scroll/.test(getComputedStyle(el).overflowY))).sort((a, b) => b.clientHeight - a.clientHeight)[0] || root;
   }
   function restriction() {
-    if (/\/accounts\/login|\/challenge|\/checkpoint|\/i\/flow\/login/.test(location.pathname)) return 'The site needs you to sign in or complete a check. Resolve it yourself, then start another sync.';
+    if (/\/accounts\/login|\/challenge|\/checkpoint|\/i\/flow\/login|^\/login/.test(location.pathname)) return 'The site needs you to sign in or complete a check. Resolve it yourself, then start another sync.';
     const text = (document.querySelector('main')?.innerText || '').toLowerCase();
     if (/rate limit exceeded|try again later|we restrict certain activity|unusual activity/.test(text)) return 'The site is limiting requests. Sync stopped; please try again later.';
     return '';
@@ -23,7 +23,7 @@
     let status = 'partial', message = '', total = 0;
     const deep = options.mode === 'deep';
     const known = new Set(options.knownIds || []);
-    const postId = post => post.url.match(info.platform === 'x' ? /\/status\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1];
+    const postId = post => post.url.match(info.platform === 'x' ? /\/status\/(\d+)/ : info.platform === 'pinterest' ? /\/pin\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1];
     let familiar = 0;
     const seen = new Set(); let pending = [], idle = 0, passes = 0;
     const minutes = deep ? 120 : 10;
@@ -40,7 +40,7 @@
     };
     try {
       if (!info.valid || info.platform !== options.platform) throw new Error('Keep your Saved or Bookmarks page open during sync.');
-      if (options.collectionExternalId && info.collectionId !== options.collectionExternalId) throw new Error('The selected Instagram collection did not open.');
+      if (options.collectionExternalId && info.collectionId !== options.collectionExternalId) throw new Error(`The selected ${info.platform === 'pinterest' ? 'Pinterest board' : 'Instagram collection'} did not open.`);
       // A restored source tab may start halfway down a virtualized list. Reset
       // before assigning positions, otherwise the newest prefix is recorded last.
       const firstScroller=scroller();
@@ -96,9 +96,13 @@
         }
         idle = added ? 0 : idle + 1;
         if (idle >= 5) {
-          if (seen.size === 0) message = 'No posts found. On Instagram, open All posts or a saved collection first. An empty page or a layout change can also cause this.';
+          if (seen.size === 0) message = info.platform === 'pinterest' ? 'No pins found on this page. An empty page or a layout change can cause this.' : 'No posts found. On Instagram, open All posts or a saved collection first. An empty page or a layout change can also cause this.';
           else message = `${deep ? 'Deep scan' : 'Quick check'} stopped after five checks without more posts loading. Saved batches are kept; complete history and removals are not verified.`;
-          status = 'partial'; break;
+          status = 'partial';
+          // A short Pinterest board simply ends; only a list still able to scroll is unfinished.
+          const end = scroller();
+          if (info.platform === 'pinterest' && seen.size && end.scrollTop + end.clientHeight >= end.scrollHeight - 5) { status = 'completed'; message = 'Reached the end of this list.'; }
+          break;
         }
         const target = scroller();
         target.scrollBy({ top: Math.max(500, Math.floor(target.clientHeight * .8)), behavior: 'instant' });

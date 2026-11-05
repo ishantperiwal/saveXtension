@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cleanPost, cleanInstagramCollection, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
+import { cleanPost, cleanCollection, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
 import { initializeTopics, topicNames, writeTopicNames } from './topics.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
@@ -60,6 +60,8 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS instagram_collection_posts_post ON instagram_collection_posts(post_id);
     `);
+    // These tables hold every platform's folders: Instagram collections and Pinterest boards.
+    if (!this.db.prepare('PRAGMA table_info(instagram_collections)').all().some(column => column.name === 'platform')) this.db.exec("ALTER TABLE instagram_collections ADD COLUMN platform TEXT NOT NULL DEFAULT 'instagram'");
     if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'added_at')) {
       // Social saved_at was the first local import time. Chrome saved_at was
       // the browser bookmark date; leave unrecoverable historic imports unknown.
@@ -117,7 +119,7 @@ export class Store {
     if (!['active', 'archive', 'all'].includes(scope)) throw new HttpError(400, 'Unknown library scope.');
     const where = scope === 'all' ? '' : scope === 'archive' ? ' WHERE archived=1' : ' WHERE archived=0';
     const memberships = new Map();
-    for (const row of this.db.prepare(`SELECT m.post_id,c.id,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id`).all()) {
+    for (const row of this.db.prepare(`SELECT m.post_id,c.id,c.platform,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id`).all()) {
       const { post_id, ...collection } = row;
       if (!memberships.has(post_id)) memberships.set(post_id, []);
       memberships.get(post_id).push(collection);
@@ -128,7 +130,7 @@ export class Store {
   post(id) {
     const row = this.db.prepare('SELECT * FROM posts WHERE id=?').get(id);
     if (!row) return null;
-    const collections = this.db.prepare(`SELECT c.id,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
+    const collections = this.db.prepare(`SELECT c.id,c.platform,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
     return { ...this.decode(row, this.sourceOrder(id).get(id) || []), topics: topicNames(this.db, id), collections };
   }
   sourceOrder(postId = null) {
@@ -148,20 +150,20 @@ export class Store {
     return result;
   }
   saveInstagramCollection(collection) {
-    return this.db.prepare(`INSERT INTO instagram_collections(account,external_id,name,url,updated_at) VALUES(?,?,?,?,?)
-      ON CONFLICT(account,external_id) DO UPDATE SET name=excluded.name,url=excluded.url,updated_at=excluded.updated_at RETURNING id`).get(collection.account, collection.externalId, collection.name, collection.url, new Date().toISOString()).id;
+    return this.db.prepare(`INSERT INTO instagram_collections(platform,account,external_id,name,url,updated_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(account,external_id) DO UPDATE SET name=excluded.name,url=excluded.url,updated_at=excluded.updated_at RETURNING id`).get(collection.platform || 'instagram', collection.account, collection.externalId, collection.name, collection.url, new Date().toISOString()).id;
   }
-  upsertInstagramCollections(account, inputs) {
-    if (typeof account !== 'string' || !/^@[\w.]{1,100}$/.test(account)) throw new HttpError(400, 'Choose an Instagram account.');
-    if (!Array.isArray(inputs) || inputs.length > 1000) throw new HttpError(400, 'Send up to 1,000 Instagram collections at a time.');
-    const collections = inputs.map(input => cleanInstagramCollection(account, input));
+  upsertInstagramCollections(account, inputs, platform = 'instagram') {
+    if (typeof account !== 'string' || !/^@[\w.-]{1,100}$/.test(account)) throw new HttpError(400, 'Choose an account.');
+    if (!Array.isArray(inputs) || inputs.length > 1000) throw new HttpError(400, 'Send up to 1,000 collections at a time.');
+    const collections = inputs.map(input => cleanCollection(platform, account, input));
     this.db.exec('BEGIN IMMEDIATE');
     try { for (const collection of collections) this.saveInstagramCollection(collection); this.db.exec('COMMIT'); }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    return this.instagramCollections().filter(c => c.account.toLowerCase() === account.toLowerCase());
+    return this.instagramCollections().filter(c => c.platform === platform && c.account.toLowerCase() === account.toLowerCase());
   }
   instagramCollections() {
-    return this.db.prepare(`SELECT c.id,c.account,c.external_id AS externalId,c.name,c.url,c.updated_at AS updatedAt,
+    return this.db.prepare(`SELECT c.id,c.platform,c.account,c.external_id AS externalId,c.name,c.url,c.updated_at AS updatedAt,
       COUNT(CASE WHEN p.archived=0 THEN 1 END) AS count
       FROM instagram_collections c LEFT JOIN instagram_collection_posts m ON m.collection_id=c.id LEFT JOIN posts p ON p.id=m.post_id
       GROUP BY c.id ORDER BY c.account COLLATE NOCASE,c.name COLLATE NOCASE,c.id`).all();
@@ -194,10 +196,10 @@ export class Store {
         const stored = this.db.prepare('SELECT id,topics,topics_curated FROM posts WHERE platform=? AND external_id=?').get(p.platform, p.externalId);
         if (!row || !row.topics_curated) writeTopicNames(this.db, stored.id, JSON.parse(stored.topics), input.topicsCurated === true);
         if (p.platform === 'chrome') this.db.prepare('UPDATE posts SET bookmark_title=?,folders=? WHERE platform=? AND external_id=?').run(p.bookmarkTitle, JSON.stringify(p.folders), p.platform, p.externalId);
-        if (p.platform === 'instagram' && Array.isArray(input.collections)) {
-          const postId = this.db.prepare("SELECT id FROM posts WHERE platform='instagram' AND external_id=?").get(p.externalId).id;
+        if (['instagram', 'pinterest'].includes(p.platform) && Array.isArray(input.collections)) {
+          const postId = this.db.prepare('SELECT id FROM posts WHERE platform=? AND external_id=?').get(p.platform, p.externalId).id;
           for (const value of input.collections.slice(0, 1000)) {
-            let collection; try { collection = cleanInstagramCollection(value.account, value); } catch { continue; }
+            let collection; try { collection = cleanCollection(p.platform, value.account, value); } catch { continue; }
             const collectionId = this.saveInstagramCollection(collection);
             this.db.prepare('INSERT OR IGNORE INTO instagram_collection_posts VALUES(?,?)').run(collectionId, postId);
           }
@@ -236,11 +238,11 @@ export class Store {
     this.db.prepare('DELETE FROM posts WHERE id=?').run(id);
   }
   startRun(deviceId, platform, account, mode = 'quick', collectionId = null) {
-    if (!['x', 'instagram', 'chrome'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
+    if (!['x', 'instagram', 'pinterest', 'chrome'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
     if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
     if (collectionId !== null) {
       const collection = this.db.prepare('SELECT * FROM instagram_collections WHERE id=?').get(Number(collectionId));
-      if (platform !== 'instagram' || !collection || collection.account.toLowerCase() !== String(account).toLowerCase()) throw new HttpError(400, 'Choose a collection belonging to this Instagram account.');
+      if (!collection || collection.platform !== platform || collection.account.toLowerCase() !== String(account).toLowerCase()) throw new HttpError(400, 'Choose a collection belonging to this account.');
     }
     const id = randomBytes(12).toString('hex');
     this.db.prepare('INSERT INTO sync_runs (id,device_id,platform,account,started_at,mode,collection_id) VALUES (?,?,?,?,?,?,?)').run(id, deviceId, platform, text(account, 100), new Date().toISOString(), mode, collectionId === null ? null : Number(collectionId));
@@ -281,6 +283,8 @@ export class Store {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   detailCandidates(platform, account, runId) {
+    // A pin's title and image already come from the list; its own page adds nothing to read.
+    if (platform === 'pinterest') return [];
     const rows = runId
       ? this.db.prepare(`SELECT p.* FROM posts p JOIN sync_discoveries d ON d.post_id=p.id
           WHERE d.last_seen_run=? AND d.platform=? AND d.account=? AND p.archived=0 ORDER BY p.id`).all(runId, platform, account)

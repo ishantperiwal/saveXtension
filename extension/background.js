@@ -52,18 +52,19 @@ async function loaded(tabId, timeout = 25000) {
   }
   throw new Error('The site took too long to load. Click Sync to try again.');
 }
+const sourceName = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram';
 async function inspect(tabId, platform) {
   const end = Date.now() + 20000;
   while (Date.now() < end) {
     if (await stopped()) throw new Error('Stopped.');
     const tab = await chrome.tabs.get(tabId);
-    if (/\/accounts\/login|\/accounts\/password|\/challenge|\/checkpoint|\/i\/flow\/login/.test(new URL(tab.url).pathname)) throw new Error(`Sign in to ${platform === 'x' ? 'X' : 'Instagram'} in Chrome, then click Sync again.`);
+    if (/\/accounts\/login|\/accounts\/password|\/challenge|\/checkpoint|\/i\/flow\/login|^\/login/.test(new URL(tab.url).pathname)) throw new Error(`Sign in to ${sourceName(platform)} in Chrome, then click Sync again.`);
     await chrome.scripting.executeScript({ target: { tabId }, files: ['extractors.js'] });
     const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.SaveXExtractors.pageInfo(document, location) });
     if (result.valid) return result;
     await sleep(600);
   }
-  throw new Error(platform === 'x' ? 'X did not show Bookmarks. Check that you are signed in and Bookmarks is selected.' : 'Instagram did not show Saved posts. Check your login, then try again.');
+  throw new Error(platform === 'x' ? 'X did not show Bookmarks. Check that you are signed in and Bookmarks is selected.' : `${sourceName(platform)} did not show your saved posts. Check your login, then try again.`);
 }
 async function instagramUrl(tabId) {
   const end = Date.now() + 16000;
@@ -83,18 +84,24 @@ async function instagramUrl(tabId) {
   }
   throw new Error('Couldn’t find your Instagram profile. Sign in to Instagram in Chrome, then try again.');
 }
-async function discoverInstagramCollections(tabId, allPostsUrl) {
-  await progress('Instagram · finding your saved collections…');
+async function discoverInstagramCollections(tabId, allPostsUrl, platform = 'instagram') {
+  const name = sourceName(platform), folders = platform === 'pinterest' ? 'boards' : 'collections';
+  await progress(`${name} · finding your saved ${folders}…`);
   await chrome.tabs.update(tabId, { url: `${allPostsUrl.replace(/\/all-posts\/$/, '/')}#savex-sync` });
   await sleep(500); await loaded(tabId);
   await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['background-render.js'] });
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['extractors.js'] });
   const found = new Map(); let idle = 0, ready = false, account = '';
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline && !(await stopped())) {
-    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.SaveXExtractors.instagramCollections(document, location) });
+    // A site can still be redirecting (Pinterest to a regional host), which wipes injected
+    // scripts mid-read. That isn't a failure of the list, so inject again and retry.
+    let result;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['extractors.js'] });
+      [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: reader => globalThis.SaveXExtractors[reader](document, location), args: [platform === 'pinterest' ? 'pinterestBoards' : 'instagramCollections'] });
+    } catch { await sleep(700); continue; }
     if (result.account) {
-      if (account && account.toLowerCase() !== result.account.toLowerCase()) throw new Error('The Instagram account changed while reading collections.');
+      if (account && account.toLowerCase() !== result.account.toLowerCase()) throw new Error(`The ${name} account changed while reading ${folders}.`);
       account = result.account;
     }
     const before = found.size;
@@ -106,14 +113,14 @@ async function discoverInstagramCollections(tabId, allPostsUrl) {
       const root = document.scrollingElement || document.documentElement;
       root.scrollBy({ top: Math.max(500, innerHeight * .8), behavior: 'instant' });
       root.dispatchEvent(new Event('scroll', { bubbles: true })); window.dispatchEvent(new Event('scroll'));
-    } });
+    } }).catch(() => {});
     await sleep(700);
   }
-  if (await stopped()) throw new Error('Stopped. Previously saved collections are kept.');
-  if (!ready || !account) throw new Error('Instagram’s collection list did not finish loading. Try another sync.');
+  if (await stopped()) throw new Error(`Stopped. Previously saved ${folders} are kept.`);
+  if (!ready || !account) throw new Error(`${name}’s ${platform === 'pinterest' ? 'board' : 'collection'} list did not finish loading. Try another sync.`);
   const collections = [...found.values()]; let saved = [];
   for (let i = 0; i < Math.max(1, collections.length); i += 1000) {
-    saved = (await request('/instagram-collections', { account, collections: collections.slice(i, i + 1000) })).collections;
+    saved = (await request('/instagram-collections', { platform, account, collections: collections.slice(i, i + 1000) })).collections;
   }
   // Keep earlier folders if a partial catalog omitted them; only visit folders exposed this time.
   return saved.filter(collection => found.has(collection.externalId));
@@ -182,7 +189,12 @@ async function switchXAccount(tabId, account, { verifyBookmarks = true } = {}) {
 async function preparePlan(job) {
   const plan = [];
   for (const platform of job.targets) {
-    if (desktop && platform === 'instagram') {
+    if (platform === 'pinterest') {
+      const catalog = await desktop.accounts('pinterest'), scope = job.pinterestScope;
+      const accounts = scope?.account ? catalog.accounts.filter(item => item.handle.toLowerCase() === scope.account.toLowerCase()) : catalog.accounts;
+      if (!accounts.length) throw new Error(`Connect ${scope?.account || 'Pinterest'} in saveXtension, then retry.`);
+      plan.push(...accounts.map(item => ({ platform, account: item.handle, ...(scope?.collection ? { collection: scope.collection } : {}) })));
+    } else if (desktop && platform === 'instagram') {
       const catalog = await desktop.accounts('instagram'), requested = job.instagramScope?.account;
       const accounts = requested && requested !== 'current' ? catalog.accounts.filter(item => item.handle.toLowerCase() === requested.toLowerCase()) : catalog.accounts;
       if (!accounts.length) throw new Error(`Connect ${requested && requested !== 'current' ? requested : 'Instagram'} in saveXtension, then retry.`);
@@ -224,7 +236,7 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   const tab = await createWorkTab('sync');
   job.ownedTabs.push(tab.id); job.sourceTabId = tab.id; job.phase = 'loading'; await chrome.storage.local.set({ job });
   await chrome.tabs.update(tab.id, { autoDiscardable: false, muted: true });
-  await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : 'https://www.instagram.com/' });
+  await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : platform === 'pinterest' ? 'https://www.pinterest.com/' : 'https://www.instagram.com/' });
   await sleep(400);
   await loaded(tab.id);
   if (desktop) await desktop.verifyAccount(tab.id, platform, selectedAccount);
@@ -259,16 +271,36 @@ async function startSource(platform, selectedAccount = null, collection = null) 
     }
     await chrome.tabs.update(tab.id, { url: `${url}#savex-sync` }); await sleep(500); await loaded(tab.id);
   }
+  if (platform === 'pinterest') {
+    // Like Instagram: all pins first, which also covers pins inside board sections,
+    // then each board and the unorganized pins to record where every pin belongs.
+    const handle = selectedAccount.slice(1);
+    if (!collection && !job.plan[job.index].collectionsDiscovered) {
+      let boards = [];
+      try { boards = await discoverInstagramCollections(tab.id, `https://www.pinterest.com/${handle}/_boards/`, 'pinterest'); }
+      catch (error) {
+        if (await stopped()) throw error;
+        console.warn(`Pinterest boards: ${error.message}`);
+        job = await get('job'); job.pinterestBoardWarning = 'Pinterest boards could not be read this time. Existing boards are kept; try another sync.';
+        await chrome.storage.local.set({ job });
+      }
+      job = await get('job');
+      job.plan.splice(job.index + 1, 0, ...boards.map(board => ({ platform, account: board.account, collection: board })));
+      job.plan[job.index].collectionsDiscovered = true;
+      await chrome.storage.local.set({ job });
+    }
+    await chrome.tabs.update(tab.id, { url: `${collection ? collection.url : `https://www.pinterest.com/${handle}/_pins/`}#savex-sync` }); await sleep(500); await loaded(tab.id);
+  }
   if (platform === 'x' && selectedAccount) { await progress(`Opening X Bookmarks for ${selectedAccount}…`); await switchXAccount(tab.id, selectedAccount); }
   const info = await inspect(tab.id, platform);
-  if (collection && (info.account.toLowerCase() !== collection.account.toLowerCase() || info.collectionId !== collection.externalId)) throw new Error('Instagram did not open the expected account and collection.');
+  if (collection && (info.account.toLowerCase() !== collection.account.toLowerCase() || info.collectionId !== collection.externalId)) throw new Error(`${sourceName(platform)} did not open the expected account and ${platform === 'pinterest' ? 'board' : 'collection'}.`);
   if (platform === 'x' && !info.account) throw new Error('Couldn’t identify the active X account. Try again after signing in.');
   if (platform === 'x') { const catalog = await get('xAccountCatalog'); if (catalog && catalog.active !== info.account) await publishAccounts({ ...catalog, active: info.account, busy: false }); }
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', files: ['background-render.js'] });
   const mode = job.mode === 'deep' ? 'deep' : 'quick';
   const { ids: knownIds } = await request(`/known?platform=${platform}&account=${encodeURIComponent(info.account)}${collection ? `&collectionId=${collection.id}` : ''}`);
   const { runId } = await request('/runs', { platform, account: info.account, mode, collectionId: collection?.id });
-  const run = { runId, tabId: tab.id, platform, account: info.account, collectionId: collection?.id, collectionName: collection?.name, collectionWarning: platform === 'instagram' ? job.instagramCollectionWarning : '', status: 'running', stage: 'collecting', imported: 0, updated: 0, rejected: 0, seen: 0, enriched: 0, posts: [], message: 'Finding your saved posts…', startedAt: Date.now() };
+  const run = { runId, tabId: tab.id, platform, account: info.account, collectionId: collection?.id, collectionName: collection?.name, collectionWarning: platform === 'instagram' ? job.instagramCollectionWarning : platform === 'pinterest' ? job.pinterestBoardWarning : '', status: 'running', stage: 'collecting', imported: 0, updated: 0, rejected: 0, seen: 0, enriched: 0, posts: [], message: 'Finding your saved posts…', startedAt: Date.now() };
   job = await get('job'); job.phase = 'collecting'; await chrome.storage.local.set({ job }); await setRun(run);
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['collector.js'] });
   const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_COLLECT', options: { runId, platform, mode, knownIds, collectionExternalId: collection?.externalId, maxPosts: mode === 'deep' ? 100000 : 500 } });
@@ -372,7 +404,7 @@ async function advanceJob() {
     if (await stopped() || job.index >= job.plan.length) {
       const status = await stopped() ? 'cancelled' : job.results.length && job.results.every(r => r.status === 'failed') ? 'failed' : job.results.some(r => r.status === 'failed') ? 'partial' : job.results.some(r => r.status === 'partial') ? 'partial' : 'completed';
       const total = job.results.reduce((n, r) => n + r.imported, 0);
-      await closeOwned(); await updateJob({ status, results: job.results, message: await stopped() ? 'Stopped. Everything already imported is saved.' : `${total} new saves. ${job.results.map(r => `${r.platform === 'x' ? 'X' : r.platform === 'chrome' ? 'Chrome bookmarks' : 'Instagram'}${r.account ? ' ' + r.account : ''}: ${r.message}`).join(' ')}` });
+      await closeOwned(); await updateJob({ status, results: job.results, message: await stopped() ? 'Stopped. Everything already imported is saved.' : `${total} new saves. ${job.results.map(r => `${r.platform === 'chrome' ? 'Chrome bookmarks' : sourceName(r.platform)}${r.account ? ' ' + r.account : ''}: ${r.message}`).join(' ')}` });
       await chrome.storage.local.remove(['job', 'cancelRequested']); return;
     }
     try { if (job.phase === 'loading') { await closeOwned(); job.ownedTabs = []; await chrome.storage.local.set({ job }); } if (job.plan[job.index].platform === 'chrome') await syncChromeBookmarks(); else await startSource(job.plan[job.index].platform, job.plan[job.index].account, job.plan[job.index].collection); }
@@ -404,13 +436,14 @@ async function checkJobs() {
     if (allowed && !(await chrome.scripting.getRegisteredContentScripts({ ids: ['savex-background-layout'] })).length) {
       await chrome.scripting.registerContentScripts([{ id: 'savex-background-layout', matches: SOCIAL_ORIGINS, js: ['background-render.js'], world: 'MAIN', runAt: 'document_start' }]);
     }
-    const response = await request('/jobs', { instance: await instanceId(), name: desktop ? 'saveXtension' : navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
+    const response = await request('/jobs', { chromeSession: !desktop && !!chrome.cookies, chromeSessionSites: await chromeSessionSites(), instance: await instanceId(), name: desktop ? 'saveXtension' : navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
     reachedLibrary=true;
     if (!desktop && response.desktopSocial) {
       if (job) { await closeOwned(); await chrome.storage.local.remove(['job', 'cancelRequested']); }
       // The desktop app reads Chrome's bookmark file itself, but managed computers can keep it
       // somewhere unexpected. Chrome's own copy is sent after any change so the app still finds it.
       if (bookmarkAccess && (!response.chromeBookmarkTreeAt || await get('bookmarksDirty') !== false)) await sendBookmarkTree();
+      if (response.chromeSessionRequest) await sendChromeSession(response.chromeSessionRequest);
       if (response.bookmarkSetupRequested && !bookmarkAccess) await chrome.runtime.openOptionsPage();
       return;
     }
@@ -480,12 +513,12 @@ async function handle(message, sender) {
   if (sender.tab && !extensionPage) {
     const run = await get('syncState');
     if (!run || run.tabId !== sender.tab.id || run.runId !== message.runId || run.stage !== 'collecting' || run.status !== 'running') throw new Error('No active sync for this tab.');
-    const info = new URL(sender.url); if (!['x.com', 'www.x.com', 'twitter.com', 'www.instagram.com', 'instagram.com'].includes(info.hostname)) throw new Error('Unsupported source.');
+    const info = new URL(sender.url); if (!['x.com', 'www.x.com', 'twitter.com', 'www.instagram.com', 'instagram.com'].includes(info.hostname) && !/(?:^|\.)pinterest\.[a-z.]+$/.test(info.hostname)) throw new Error('Unsupported source.');
     if (message.type === 'SYNC_BATCH') {
       const result = await request(`/runs/${run.runId}`, { posts: message.posts });
       await setRun({ ...run, imported: run.imported + result.imported, updated: run.updated + result.updated, rejected: run.rejected + result.rejected }); return result;
     }
-    if (message.type === 'SYNC_PROGRESS') { await setRun({ ...run, seen: message.seen, message: message.message }); await progress(`${run.platform === 'x' ? 'X ' + run.account : 'Instagram'}${run.collectionName ? ` · ${run.collectionName}` : ''} · ${message.message}`); return {}; }
+    if (message.type === 'SYNC_PROGRESS') { await setRun({ ...run, seen: message.seen, message: message.message }); await progress(`${run.platform === 'x' ? 'X ' + run.account : sourceName(run.platform)}${run.collectionName ? ` · ${run.collectionName}` : ''} · ${message.message}`); return {}; }
     if (message.type === 'SYNC_FINISH') {
       await setRun({ ...run, stage: 'enriching', collectorStatus: run.collectionWarning && message.status === 'completed' ? 'partial' : message.status, collectorMessage: `${run.collectionWarning ? `${run.collectionWarning} ` : ''}${message.message}` });
       const job = await get('job'); job.phase = 'enriching'; await chrome.storage.local.set({ job }); void advanceJob(); return {};
@@ -504,6 +537,19 @@ async function handle(message, sender) {
   if (message.type === 'STOP_SYNC') { await request('/stop', {}); await checkJobs(); return {}; }
   if (message.type === 'OPEN_LIBRARY') { await chrome.tabs.create({ url: await origin() }); return {}; }
   throw new Error('Unknown extension action.');
+}
+// Only after a sign-in the person started in the desktop app, and only that site's own cookies.
+const SESSION_DOMAINS = { pinterest: /^pinterest\.[a-z.]+$/, x: /^(?:x|twitter)\.com$/, instagram: /^instagram\.com$/ };
+async function chromeSessionSites() {
+  if (desktop || !chrome.cookies) return [];
+  const { origins = [] } = await chrome.permissions.getAll();
+  return [['pinterest', 'pinterest.com'], ['x', 'x.com'], ['instagram', 'instagram.com']].filter(([, host]) => origins.includes(`https://*.${host}/*`)).map(([site]) => site);
+}
+async function sendChromeSession({ id, platform, domains }) {
+  if (!Object.hasOwn(SESSION_DOMAINS, platform) || !Array.isArray(domains) || !domains.every(domain => SESSION_DOMAINS[platform].test(domain))) return;
+  const found = await Promise.all(domains.map(domain => chrome.cookies.getAll({ domain })));
+  const cookies = found.flat().map(({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite, expirationDate }) => ({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite, expirationDate }));
+  await request('/chrome-session', { id, instance: await instanceId(), cookies });
 }
 const slimBookmark = node => node.url ? { title: node.title || '', url: node.url, dateAdded: node.dateAdded } : { title: node.title || '', children: (node.children || []).map(slimBookmark) };
 async function sendBookmarkTree() {

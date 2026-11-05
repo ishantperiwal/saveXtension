@@ -167,7 +167,7 @@ button svg, a svg { pointer-events: none; }
 .nav-item.active .account-handle { font-weight: 600; font-synthesis-weight: auto; }
 .nav-item.active { background: linear-gradient(to bottom, color-mix(in srgb, var(--hover) 50%, var(--paper)), color-mix(in srgb, var(--hover) 88%, var(--selected-border))); box-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px #2830230f; color: var(--ink); font-weight: 500; }
 .nav-label-text { white-space: nowrap; }
-#account-navigation, #instagram-navigation { min-width: 0; }
+#account-navigation, #instagram-navigation, #pinterest-navigation { min-width: 0; }
 .account-nav-item .nav-label-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .account-nav-item .nav-count { flex-shrink: 0; }
 .source-icon { width: 22px; height: 22px; flex: 0 0 22px; display: block; }
@@ -300,10 +300,25 @@ button svg, a svg { pointer-events: none; }
 .native-account-row > .text-button { flex: none; font-size: 12px; }
 .native-connect-actions { margin: 0; }
 .native-connect-actions + .native-account-list:not(:empty) { margin-top: 24px; }
+.native-accounts-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; margin-bottom: 12px; }
+.native-accounts-heading h3 { margin: 0; }
+.native-accounts-heading .chrome-helper-row { margin-top: 0; }
+.chrome-helper-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; min-height: 28px; font-size: 13px; }
+.chrome-setup .chrome-helper-row { margin-top: 16px; }
+.chrome-helper-status { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--secondary); }
+.chrome-helper-status .chrome-setup-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--muted); }
+.chrome-helper-status.is-connected .chrome-setup-dot { background: var(--accent); }
+.chrome-helper-status.is-outdated .chrome-setup-dot { background: #c9892e; }
+.chrome-helper-state { margin-left: -4px; color: var(--muted); }
+.chrome-helper-state::before { content: '· '; }
+.chrome-helper-status.is-connected .chrome-helper-state { color: var(--accent); }
+.chrome-helper-back { margin: -8px 0 12px -4px; color: var(--secondary); }
+.chrome-helper-back .icon { width: 16px; height: 16px; rotate: 90deg; }
+.chrome-helper-dialog .chrome-setup-lead { margin-bottom: 4px; }
 .native-connect-actions .source-icon { width: 18px; height: 18px; flex-basis: 18px; }
 .notification-stack { position: fixed; right: max(24px, env(safe-area-inset-right)); bottom: max(24px, env(safe-area-inset-bottom)); z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; width: min(400px, calc(100% - 32px)); pointer-events: none; }
 .notification-stack > * { pointer-events: auto; }
-.sync-toast { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 14px 14px 16px; border: 1px solid var(--status-line); border-radius: 20px; background: var(--status-bg); box-shadow: 0 8px 32px #29312018, 0 2px 6px #29312008; animation: toast-enter 160ms ease-out; }
+.sync-toast { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 14px 14px 16px; border: 1px solid var(--status-line); border-radius: 20px; background: var(--status-bg); box-shadow: 0 8px 32px #29312018, 0 2px 6px #29312008; transition: border-radius 260ms cubic-bezier(.22,.68,.2,1); animation: sync-toast-in 320ms cubic-bezier(.22,.68,.2,1); }
 .sync-toast[data-tone="warning"] { background: var(--warning-bg); border-color: var(--warning-line); }
 .sync-toast-sources { display: flex; align-items: center; gap: 5px; padding: 5px; border-radius: 12px; background: var(--icon-surface); }
 .sync-toast-sources .source-icon { width: 22px; height: 22px; flex-basis: 22px; }
@@ -375,7 +390,10 @@ button svg, a svg { pointer-events: none; }
 .card-platform .source-icon { width: 18px; height: 18px; }
 .awaiting-reveal > .card-content { opacity: 0; }
 /* "New" sits on the top edge of the post container: the whole card in grid, the post column in feed. */
-.new-tag { position: absolute; top: 0; right: 16px; z-index: 4; padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--new) 35%, var(--line)); border-radius: 999px; background: var(--paper); color: var(--new); font: 500 10px/16px var(--mono); letter-spacing: .04em; text-transform: uppercase; transform: translateY(-50%); pointer-events: none; }
+.button-row.native-connect-actions { flex-wrap: nowrap; overflow-x: auto; margin: -3px; padding: 3px; scrollbar-width: none; }
+.native-connect-actions::-webkit-scrollbar { display: none; }
+.native-connect-actions > button { flex: none; white-space: nowrap; }
+.new-tag { position: absolute; top: 0; right: 16px; z-index: 4; padding: 1px 8px; border: 1px solid #46613a; border-radius: 999px; background: #46613a; color: #fff; font: 500 10px/16px var(--mono); letter-spacing: .04em; text-transform: uppercase; transform: translateY(-50%); pointer-events: none; }
 .cards[data-view="feed"] .new-tag { position: static; grid-column: 1; grid-row: 1; justify-self: end; align-self: start; margin-right: 16px; }
 .is-masonry > :is(.save-card, .save-time-separator, .more-saves) { position: absolute; top: 0; left: 0; }
 /* Paging sentinels move immediately to avoid loading extra batches mid-animation. */
@@ -411,7 +429,7 @@ button svg, a svg { pointer-events: none; }
 .cards[data-side-notes="true"] .card-footer { grid-column: 2; grid-row: 2; }
 /* Keep card edges and side notes aligned across platforms and loading states;
    only Instagram's tall preview content has a narrower reading width. */
-.cards[data-view="feed"] .instagram .native-embed { max-width: 440px; margin-inline: auto; }
+.cards[data-view="feed"] :is(.instagram, .pinterest) .native-embed { max-width: 440px; margin-inline: auto; }
 .card-note .note-input { display: block; width: 100%; min-height: 22px; field-sizing: content; padding: 0; border: 0; border-radius: 0; resize: none; background: transparent; color: inherit; font: 14px/22px var(--sans); overflow: hidden; }
 .card-note .note-input:not(:focus):not([data-expanded="true"]) { max-height: 132px; }
 .card-note .note-input:focus, .card-note[data-note-open="true"] .note-input:placeholder-shown { min-height: 66px; }
@@ -593,6 +611,8 @@ dialog.settings-dialog::-webkit-scrollbar { display: none; width: 0; height: 0; 
 #toast.bottom-center { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); translate: -50% 0; max-width: calc(100vw - 32px); border-radius: 999px; }
 #toast.bottom-center.with-detail { width: max-content; border-radius: 18px; text-align: center; }
 .toast-detail { display: block; margin-top: 3px; font-size: 11px; line-height: 16px; opacity: .75; }
+@keyframes sync-toast-in { from { opacity: 0; transform: translateX(calc(100% + 32px)); } }
+@media (prefers-reduced-motion: reduce) { .sync-toast { animation: none; transition: none; } }
 @keyframes toast-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Optional authenticated deployments use the same controls. */

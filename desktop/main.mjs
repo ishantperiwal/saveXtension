@@ -3,13 +3,17 @@ import { mkdir, readFile, appendFile, cp } from 'node:fs/promises';
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
+import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
 import { readChromeBookmarks } from './chrome-bookmarks.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
+// Google's sign-in buttons prefer the browser's FedCM feature when it exists, but Electron has
+// no interface for it, so the click silently fails. Without it they ask for a popup, which is
+// the signal the sign-in window uses to continue in real Chrome.
+app.commandLine.appendSwitch('disable-features', 'FedCm');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const userData = process.env.SAVEX_DESKTOP_DATA_DIR || join(app.getPath('appData'), 'saveXtension');
 mkdirSync(userData, { recursive: true });
@@ -33,7 +37,7 @@ else {
   });
 }
 
-const helperDownload = () => join(app.getPath('downloads'), 'saveXtension Chrome helper');
+const helperFolder = () => join(app.getPath('downloads'), 'saveXtension Chrome helper');
 async function log(error) {
   try { await mkdir(userData, { recursive: true }); await appendFile(join(userData, 'desktop.log'), `${new Date().toISOString()} ${error?.stack || error}\n`); } catch { /* Keep the startup error visible even if the log cannot be written. */ }
 }
@@ -44,9 +48,9 @@ async function start() {
     legacyOrigin: process.env.SAVEX_DESKTOP_LEGACY_ORIGIN || 'http://localhost:3210',
     legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
   });
-  // A helper copy saved to Downloads is refreshed so Chrome's next reload loads this version.
-  const saved = library.store.get('desktop_helper_download');
-  if (saved && existsSync(join(saved, 'manifest.json'))) await cp(library.helperPath, saved, { recursive: true, force: true }).catch(log);
+  // A saved helper copy is refreshed so Chrome's next reload loads this version.
+  const saved = helperFolder();
+  if (existsSync(join(saved, 'manifest.json'))) await cp(library.helperPath, saved, { recursive: true, force: true }).catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -66,10 +70,9 @@ async function start() {
         clipboard.writeText(message.text); return true;
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
       case 'chromeBookmarksFound': return readChromeBookmarks().then(() => true, () => false);
-      case 'saveHelperToDownloads': {
-        const destination = helperDownload();
+      case 'saveHelper': {
+        const destination = helperFolder();
         await cp(library.helperPath, destination, { recursive: true, force: true });
-        library.store.set('desktop_helper_download', destination); shell.showItemInFolder(destination);
         return { path: destination };
       }
       case 'connect': return connect(message.type);
@@ -185,8 +188,8 @@ async function createWindow() {
   window = new BrowserWindow({ title: 'saveXtension', width: 1280, height: 900, minWidth: 760, minHeight: 560, show: false, backgroundColor: '#f7f8f3', icon: join(root, 'desktop', 'assets', 'icon.png'),
     webPreferences: { preload: join(root, 'desktop', 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false }
   });
-  // Instagram posts open in saveXtension's own small viewer; every other link opens in the browser.
-  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url); if (post) social.openPost(post); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  // Instagram and Pinterest posts open in saveXtension's own small viewer; every other link opens in the browser.
+  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url), pin = pinterestPost(url); if (post) social.openPost(post); else if (pin) social.openPost(pin, 'pinterest'); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
   window.webContents.on('will-navigate', (event, url) => { if (!isLibraryFrame(url, library.origin)) { event.preventDefault(); if (isWebLink(url)) void shell.openExternal(url); } });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.on('closed', () => { window = null; });

@@ -74,7 +74,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-src ${preview.origin || "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
+    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://pbs.twimg.com https://i.pinimg.com https://*.cdninstagram.com https://*.fbcdn.net; connect-src 'self'; frame-src ${preview.origin || "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     const requestOrigin = req.headers.origin;
     // Extension origins receive CORS only for their limited token-authenticated endpoints.
     const path = new URL(req.url, appOrigin).pathname;
@@ -135,7 +135,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (native) sync.nativeHeartbeat(input); else sync.heartbeat(input);
           const canWork = !nativeTransport || native;
           const claimedUnsave = canWork && input.claim && input.ready ? unsaves.claim(text(input.instance,100),input.unsave===true) : null;
-          return json(res, { ...sync.status(), desktopSocial: !!nativeTransport, unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: canWork && input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: !nativeTransport && sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: !native && sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: canWork && !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { native, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+          return json(res, { ...sync.status(), chromeSessionRequest: !!nativeTransport && !native && extensionOrigin(requestOrigin) && input.chromeSession === true ? sync.chromeSessionRequestFor(text(input.instance, 100)) : null, desktopSocial: !!nativeTransport, unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: canWork && input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: !nativeTransport && sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: !native && sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: canWork && !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { native, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+        }
+        if (localMode && nativeTransport && path === '/api/extension/chrome-session' && req.method === 'POST') {
+          if (req.headers['x-savex-native'] || !extensionOrigin(requestOrigin)) throw new HttpError(403, 'Only the Chrome helper sends a sign-in here.');
+          const input = await body(req);
+          return json(res, sync.receiveChromeSession({ id: input.id, instance: text(input.instance, 100), cookies: input.cookies }));
         }
         if (localMode && nativeTransport && path === '/api/extension/bookmark-tree' && req.method === 'POST') {
           if (req.headers['x-savex-native']) throw new HttpError(403, 'Only Chrome sends its bookmarks here.');
@@ -147,7 +152,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/extension/accounts' && req.method === 'POST') { const input = await body(req); return json(res, { xAccounts: !nativeTransport || req.headers['x-savex-native'] === nativeTransport.token ? sync.setAccounts(input) : sync.status().xAccounts }); }
         if (localMode && path === '/api/extension/instagram-collections' && req.method === 'POST') {
           const input = await body(req);
-          return json(res, { collections: store.upsertInstagramCollections(input.account, input.collections) });
+          return json(res, { collections: store.upsertInstagramCollections(input.account, input.collections, input.platform === 'pinterest' ? 'pinterest' : 'instagram') });
         }
         if (localMode && path === '/api/extension/stop' && req.method === 'POST') { return json(res, { job: sync.cancel() }); }
         const unsavePath = path.match(/^\/api\/extension\/unsaves\/([a-f0-9]+)\/(act|finish)$/);
@@ -167,7 +172,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         }
         if (localMode && path === '/api/extension/known' && req.method === 'GET') {
           const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
-          if (!['x', 'instagram'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
+          if (!['x', 'instagram', 'pinterest'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
           return json(res, { ids: store.scanKnownPostIds(platform, account, query.get('collectionId')) });
         }
         if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
@@ -257,7 +262,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, {...sync.status(),unsave:unsaves.status(),unsaveDiagnostics:unsaves.diagnostics()});
         if (localMode && path === '/api/sync/setup' && req.method === 'POST') return json(res, sync.requestSetup((await body(req)).kind));
         if (localMode && path === '/api/sync/accounts' && req.method === 'POST') return json(res, sync.requestAccountScan());
-        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId) }); }
+        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId, input.pinterestAccount, input.pinterestCollectionId) }); }
         if (localMode && path === '/api/sync/stop' && req.method === 'POST') { return json(res, { job: sync.cancel() }); }
         if (path === '/api/instagram-save-list' && req.method === 'POST') return json(res, { instagramSaveLists: setInstagramSaveList(store, await body(req)) });
         if (path === '/api/posts' && req.method === 'GET') {

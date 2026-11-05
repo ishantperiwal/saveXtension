@@ -87,3 +87,37 @@ function finishMotion() {
 }
 reducedMotion.addEventListener('change', () => { if (reducedMotion.matches) finishMotion(); });
 window.addEventListener('resize', () => { for (const stage of stages.keys()) clearStage(stage); for (const section of noteAnimations.keys()) finishNoteAnimation(section); }, { passive: true });
+
+// Lets a surface glide to its new size whenever its content changes it, instead of jumping.
+// The observer pauses during a glide so its own frames don't count as changes; resuming
+// re-checks the size, so content that changed mid-glide gets a follow-up.
+export function glideSize(element, { enabled = () => true, duration = 260 } = {}) {
+  let last = null, running = null;
+  const size = () => { const { width, height } = element.getBoundingClientRect(); return { width, height }; };
+  const start = (from, to) => {
+    const overflow = element.style.overflow; element.style.overflow = 'hidden';
+    observer.unobserve(element);
+    running = element.animate([{ width: `${from.width}px`, height: `${from.height}px` }, { width: `${to.width}px`, height: `${to.height}px` }], { duration, easing: timing.easing });
+    running.onfinish = running.oncancel = () => { running = null; element.style.overflow = overflow; observer.observe(element); };
+    last = to;
+  };
+  const differs = (a, b) => Math.abs(a.width - b.width) > 1 || Math.abs(a.height - b.height) > 1;
+  const observer = new ResizeObserver(() => {
+    const now = size();
+    if (!now.height) { last = null; return; }
+    if (last && differs(last, now) && enabled() && !reducedMotion.matches) start(last, now);
+    else last = now;
+  });
+  observer.observe(element);
+  return {
+    // Reverses a glide already under way (hovering off mid-expand) from where it has got to.
+    change(update) {
+      if (!running) { update(); return; }
+      const from = size(), active = running;
+      active.onfinish = active.oncancel = null; active.cancel(); running = null; element.style.overflow = '';
+      update();
+      const to = size();
+      if (differs(from, to) && to.height) start(from, to); else { last = to; observer.observe(element); }
+    }
+  };
+}

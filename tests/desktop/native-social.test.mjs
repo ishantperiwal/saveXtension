@@ -43,6 +43,7 @@ test('native sessions persist, two X accounts scan without focusing Chrome, and 
   let desktop = await launch();
   try {
     let page = await desktop.firstWindow(); await page.waitForSelector('[data-action="settings"]');
+    assert.equal(await page.evaluate(() => typeof window.IdentityCredential), 'undefined', 'FedCM stays off, or Google sign-in buttons silently do nothing in Electron');
     let origin = new URL(page.url()).origin, headers = { Origin: origin };
     const status = async () => (await page.request.get(origin + '/api/sync')).json();
     await expect.poll(async () => (await status()).nativeSocial?.online).toBe(true);

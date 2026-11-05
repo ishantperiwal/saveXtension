@@ -12,7 +12,7 @@ export function setInstagramSaveList(store, { account, collectionIds, all }) {
   if (all === undefined && collectionIds === null) delete lists[key];
   else {
     if (!Array.isArray(collectionIds) || (!collectionIds.length && all !== true) || collectionIds.length > 1000 || collectionIds.some(id => !Number.isSafeInteger(id) || id < 1)) throw new HttpError(400, 'Choose All or at least one collection.');
-    const owned = new Set(store.instagramCollections().filter(c => c.account.toLowerCase() === key).map(c => c.id));
+    const owned = new Set(store.instagramCollections().filter(c => c.platform === 'instagram' && c.account.toLowerCase() === key).map(c => c.id));
     if (collectionIds.some(id => !owned.has(id))) throw new HttpError(400, 'Choose collections belonging to this Instagram account.');
     const ids = [...new Set(collectionIds)];
     lists[key] = all === undefined ? ids : { all, collectionIds: ids };
@@ -24,7 +24,7 @@ export function instagramSyncScope(store, account = 'current', collectionId = nu
   if (account !== 'current' && (typeof account !== 'string' || !/^@[\w.]{1,100}$/.test(account))) throw new HttpError(400, 'Choose an Instagram account.');
   if (collectionId !== null) {
     if (!Number.isSafeInteger(collectionId) || collectionId < 1) throw new HttpError(400, 'Choose a valid Instagram collection.');
-    const collection = store.instagramCollections().find(item => item.id === collectionId);
+    const collection = store.instagramCollections().find(item => item.id === collectionId && item.platform === 'instagram');
     if (!collection || account !== 'current' && collection.account.toLowerCase() !== account.toLowerCase()) throw new HttpError(400, 'Choose a collection belonging to this Instagram account.');
     return {account:collection.account,selections:{[collection.account.toLowerCase()]:[collection.id]}};
   }

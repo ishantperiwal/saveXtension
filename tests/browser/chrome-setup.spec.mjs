@@ -5,7 +5,7 @@ test('the Chrome page guides loading the helper when Chrome’s bookmarks aren�
     window.calls = [];
     const known = {
       chromeBookmarksFound: async () => false, helperInfo: async () => ({ version: '1.0.0', path: '/helper' }),
-      saveHelperToDownloads: async () => { window.calls.push('save'); return { path: '/Users/me/Downloads/saveXtension Chrome helper' }; },
+      saveHelper: async () => { window.calls.push('save'); return { path: '/Users/me/Downloads/saveXtension Chrome helper' }; },
       openExtensions: async () => { window.calls.push('open'); return true; }, copyText: async text => { window.calls.push(`copy:${text}`); return true; },
       wakeSocial: async () => { window.calls.push('wake'); return true; }
     };
@@ -19,17 +19,24 @@ test('the Chrome page guides loading the helper when Chrome’s bookmarks aren�
   await page.locator('[data-filter="chrome"]').click();
   const panel = page.getByRole('region', { name: 'Connect Chrome to bring in your bookmarks' });
   await expect(panel).toBeVisible();
-  await expect(panel.locator('.chrome-setup-steps > li')).toHaveCount(4);
-  await expect(panel.getByRole('status')).toContainText('Waiting for Chrome');
-  await panel.getByRole('button', { name: 'Save to Downloads' }).click();
-  await expect(panel.getByRole('button', { name: 'Show folder' })).toBeVisible();
-  await expect(panel.locator('.chrome-setup-steps > li').first()).toHaveClass(/is-done/);
-  await panel.getByRole('button', { name: 'Open in Chrome' }).click();
-  await panel.getByRole('button', { name: 'Copy address' }).click();
+  await expect(panel.locator('.chrome-helper-row')).toContainText('Not connected');
+  await expect(panel.locator('.chrome-setup-steps'), 'the steps have their own page').toHaveCount(0);
+  await panel.getByRole('button', { name: 'Connect', exact: true }).click();
+  const setup = page.locator('#modal');
+  await expect(setup.locator('.chrome-setup-steps > li')).toHaveCount(4);
+  await expect(setup.locator('.chrome-setup-steps > li').last()).toContainText('Your bookmarks start importing right away.');
+  await expect(setup).toContainText('If Developer mode is greyed out');
+  await expect(setup.getByRole('status')).toContainText('Waiting for Chrome');
+  await setup.getByRole('button', { name: 'Download' }).click();
+  await expect(setup.locator('.chrome-setup-steps > li').first()).toContainText('Downloads › saveXtension Chrome helper');
+  await expect(setup.locator('.chrome-setup-steps > li').first()).toHaveClass(/is-done/);
+  await setup.getByRole('button', { name: 'Open in Chrome' }).click();
+  await setup.getByRole('button', { name: 'Copy address' }).click();
   await expect.poll(() => page.evaluate(() => window.calls)).toEqual(['save', 'open', 'copy:chrome://extensions']);
-  // Chrome loads the helper: it connects, sends its bookmarks, and the server queues the import.
+  // Chrome loads the extension: the setup page closes by itself and the import takes over.
   status.chromeBrowser = { online: true, bookmarksReady: true };
-  await expect(panel.getByRole('status')).toContainText('Chrome is connected', { timeout: 5000 });
+  await expect(setup).not.toBeVisible({ timeout: 5000 });
+  await expect(panel.getByRole('status')).toContainText('Reading your bookmarks', { timeout: 5000 });
   Object.assign(status, { chromeBookmarkTreeAt: '2026-11-05T00:00:00Z', job: { id: 'j', status: 'queued', targets: ['chrome'], results: [] } });
   const imported = page.getByRole('region', { name: 'Import your Chrome bookmarks' });
   await expect(imported.getByRole('button', { name: 'Importing…' })).toBeDisabled({ timeout: 5000 });

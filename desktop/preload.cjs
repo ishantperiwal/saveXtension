@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('saveXDesktop', Object.freeze({
   copyText: text => ipcRenderer.invoke('savex-desktop', { action: 'copyText', text }),
   openExtensions: () => ipcRenderer.invoke('savex-desktop', { action: 'openExtensions' }),
   chromeBookmarksFound: () => ipcRenderer.invoke('savex-desktop', { action: 'chromeBookmarksFound' }),
-  saveHelperToDownloads: () => ipcRenderer.invoke('savex-desktop', { action: 'saveHelperToDownloads' }),
+  saveHelper: () => ipcRenderer.invoke('savex-desktop', { action: 'saveHelper' }),
   updateStatus: () => ipcRenderer.invoke('savex-desktop', { action: 'updateStatus' }),
   checkForUpdates: () => ipcRenderer.invoke('savex-desktop', { action: 'checkForUpdates' }),
   viewUpdateRelease: () => ipcRenderer.invoke('savex-desktop', { action: 'viewUpdateRelease' }),

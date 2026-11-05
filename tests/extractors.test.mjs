@@ -87,3 +87,42 @@ test('unsave evidence requires the exact post, signed-in profile, and an explici
   assert.equal(parser.xBookmarkState(document, 'https://x.com/i/status/123456789'), null);
   dom.window.close();
 });
+test('Pinterest pages identify all pins, unorganized pins and boards on any regional host', async () => {
+  const dom = await fixture('pinterest-board', 'https://in.pinterest.com/maker.name/game-assets/');
+  const { SaveXExtractors: parser, document } = dom.window, info = url => parser.pageInfo(document, new URL(url));
+  assert.deepEqual({ ...info('https://in.pinterest.com/maker.name/_pins/') }, { platform: 'pinterest', account: '@maker.name', valid: true, collection: false, collectionId: '' });
+  assert.equal(info('https://www.pinterest.co.uk/maker.name/_boards/').collectionId, 'unorganized');
+  assert.equal(info('https://pinterest.com/maker.name/game-assets/').collectionId, 'game-assets');
+  for (const url of ['https://in.pinterest.com/', 'https://in.pinterest.com/pin/123/', 'https://www.pinterest.com/login/', 'https://www.pinterest.com/search/pins/', 'https://in.pinterest.com/maker.name/_created/', 'https://in.pinterest.com/maker.name/', 'https://pinterest.evil.com/maker.name/_pins/', 'https://www.pinterest.com.evil.com/maker.name/_pins/']) assert.equal(info(url).valid, false, url);
+  dom.window.close();
+});
+test('Pinterest reads a board’s own pins, without its recommendations, at a sharper size', async () => {
+  const dom = await fixture('pinterest-board', 'https://in.pinterest.com/maker.name/game-assets/');
+  const { SaveXExtractors: parser, document } = dom.window, posts = [...parser.extract(document, 'pinterest')];
+  assert.deepEqual(posts.map(post => post.url), ['https://www.pinterest.com/pin/222/', 'https://www.pinterest.com/pin/333/']);
+  assert.equal(posts[0].text, 'crisscross / 006'); assert.equal(posts[0].kind, 'image');
+  assert.equal(posts[0].thumbnail, 'https://i.pinimg.com/736x/aa/bb/cc/two.jpg');
+  assert.equal(posts[1].kind, 'video'); assert.equal(posts[1].thumbnail, 'https://i.pinimg.com/736x/dd/ee/ff/three.jpg');
+  assert.equal(parser.diagnose(document, 'pinterest'), '');
+  dom.window.close();
+});
+test('Pinterest finds boards and unorganized pins, and tells an empty list from an unreadable one', async () => {
+  const dom = await fixture('pinterest-boards', 'https://in.pinterest.com/maker.name/_boards/');
+  const { SaveXExtractors: parser, document, location } = dom.window;
+  const { account, ready, collections } = JSON.parse(JSON.stringify(parser.pinterestBoards(document, location)));
+  assert.equal(account, '@maker.name'); assert.equal(ready, true);
+  assert.deepEqual(collections, [
+    { externalId: 'visual-styles', name: 'Visual Styles', url: 'https://www.pinterest.com/maker.name/visual-styles/' },
+    { externalId: 'game-assets', name: 'Game Assets', url: 'https://www.pinterest.com/maker.name/game-assets/' },
+    { externalId: 'unorganized', name: 'Unorganized', url: 'https://www.pinterest.com/maker.name/_boards/' }
+  ]);
+  const posts = [...parser.extract(document, 'pinterest')];
+  assert.deepEqual(posts.map(post => post.url), ['https://www.pinterest.com/pin/111/']); assert.equal(posts[0].text, '');
+  dom.window.close();
+  const empty = await fixture('pinterest-board', 'https://in.pinterest.com/maker.name/_pins/');
+  assert.equal(empty.window.SaveXExtractors.extract(empty.window.document, 'pinterest').length, 0, 'the all-pins grid is missing here');
+  assert.equal(empty.window.SaveXExtractors.diagnose(empty.window.document, 'pinterest'), 'unreadable', 'pins exist outside the expected list');
+  empty.window.document.querySelectorAll('[data-test-id="pin"]').forEach(pin => pin.remove());
+  assert.equal(empty.window.SaveXExtractors.diagnose(empty.window.document, 'pinterest'), 'empty');
+  empty.window.close();
+});

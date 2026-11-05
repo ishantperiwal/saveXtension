@@ -1,4 +1,4 @@
-const platforms = ['x', 'instagram', 'chrome'];
+const platforms = ['x', 'instagram', 'pinterest', 'chrome'];
 const count = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
 
 export function syncRetryRequest(job, platform) {
@@ -19,7 +19,7 @@ export function syncReport(job) {
   const results = Array.isArray(job.results) ? job.results : [];
   const sources = platforms.filter(platform => job.targets?.includes(platform) || results.some(result => result.platform === platform));
   return sources.map(platform => {
-    const name = platform === 'x' ? 'X' : platform === 'instagram' ? 'Instagram' : 'Chrome';
+    const name = { x: 'X', instagram: 'Instagram', pinterest: 'Pinterest' }[platform] || 'Chrome';
     const readableMessage = message => /No tab with id/i.test(message || '') ? `The background ${name} tab closed. Your saves are kept. Try syncing again.` : message || '';
     const entries = results.filter(result => result.platform === platform).map(result => ({ ...result, message: readableMessage(result.message) }));
     const issues = entries.filter(result => ['partial', 'failed'].includes(result.status));

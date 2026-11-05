@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isPinterestHost, PINTEREST_PIN } from '../public/pinterest-host.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -17,6 +18,10 @@ export function canonicalPost(input) {
     const match = url.pathname.match(/^\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)(?:\/|$)/);
     if (match) return { platform: 'instagram', externalId: match[2], url: `https://www.instagram.com/${match[1] === 'reels' ? 'reel' : match[1]}/${match[2]}/` };
   }
+  if (isPinterestHost(host)) {
+    const match = url.pathname.match(PINTEREST_PIN);
+    if (match) return { platform: 'pinterest', externalId: match[1], url: `https://www.pinterest.com/pin/${match[1]}/` };
+  }
   throw new HttpError(400, 'Use a link to an Instagram post/Reel or an X post.');
 }
 
@@ -30,6 +35,17 @@ export function cleanInstagramCollection(account, input) {
   if (input.externalId !== undefined && String(input.externalId) !== match[2]) throw new HttpError(400, 'Instagram collection ID does not match its link.');
   return { account, externalId: match[2], name, url: `https://www.instagram.com${url.pathname.replace(/\/?$/, '/')}` };
 }
+// A Pinterest board, or "unorganized" for the saves on the boards page that belong to no board.
+export function cleanPinterestBoard(account, input) {
+  if (typeof account !== 'string' || !/^@[\w.-]{1,100}$/.test(account) || !input || typeof input !== 'object') throw new HttpError(400, 'Invalid Pinterest board.');
+  let url; try { url = new URL(input.url); } catch { throw new HttpError(400, 'Invalid Pinterest board link.'); }
+  const match = url.pathname.match(/^\/([\w.-]+)\/(_boards|[^/_][^/]*)\/?$/), name = text(input.name, 200);
+  if (url.protocol !== 'https:' || !isPinterestHost(url.hostname) || url.username || url.password || url.port || !match || `@${match[1]}`.toLowerCase() !== account.toLowerCase() || !name) throw new HttpError(400, 'Invalid Pinterest board link or account.');
+  const externalId = match[2] === '_boards' ? 'unorganized' : match[2];
+  if (input.externalId !== undefined && String(input.externalId) !== externalId) throw new HttpError(400, 'Pinterest board ID does not match its link.');
+  return { platform: 'pinterest', account, externalId, name, url: `https://www.pinterest.com/${match[1]}/${match[2]}/` };
+}
+export const cleanCollection = (platform, account, input) => platform === 'pinterest' ? cleanPinterestBoard(account, input) : cleanInstagramCollection(account, input);
 export function noteText(value) { return typeof value === 'string' ? value.slice(0, 10000) : ''; }
 export function updatedTime(previous) { return new Date(Math.max(Date.now(), (Date.parse(previous) || 0) + 1)).toISOString(); }
 export function tags(value) {
@@ -42,7 +58,7 @@ export function imageUrl(value) {
     const u = new URL(value);
     const host = u.hostname.toLowerCase();
     if (u.protocol !== 'https:' || u.username || u.password || u.port) return '';
-    if (host === 'pbs.twimg.com' || host.endsWith('.cdninstagram.com') || host.endsWith('.fbcdn.net')) return u.href;
+    if (host === 'pbs.twimg.com' || host === 'i.pinimg.com' || host.endsWith('.cdninstagram.com') || host.endsWith('.fbcdn.net')) return u.href;
   } catch { /* Missing or unsupported thumbnail. */ }
   return '';
 }
@@ -69,7 +85,7 @@ export function cleanPost(input) {
     folders: canonical.platform === 'chrome' && Array.isArray(input.folders) ? [...new Set(input.folders.map(f => text(f, 2000)).filter(Boolean))].slice(0, 200) : [],
     authorName: text(input.authorName, 120), thumbnail: imageUrl(input.thumbnail),
     media: [...new Set((Array.isArray(input.media) ? input.media : []).map(imageUrl).filter(Boolean))].slice(0, 20),
-    kind: ['image', 'video', 'carousel', 'text'].includes(input.kind) ? input.kind : canonical.platform === 'instagram' ? 'image' : 'text',
+    kind: ['image', 'video', 'carousel', 'text'].includes(input.kind) ? input.kind : ['instagram', 'pinterest'].includes(canonical.platform) ? 'image' : 'text',
     tags: tags(input.tags), topics: typeof input.topicsCurated === 'boolean' && Array.isArray(input.topics) ? [...new Set(input.topics.filter(t => typeof t === 'string' && t.trim() && t.trim().length <= 80 && !/[\p{Cc}]/u.test(t)).map(t => t.normalize('NFKC').trim()))].slice(0, 50) : topicsFor(`${title} ${caption} ${text(input.bookmarkTitle, 1000)} ${(Array.isArray(input.folders) ? input.folders : []).join(" ")}`),
     sourceAccount: text(input.sourceAccount, 100), accounts: Array.isArray(input.accounts) ? input.accounts.map(a => text(a, 100)).filter(Boolean).slice(0, 50) : [],
     notes: noteText(input.notes), favorite: input.favorite === true, archived: input.archived === true,

@@ -15,13 +15,15 @@ import { PRELOAD_SCREENS } from './preview-policy.js';
 import { mountWebsitePreviews } from './website-previews.js';
 import { createNoteAutosave } from './notes.js';
 import { syncNoteLinks } from './note-links.js';
-import { animateEmbedStage, setNoteVisibility, finishNoteAnimation } from './motion.js';
+import { animateEmbedStage, setNoteVisibility, finishNoteAnimation, glideSize } from './motion.js';
 import { addedTimeGroup, addedTimeKey, libraryAddedAt } from './saved-time.js';
 import { applyFilters, defaultFilters, dateBounds, filterChips, accountOptions } from './filters.js';
 import { mountDateRange } from './date-range.js';
 import { enhanceSelects, closeSelect } from './select.js';
 import { mountMcpSettings } from './mcp-settings.js';
 import { topicTree, topicScope, canNest, enableTopicDrag } from './topic-tree.js';
+import { isPinterestHost, PINTEREST_PIN } from './pinterest-host.js';
+const isPinterestPin = value => { try { const url = new URL(value); return isPinterestHost(url.hostname) && PINTEREST_PIN.test(url.pathname); } catch { return false; } };
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $('#app'), modal = $('#modal'), toastHome = $('#toast').parentElement;
 const paths = {
@@ -60,7 +62,7 @@ const paths = {
 };
 const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.bookmark}</svg>`;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const platformName = p => p === 'x' ? 'X' : p === 'chrome' ? 'Chrome bookmarks' : 'Instagram';
+const platformName = p => p === 'x' ? 'X' : p === 'chrome' ? 'Chrome bookmarks' : p === 'pinterest' ? 'Pinterest' : 'Instagram';
 const macKeyboard = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 const searchKeys = macKeyboard ? '⌘ F' : 'Ctrl F';
 let sourceMarkId = 0;
@@ -68,6 +70,7 @@ function sourceIcon(source) {
   const mark = `instagram-mark-${++sourceMarkId}`;
   const svg = content => `<svg class="source-icon source-icon-${source}" viewBox="0 0 24 24" aria-hidden="true">${content}</svg>`;
   if (source === 'instagram') return svg(`<defs><linearGradient id="${mark}" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#fbb04b"/><stop offset=".45" stop-color="#ed386b"/><stop offset="1" stop-color="#9b42ba"/></linearGradient></defs><rect x="1" y="1" width="22" height="22" rx="6" fill="url(#${mark})"/><rect x="5.5" y="5.5" width="13" height="13" rx="4" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="16.4" cy="7.7" r="1" fill="#fff"/>`);
+  if (source === 'pinterest') return svg('<path fill="#e60023" d="M12.017 0C5.396 0 .029 5.367.029 11.987c0 5.079 3.158 9.417 7.618 11.162-.105-.949-.199-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.354-.629-2.758-1.379l-.749 2.848c-.269 1.045-1.004 2.352-1.498 3.146 1.123.345 2.306.535 3.55.535 6.607 0 11.985-5.365 11.985-11.987C23.97 5.39 18.592.026 11.985.026L12.017 0z"/>');
   if (source === 'x') return svg('<path fill="currentColor" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.64 7.584H.47l8.6-9.835L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/>');
   if (source === 'chrome') return svg('<path fill="#ea4335" d="M12 1a11 11 0 0 1 9.526 5.5H12a5.5 5.5 0 0 0-4.763 8.25L2.474 6.5A11 11 0 0 1 12 1Z"/><path fill="#fbbc05" d="M21.526 6.5A11 11 0 0 1 12 23l4.763-8.25A5.5 5.5 0 0 0 12 6.5Z"/><path fill="#34a853" d="M12 23A11 11 0 0 1 2.474 6.5l4.763 8.25a5.5 5.5 0 0 0 9.526 0Z"/><circle cx="12" cy="12" r="4.6" fill="#4285f4" stroke="#fff" stroke-width=".9"/>');
   return icon('grid');
@@ -90,7 +93,7 @@ const collapsedTopics = new Set();
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-topics')); if (Array.isArray(saved)) for (const id of saved) if (typeof id === 'string') collapsedTopics.add(id); } catch { /* Start with subfolders expanded. */ }
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-instagram')); if (Array.isArray(saved)) for (const account of saved) if (typeof account === 'string') collapsedInstagramAccounts.add(account); } catch { /* Start with collections expanded. */ }
 let storedSyncAccounts = null;
-try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
+try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|pinterest:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
 const state = { cardView: localStorage.getItem('savex-card-view') === 'grid' ? 'grid' : 'feed', topicsView: localStorage.getItem('savex-topics-view') === 'cards' ? 'cards' : 'folders', sidebarView: localStorage.getItem('savex-sidebar-view') === 'collections' ? 'collections' : 'accounts', syncAccounts: storedSyncAccounts, instagramCollections: [], instagramSaveLists: {}, topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
 let toastTimer, searchTimer, updatePoll, collectionVersion = 0, searchReturnView = null;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
@@ -159,6 +162,8 @@ function showModal(content, wide = false) {
   modal.className = wide ? 'wide' : ''; if (!modal.open) modal.showModal();
   $('.modal-close', modal).onclick = () => modal.close();
 }
+// Dialogs glide to fit new content. The enlarged post has its own entrance and resizing embeds.
+glideSize(modal, { enabled: () => modal.open && !modal.classList.contains('post-preview-dialog') });
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
 modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; });
 
@@ -215,7 +220,7 @@ function savesNavigation(count) {
 function navItem(filter, label, symbol, count) {
   return `<button class="nav-item ${(filter === 'all' ? !state.filters.sources.length : state.filters.sources.length === 1 && state.filters.sources[0] === filter) ? 'active' : ''}" data-filter="${filter}" data-nav-label="${label}" aria-label="${label} ${count}" title="${label}">${sourceIcon(filter)}<span class="nav-label-text">${filter === 'chrome' ? 'Chrome' : label}</span><span class="nav-count">${count}</span></button>`;
 }
-function navigationAccounts() { return sidebarAccounts(allPosts(), state.sync?.xAccounts?.accounts || [], state.demo ? [] : state.instagramCollections || [], state.demo ? {} : state.instagramSaveLists); }
+function navigationAccounts() { return sidebarAccounts(allPosts(), state.sync?.xAccounts?.accounts || [], state.demo ? [] : state.instagramCollections || [], state.demo ? {} : state.instagramSaveLists, { pinterest: !state.demo && !!state.sync?.nativeSocial?.enabled }); }
 function selectedAccountLabel() { return state.filters.accounts.length === 1 ? navigationAccounts().find(account => account.value === state.filters.accounts[0])?.label || '' : ''; }
 // New saves imported by the latest sync, keyed like the sidebar rows.
 function newSaveCounts() {
@@ -241,15 +246,15 @@ function renderAccountNavigation() {
   const counts = new Map();
   for (const post of allPosts().filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(collection => collection.id))) counts.set(id, (counts.get(id) || 0) + 1);
   const signature = JSON.stringify([accounts, collections, [...counts], state.instagramSaveLists]);
-  for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram']]) {
+  for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram'], ['#pinterest-navigation', 'pinterest']]) {
     const root = $(selector); if (!root || root.dataset.signature === signature) continue;
     const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection, toggle: document.activeElement.dataset.collectionsAccount } : null;
     root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
       const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
       const selection = instagramSaveList(account.value, state.instagramSaveLists), selected = selection.collectionIds;
-      const folders = account.platform === 'instagram' ? collections.filter(collection => account.value === `instagram:${collection.account.toLowerCase()}` && (selected === null || selected.includes(collection.id))) : [];
+      const folders = account.platform === 'x' ? [] : collections.filter(collection => (collection.platform || 'instagram') === account.platform && account.value === `${account.platform}:${collection.account.toLowerCase()}` && (account.platform !== 'instagram' || selected === null || selected.includes(collection.id)));
       const expanded = !collapsedInstagramAccounts.has(account.value), listId = `instagram-collections-${encodeURIComponent(account.value)}`;
-      return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" ${folders.length ? `aria-expanded="${expanded}" aria-controls="${listId}"` : ''} title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle Instagram collections for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} collections">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="Instagram collections for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
+      return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" ${folders.length ? `aria-expanded="${expanded}" aria-controls="${listId}"` : ''} title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle ${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} ${account.platform === 'pinterest' ? 'boards' : 'collections'}">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
     }).join('');
     root.dataset.signature = signature;
     if (focused) [...root.querySelectorAll('button')].find(button => focused.account ? button.dataset.navAccount === focused.account : focused.toggle ? button.dataset.collectionsAccount === focused.toggle : button.dataset.instagramCollection === focused.collection)?.focus({ preventScroll: true });
@@ -258,7 +263,7 @@ function renderAccountNavigation() {
 }
 function accountRefreshRequest(value) {
   const [platform, handle] = value.split(':');
-  return { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current', ...(platform === 'instagram' && handle.startsWith('@') ? { instagramAccount: handle } : {}) };
+  return { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current', ...(platform === 'instagram' && handle.startsWith('@') ? { instagramAccount: handle } : {}), ...(platform === 'pinterest' && handle.startsWith('@') ? { pinterestAccount: handle } : {}) };
 }
 function accountMenu(trigger, point) {
   if (trigger.dataset.instagramCollection) return collectionRefreshMenu(trigger,point);
@@ -271,6 +276,7 @@ function accountMenu(trigger, point) {
 }
 function collectionRefreshRequest(id) {
   const collection=state.instagramCollections.find(item=>String(item.id)===String(id));
+  if (collection?.platform === 'pinterest') return {targets:['pinterest'],xAccount:'current',pinterestAccount:collection.account,pinterestCollectionId:collection.id};
   return collection ? {targets:['instagram'],xAccount:'current',instagramAccount:collection.account,instagramCollectionId:collection.id} : null;
 }
 function collectionRefreshMenu(trigger,point) {
@@ -387,17 +393,18 @@ async function arrangeTopics(layout, ids, action) {
     else if ((topic?.parentId || null) !== (action.parentId || null)) toast(action.parentId ? `Moved ${label} into “${parent?.name}”` : `Moved ${label} to the top level`, false, 'bottom-center');
   } catch (failure) { toast(failure.message, true, 'bottom-center'); }
 }
-// Topics → All saves opens on the folders; its layout toggle swaps them for every save as grid cards.
+// Topics → All saves opens on the folders. The Topics tab's layout toggle always offers them
+// next to Feed and Grid, and returning to them from a filtered view clears the filters.
 function showingTopicsHome() {
   return state.sidebarView === 'collections' && !state.archive && !state.query.trim() && !filterChips(state.filters).length;
 }
 function showingCollectionFolders() { return showingTopicsHome() && state.topicsView === 'folders'; }
 function syncViewToggle() {
-  const home = showingTopicsHome();
+  const inTopics = state.sidebarView === 'collections' && !state.archive, folders = showingCollectionFolders();
   for (const button of document.querySelectorAll('.view-toggle button')) {
     const view = button.dataset.topicsView ? 'folders' : button.dataset.cardView;
-    button.hidden = home ? view === 'feed' : view === 'folders';
-    button.setAttribute('aria-pressed', String(home ? (view === 'folders') === (state.topicsView === 'folders') : view === state.cardView));
+    button.hidden = view === 'folders' && !inTopics;
+    button.setAttribute('aria-pressed', String(view === 'folders' ? folders : !folders && view === state.cardView));
   }
 }
 function renderCollectionFolders() {
@@ -459,9 +466,9 @@ function collectionDialog(topic, action) {
   };
 }
 function setTopicsView(view) {
-  if (view === state.topicsView) return;
-  state.topicsView = view; if (view === 'cards') state.cardView = 'grid';
-  try { localStorage.setItem('savex-topics-view', view); if (view === 'cards') localStorage.setItem('savex-card-view', 'grid'); } catch { /* Keep the session's view. */ }
+  state.topicsView = view;
+  try { localStorage.setItem('savex-topics-view', view); } catch { /* Keep the session's view. */ }
+  if (view === 'folders') { state.filters = defaultFilters(); state.query = ''; const search = $('#search'); if (search) search.value = ''; }
   renderResults();
 }
 function selectSidebarView(view, focus = false) {
@@ -505,7 +512,7 @@ function renderSidebarMarkers() {
     // Instagram currently syncs the signed-in account. Do not imply account
     // switching when a library contains more than one Instagram owner.
     if (item.dataset.navAccount?.startsWith('instagram:') && instagramOwners.length !== 1) return false;
-    if (item.dataset.navAccount?.startsWith('instagram:') && state.filters.collection) return false;
+    if (/^(?:instagram|pinterest):/.test(item.dataset.navAccount || '') && state.filters.collection) return false;
     if (!item.getClientRects().length) return false;
     const rect = item.getBoundingClientRect(), clip = item.closest('nav').getBoundingClientRect();
     // Rows sliding under the sticky tabs lose their refresh mark.
@@ -519,8 +526,8 @@ function renderSidebarMarkers() {
     const collection=state.instagramCollections.find(collection=>String(collection.id)===item.dataset.instagramCollection);
     const all = item.dataset.filter === 'all';
     const value = all ? 'all' : collection ? `instagram-collection:${collection.id}` : item.dataset.navAccount || 'chrome:*';
-    const [platform, handle] = collection ? ['instagram',collection.account] : value.split(':');
-    const label = all ? 'all sources' : collection ? `Instagram ${collection.account} · ${collection.name}` : platform === 'x' && handle.startsWith('@') ? `X ${handle}` : platformName(platform);
+    const [platform, handle] = collection ? [collection.platform || 'instagram',collection.account] : value.split(':');
+    const label = all ? 'all sources' : collection ? `${platformName(platform)} ${collection.account} · ${collection.name}` : ['x', 'pinterest'].includes(platform) && handle.startsWith('@') ? `${platformName(platform)} ${handle}` : platformName(platform);
     const rect = item.getBoundingClientRect();
     let button = previous.get(value);
     if (!button) {
@@ -561,6 +568,7 @@ function render() {
           <div id="account-navigation"></div>
           ${navItem('chrome', 'Chrome bookmarks', 'bookmark', live.filter(p => p.platform === 'chrome').length)}
           <div id="instagram-navigation"></div>
+          <div id="pinterest-navigation"></div>
           </div>
           <div id="sidebar-collections-panel" role="tabpanel" aria-labelledby="sidebar-collections-tab" ${state.sidebarView === 'collections' ? '' : 'hidden'}><div id="topic-navigation"></div></div>
         </div>
@@ -570,7 +578,7 @@ function render() {
     </aside>
     <main class="main">
       <div class="page-content">
-        <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
+        <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
         <div class="search-tools"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label>
         <div class="view-toggle" role="group" aria-label="Post layout"><button type="button" data-action="topics-view" data-topics-view="folders" aria-label="Folder view" title="Folder view" hidden>${icon('folder')}</button>${['feed', 'grid'].map(view => `<button type="button" data-action="card-view" data-card-view="${view}" aria-label="${view === 'feed' ? 'Feed' : 'Grid'} view" title="${view === 'feed' ? 'Feed' : 'Grid'} view" aria-pressed="${state.cardView === view}">${icon(view)}</button>`).join('')}</div></div>
         <div class="collection-tools"><div class="toolbar-blur" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
@@ -610,7 +618,6 @@ function renderResults(restoreView) {
   if (!$('#results')) return;
   renderFilterUI();
   if (showingCollectionFolders()) { renderCollectionFolders(); return; }
-  if (showingTopicsHome()) state.cardView = 'grid';
   const posts = filteredPosts();
   const pageKey = resultsScopeKey();
   const pageChanged = pageKey !== resultsPageKey;
@@ -639,6 +646,49 @@ function showingChromeSetup() {
   return !!window.saveXDesktop?.chromeBookmarksFound && !!state.sync?.nativeSocial?.enabled && !state.demo && !state.archive && !state.query.trim()
     && selectedSource() === 'chrome' && !allPosts().some(post => post.platform === 'chrome' && !post.archived);
 }
+function chromeHelperSteps(finish) {
+  return `<ol class="chrome-setup-steps">
+        <li class="${chromeSetup.saved ? 'is-done' : ''}"><div><strong>Download the extension</strong><p>${chromeSetup.saved ? `Downloaded to <b>Downloads › saveXtension Chrome helper</b>.` : 'A folder named <b>saveXtension Chrome helper</b> goes to your Downloads.'}</p></div><button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}Download</button></li>
+        <li><div><strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p></div><div class="chrome-setup-buttons"><button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button><button class="text-button" type="button" data-action="copy-chrome-extensions">Copy address</button></div></li>
+        <li><div><strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p></div></li>
+        <li><div><strong>Click Load unpacked and choose the folder</strong><p>Pick <b>saveXtension Chrome helper</b> in your Downloads folder. ${finish}</p></div></li>
+      </ol>`;
+}
+function refreshSetupPanel() { renderChromeHelperPage(); renderChromeHelperSettings(); if ($('.source-connect')) renderSourceConnect(); else if (showingChromeSetup()) renderChromeSetup(); }
+// The Chrome helper shows as one small status line. Connecting it has its own page.
+function chromeHelperState() {
+  const helper = state.sync?.chromeBrowser;
+  if (!helper?.online) return 'disconnected';
+  return ['x', 'instagram', 'pinterest'].every(site => helper.chromeSessionSites?.includes(site)) ? 'connected' : 'outdated';
+}
+function chromeHelperRow(from) {
+  const current = chromeHelperState(), label = { connected: 'Connected', outdated: 'Needs update', disconnected: 'Not connected' }[current];
+  const hint = current === 'connected' ? 'Adding an account uses your sign-in in Chrome, with no password.' : 'Connect it to add accounts using your sign-in in Chrome, with no password.';
+  return `<div class="chrome-helper-row" title="${hint}"><span class="chrome-helper-status is-${current}"><span class="chrome-setup-dot" aria-hidden="true"></span>Chrome extension<span class="chrome-helper-state">${label}</span></span>${current === 'connected' ? '' : `<button class="text-button" type="button" data-action="chrome-helper-page" data-from="${from}">${current === 'outdated' ? 'Update' : 'Connect'}</button>`}</div>`;
+}
+function renderChromeHelperSettings() {
+  const root = $('#chrome-helper-settings'); if (!root) return;
+  const html = chromeHelperRow('settings');
+  if (root.dataset.html !== html) { root.innerHTML = html; root.dataset.html = html; }
+}
+let chromeHelperFrom = '';
+function chromeHelperPage(from) {
+  chromeHelperFrom = from;
+  const settings = from === 'settings', title = 'Connect the Chrome extension', bookmarks = from === 'bookmarks';
+  showModal(`<button class="text-button chrome-helper-back" type="button" data-action="chrome-helper-back" data-from="${esc(from)}" aria-label="${settings ? 'Back to settings' : 'Back'}">${icon('chevron')}${settings ? 'Settings' : 'Back'}</button><h2>${title}</h2><p class="chrome-setup-lead">${bookmarks ? 'The extension shares your Chrome bookmarks with saveXtension. It’s a one-time setup.' : 'If you’re signed in to X, Instagram or Pinterest in Chrome, the extension can pass that sign-in to saveXtension, so you don’t need a password. It’s a one-time setup.'}</p><div id="chrome-helper-page"></div><p class="chrome-setup-note">If Developer mode is greyed out, your organization doesn’t allow extensions on this computer.</p>`);
+  modal.classList.add('chrome-helper-dialog');
+  renderChromeHelperPage();
+}
+function renderChromeHelperPage() {
+  const root = $('#chrome-helper-page'); if (!root) return;
+  const current = chromeHelperState(), bookmarks = chromeHelperFrom === 'bookmarks', finish = bookmarks ? 'Your bookmarks start importing right away.' : 'Then come back and add your account.';
+  // Any connected extension can share bookmarks, so that page has done its job: show the import.
+  if (bookmarks && current !== 'disconnected') { modal.close(); return; }
+  const html = current === 'connected'
+    ? '<p class="chrome-setup-status is-connected" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Connected. Adding an account now uses your sign-in in Chrome. For X, switch to that account in Chrome first.</p>'
+    : `${current === 'outdated' ? '<p class="chrome-setup-note">Your extension needs updating. Download it again, then load that folder in place of the old one.</p>' : ''}${chromeHelperSteps(finish)}${current === 'disconnected' ? '<p class="chrome-setup-status is-waiting" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Waiting for Chrome… This page updates on its own.</p>' : ''}`;
+  if (root.dataset.html !== html) { root.innerHTML = html; root.dataset.html = html; }
+}
 function renderChromeSetup() {
   const root = $('#results'); if (!root) return;
   if (chromeSetup.found === null && !chromeSetup.checking) {
@@ -652,16 +702,9 @@ function renderChromeSetup() {
   if (chromeSetup.found === null) body = '<p class="chrome-setup-lead">Looking for Chrome’s bookmarks…</p>';
   else if (chromeSetup.found || received) body = `<p class="chrome-setup-lead">${chromeSetup.found ? 'Chrome’s bookmarks are on this computer.' : 'Chrome is connected.'} Bring them into your library; your Chrome bookmarks aren’t changed.</p><div class="chrome-setup-actions">${importButton}</div>`;
   else {
-    const status = !online ? ['waiting', 'Waiting for Chrome… This page continues on its own once the helper is loaded.'] : helper.bookmarksReady ? ['connected', 'Chrome is connected. Reading your bookmarks…'] : ['connected', 'Chrome is connected. Allow bookmarks in the saveXtension helper to continue.'];
-    body = `<p class="chrome-setup-lead">saveXtension couldn’t find Chrome’s bookmarks on this computer. Work computers often keep them somewhere unusual. A small Chrome helper can share them instead. It’s a one-time, one-minute setup.</p>
-      <ol class="chrome-setup-steps">
-        <li class="${chromeSetup.saved ? 'is-done' : ''}"><div><strong>Save the helper to Downloads</strong><p>${chromeSetup.saved ? `Saved as <b>Downloads › saveXtension Chrome helper</b>.` : 'A folder named <b>saveXtension Chrome helper</b> appears in your Downloads.'}</p></div><button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}${chromeSetup.saved ? 'Show folder' : 'Save to Downloads'}</button></li>
-        <li><div><strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p></div><div class="chrome-setup-buttons"><button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button><button class="text-button" type="button" data-action="copy-chrome-extensions">Copy address</button></div></li>
-        <li><div><strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p></div></li>
-        <li><div><strong>Click Load unpacked and choose the folder</strong><p>Pick <b>Downloads › saveXtension Chrome helper</b>. Your bookmarks start importing right away.</p></div></li>
-      </ol>
-      <p class="chrome-setup-status is-${status[0]}" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>${status[1]}</p>
-      <p class="chrome-setup-note">If Developer mode is greyed out, your organization doesn’t allow extensions on this computer.</p>`;
+    body = `<p class="chrome-setup-lead">saveXtension couldn’t find Chrome’s bookmarks on this computer. Work computers often keep them somewhere unusual. A small Chrome extension can share them instead.</p>
+      ${chromeHelperRow('bookmarks')}
+      ${online ? `<p class="chrome-setup-status is-connected" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>${helper.bookmarksReady ? 'Reading your bookmarks…' : 'Allow bookmarks in the saveXtension extension to continue.'}</p>` : ''}`;
   }
   const html = `<section class="chrome-setup" aria-labelledby="chrome-setup-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon('chrome')}</span><h2 id="chrome-setup-title">${chromeSetup.found === false && !received ? 'Connect Chrome to bring in your bookmarks' : 'Import your Chrome bookmarks'}</h2>${body}</section>`;
   if (!root.querySelector(':scope > .chrome-setup') || root.dataset.chromeSetup !== html) { root.innerHTML = html; root.dataset.chromeSetup = html; }
@@ -669,7 +712,7 @@ function renderChromeSetup() {
 // Refreshing everything in the desktop app covers what is connected and skips the rest;
 // connecting is offered on each source's own empty page instead.
 function connectedTargets(targets) {
-  const native = state.sync?.nativeSocial; if (!native?.enabled) return targets;
+  const native = state.sync?.nativeSocial; if (!native?.enabled) return targets.filter(target => target !== 'pinterest');
   const connected = new Set(native.accounts.filter(account => account.status === 'connected').map(account => account.platform));
   return targets.filter(target => target === 'chrome' || connected.has(target));
 }
@@ -678,20 +721,20 @@ const sourceConnect = { awaiting: null };
 function emptySourcePlatform() {
   if (!state.sync?.nativeSocial?.enabled || state.demo || state.archive || state.query.trim()) return null;
   const platform = selectedSource(), filters = state.filters;
-  if (!['x', 'instagram'].includes(platform) || filters.topics.length || filters.collections?.length || filters.collection || filters.accounts.some(value => value.startsWith(`${platform}:@`))) return null;
+  if (!['x', 'instagram', 'pinterest'].includes(platform) || filters.topics.length || filters.collections?.length || filters.collection || filters.accounts.some(value => value.startsWith(`${platform}:@`))) return null;
   return allPosts().some(post => post.platform === platform && !post.archived) ? null : platform;
 }
-function sourceSyncRequest(platform) { return { ...selectedSyncRequest(), targets: [platform], xAccount: platform === 'x' ? 'all' : 'current', instagramAccount: 'current' }; }
+function sourceSyncRequest(platform) { return { ...selectedSyncRequest(), targets: [platform], xAccount: platform === 'x' ? 'all' : 'current', instagramAccount: 'current', pinterestAccount: 'current' }; }
 function renderSourceConnect() {
   const root = $('#results'), platform = emptySourcePlatform(); if (!root || !platform) return;
-  const name = platform === 'x' ? 'X' : 'Instagram', what = platform === 'x' ? 'bookmarks' : 'saved posts';
+  const name = platformName(platform), what = platform === 'x' ? 'bookmarks' : platform === 'pinterest' ? 'saved pins' : 'saved posts';
   const accounts = state.sync.nativeSocial.accounts.filter(account => account.platform === platform && account.status === 'connected');
   const job = state.sync.job, syncing = state.syncChecking || ['queued', 'running'].includes(job?.status) && job.targets?.includes(platform);
   // Signing in from this page brings the saves in as soon as the account connects.
   if (accounts.length && sourceConnect.awaiting === platform && !syncing) { sourceConnect.awaiting = null; void startSync('quick', sourceSyncRequest(platform)); }
   const html = accounts.length
     ? `<section class="chrome-setup source-connect" aria-labelledby="source-connect-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon(platform)}</span><h2 id="source-connect-title">No ${name} saves yet</h2><p class="chrome-setup-lead">Connected as ${accounts.map(account => `<b>${esc(account.handle)}</b>`).join(', ')}. Bring in your ${what}; nothing on ${name} changes.</p><div class="chrome-setup-actions"><button class="primary" type="button" data-action="sync-source" data-platform="${platform}" ${syncing ? 'disabled' : ''}>${syncing ? 'Syncing…' : `Sync ${name} now`}</button></div></section>`
-    : `<section class="chrome-setup source-connect" aria-labelledby="source-connect-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon(platform)}</span><h2 id="source-connect-title">Connect ${name}</h2><p class="chrome-setup-lead">Sign in once and your ${name} ${what} show up here. You sign in on ${name}’s own page, so saveXtension never sees your password.</p><div class="chrome-setup-actions"><button class="primary" type="button" data-action="connect-source" data-platform="${platform}">Sign in to ${name}</button></div>${sourceConnect.awaiting === platform ? `<p class="chrome-setup-status is-waiting" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Finish signing in in the ${name} window. Your ${what} start syncing right after.</p>` : ''}</section>`;
+    : `<section class="chrome-setup source-connect" aria-labelledby="source-connect-title"><span class="chrome-setup-icon" aria-hidden="true">${sourceIcon(platform)}</span><h2 id="source-connect-title">Connect ${name}</h2><p class="chrome-setup-lead">Sign in once and your ${name} ${what} show up here. You sign in on ${name}’s own page, so saveXtension never sees your password.</p><div class="chrome-setup-actions"><button class="primary" type="button" data-action="connect-source" data-platform="${platform}">Sign in to ${name}</button></div>${chromeHelperRow('')}${sourceConnect.awaiting === platform ? `<p class="chrome-setup-status is-waiting" role="status" aria-live="polite"><span class="chrome-setup-dot" aria-hidden="true"></span>Finish signing in in the ${name} window. Your ${what} start syncing right after.</p>` : ''}</section>`;
   if (!root.querySelector(':scope > .source-connect') || root.dataset.sourceConnect !== html) { root.innerHTML = html; root.dataset.sourceConnect = html; }
 }
 const CARD_BATCH_SIZE = 24;
@@ -759,7 +802,8 @@ function renderFilterUI() {
   }
   renderAccountNavigation(); renderTopicNavigation();
   requestAnimationFrame(syncToolbar);
-  const chips = filterChips(state.filters, { collectionName: id => (state.instagramCollections || []).find(c => String(c.id) === String(id))?.name }), button = $('#open-filters'), badge = $('.filter-count');
+  const folder = id => (state.instagramCollections || []).find(c => String(c.id) === String(id));
+  const chips = filterChips(state.filters, { collectionName: id => folder(id)?.name, collectionPlatform: id => folder(id)?.platform || 'instagram' }), button = $('#open-filters'), badge = $('.filter-count');
   if (badge) { badge.hidden = !chips.length; badge.textContent = chips.length; }
   button?.classList.toggle('has-filters', !!chips.length);
   const active = $('#active-filters');
@@ -782,7 +826,7 @@ function filterDialog() {
   const current = state.filters, posts = allPosts().filter(post => !!post.archived === state.archive);
   const arranged = state.archive || state.demo ? [] : state.topicCatalog.map(t => t.name);
   const topics = [...new Set([...arranged, ...posts.flatMap(p => p.topics).filter(name => !arranged.includes(name)).sort()])];
-  const accounts = accountOptions(posts, state.sync?.xAccounts?.accounts || []);
+  const accounts = accountOptions(posts, state.sync?.xAccounts?.accounts || [], { pinterest: !state.demo && !!state.sync?.nativeSocial?.enabled });
   const accountName = value => value.platform === 'chrome' ? 'Chrome bookmarks' : value.label === platformName(value.platform) ? value.label : `${platformName(value.platform)} ${value.label}`;
   const folders = [...new Set(posts.filter(p => p.platform === 'chrome').flatMap(p => p.folders || []))].sort();
   const chosen = value => current.accounts.length ? current.accounts.includes(value.value) || current.accounts.includes(`${value.platform}:*`) : current.sources.includes(value.platform);
@@ -869,10 +913,10 @@ function noteOpen(post) {
   return state.cardView === 'feed' || openNoteIds.has(post.id) || !!notes.value(post).trim() || status === 'error' || status === 'saving' || status === 'pending';
 }
 function instagramCollectionLabel(post) {
-  if (post.platform !== 'instagram' || state.archive || state.filters.collection || state.filters.topics.length) return '';
-  const accounts = state.filters.accounts.filter(value => value.startsWith('instagram:'));
+  if (!['instagram', 'pinterest'].includes(post.platform) || state.archive || state.filters.collection || state.filters.topics.length) return '';
+  const accounts = state.filters.accounts.filter(value => value.startsWith(`${post.platform}:`));
   const names = (post.collections || []).map(item => ({ ...state.instagramCollections.find(collection => String(collection.id) === String(item.id)), ...item }))
-    .filter(collection => typeof collection.name === 'string' && collection.name.trim() && (!accounts.length || accounts.includes('instagram:*') || accounts.includes(`instagram:${collection.account?.toLowerCase()}`)))
+    .filter(collection => typeof collection.name === 'string' && collection.name.trim() && (!accounts.length || accounts.includes(`${post.platform}:*`) || accounts.includes(`${post.platform}:${collection.account?.toLowerCase()}`)))
     .map(collection => collection.name);
   return [...new Set(names)].sort((a,b) => a.localeCompare(b)).join(', ');
 }
@@ -885,7 +929,7 @@ function feedSourceLabel(post) {
   const memberships = (post.collections || []).map(item => ({ ...state.instagramCollections.find(collection => String(collection.id) === String(item.id)), ...item }));
   const owners = [...new Map((post.accounts || []).filter(account => account.startsWith('@') && (!selected.length || selected.includes(`${post.platform}:*`) || selected.includes(`${post.platform}:${account.toLowerCase()}`))).map(account => [account.toLowerCase(),account])).values()];
   return owners.map(account => {
-    const collections = post.platform === 'instagram' ? [...new Set(memberships.filter(collection => collection.account?.toLowerCase() === account.toLowerCase() && (!state.filters.collection || String(collection.id) === String(state.filters.collection))).map(collection => collection.name).filter(Boolean))].sort((a,b) => a.localeCompare(b)) : [];
+    const collections = ['instagram', 'pinterest'].includes(post.platform) ? [...new Set(memberships.filter(collection => collection.account?.toLowerCase() === account.toLowerCase() && (!state.filters.collection || String(collection.id) === String(state.filters.collection))).map(collection => collection.name).filter(Boolean))].sort((a,b) => a.localeCompare(b)) : [];
     return [account, ...collections].join(' · ');
   }).join(' · ') || platformName(post.platform);
 }
@@ -895,7 +939,7 @@ function feedCardSource(post) {
 }
 
 function card(p) {
-  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.accounts || []).some(account => /^@[\w.]+$/.test(account));
+  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && p.platform !== 'pinterest' && (p.accounts || []).some(account => /^@[\w.]+$/.test(account));
   return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}"><div class="card-content">
     <div class="card-body">
     <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button>${native ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
@@ -1176,7 +1220,7 @@ function renderUnsaving() {
 function openPostPreview(card) {
   const post = allPosts().find(post => post.id === Number(card.dataset.postId)); if (!post) return;
   // The same actions as a feed card, in a column beside the post.
-  const canUnsave = state.localMode && !state.demo && (post.accounts || []).some(account => /^@[\w.]+$/.test(account));
+  const canUnsave = state.localMode && !state.demo && post.platform !== 'pinterest' && (post.accounts || []).some(account => /^@[\w.]+$/.test(account));
   showModal(`<div class="post-preview-actions" data-post-id="${post.id}"><button class="icon-button preview-action" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button preview-action" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>${canUnsave ? `<button class="icon-button preview-action unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(post.platform)}" title="Unsave on ${platformName(post.platform)}">${icon('unsave')}</button>` : ''}</div><div class="post-preview-layout"><div class="post-preview">${nativePreview(post, true)}</div><section class="card-note post-preview-note" data-post-id="${post.id}" aria-label="Note"><label class="sr-only" for="preview-note">Note</label><textarea class="note-input" id="preview-note" name="notes" rows="4" maxlength="10000" placeholder="Add a note…" ${state.demo ? 'readonly' : ''}>${esc(notes.value(post))}</textarea><span class="note-status" role="status" aria-live="polite"></span></section></div>`);
   modal.className = 'post-preview-dialog'; renderSync();
   // The note beside the post edits the same saved note as its card.
@@ -1217,7 +1261,7 @@ function toggleSidebarPick(button) {
     if (button.dataset.instagramCollection) collections = toggle(collections, button.dataset.instagramCollection);
     else accounts = toggle(accounts, button.dataset.navAccount || 'chrome:*');
     Object.assign(filters, { accounts, collections: [...new Set(collections)], collection: '', collectionName: '' });
-    filters.sources = [...new Set([...accounts.map(value => value.split(':')[0]), ...(filters.collections.length ? ['instagram'] : [])])];
+    filters.sources = [...new Set([...accounts.map(value => value.split(':')[0]), ...filters.collections.map(id => state.instagramCollections.find(item => String(item.id) === id)?.platform || 'instagram')])];
     if (!filters.sources.includes('chrome')) filters.folder = '';
   }
   updateCollection(); renderSync();
@@ -1248,7 +1292,7 @@ function currentAvailability(targets = state.pendingTargets || sourceTargets()) 
     const connected = state.sync.nativeSocial.accounts.filter(account => account.status === 'connected');
     for (const platform of targets.filter(target => target !== 'chrome')) {
       const available = connected.filter(account => account.platform === platform);
-      const selection = platform === 'x' ? request.xAccount : request.instagramAccount;
+      const selection = platform === 'x' ? request.xAccount : platform === 'pinterest' ? request.pinterestAccount : request.instagramAccount;
       const handles = Array.isArray(selection) ? selection : selection && !['all', 'current'].includes(selection) ? [selection] : [];
       if (!available.length || handles.some(handle => !available.some(account => account.handle.toLowerCase() === handle.toLowerCase()))) return 'native-accounts';
     }
@@ -1270,7 +1314,7 @@ function setupDialog(mode, targets, download = false, syncMode = 'quick', reques
     showModal('<h2>Connect accounts</h2><p>Sign in once. Your accounts stay connected on this computer.</p><section id="native-connect-panel" class="section-gap"></section><p class="setup-status" id="setup-status" role="status">Your scan starts after your accounts are connected.</p>');
     modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingSyncRequest = request; state.pendingMode = syncMode;
     const handles = value => Array.isArray(value) ? value : value?.startsWith('@') ? [value] : [];
-    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount) }, onChange: () => void syncStatus() });
+    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount), pinterest: handles(request.pinterestAccount) }, onChange: () => void syncStatus() });
     return;
   }
   const missing = mode === 'missing', offline = mode === 'offline', chromeBookmarks = targets.includes('chrome');
@@ -1279,11 +1323,15 @@ function setupDialog(mode, targets, download = false, syncMode = 'quick', reques
   showModal(`<div class="sync-setup"><span class="dialog-kicker">${missing ? 'One-time setup' : 'Almost ready'}</span><h2>${title}</h2><p>${intro}</p>${missing ? `<ol class="setup-steps"><li><strong>Unzip the download</strong><p>Keep the extracted folder somewhere permanent.</p></li><li><strong>Open Chrome’s extensions page</strong><p>Enter <code>chrome://extensions</code> in Chrome’s address bar. For Edge, use <code>edge://extensions</code>.</p><button class="text-button" id="copy-extensions">Copy Chrome address</button></li><li><strong>Load the extension folder</strong><p>Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and choose the extracted <code>extension</code> folder.</p></li><li><strong>Allow your selected sources</strong><p>Open saveXtension once and click <b>${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}</b>. Approve Chrome’s permission request.</p></li></ol><div class="button-row"><a class="secondary" href="/extension.zip" download="savextension.zip">${icon('download')} Download again</a><button class="primary" id="check-extension">Check installation</button></div>` : offline ? `<p>Leave Chrome open. We’ll start your sync as soon as it reconnects.</p><div class="button-row"><button class="primary" id="check-extension">Check connection</button><button class="text-button" id="reinstall-extension">Reinstall extension</button></div><p class="fine-print">If the extension is disabled, enable it at <code>chrome://extensions</code>. If you recently reloaded it, refresh the library in Chrome.</p>` : `<p>Click below to open setup in Chrome, then click <b>${chromeBookmarks ? 'Allow Chrome bookmarks' : 'Enable background sync'}</b>${targets.length > 1 && chromeBookmarks ? ' and enable background sync for your social saves' : ''}. Your sync starts automatically after you approve access.</p><button class="primary" id="open-extension-setup">Open setup in Chrome</button><p class="fine-print">If setup doesn’t open, click the saveXtension extension icon in Chrome and choose ${chromeBookmarks ? 'Settings → Allow Chrome bookmarks' : 'Enable background sync'}.</p>`}<p class="setup-status" id="setup-status" role="status">${missing ? 'Waiting for installation. Your sync will start automatically when ready.' : offline ? 'Waiting for Chrome…' : 'Waiting for permission…'}</p></div>`);
   modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingSyncRequest = request; state.pendingMode = syncMode;
   if (missing && window.saveXDesktop) {
-    $('.setup-steps', modal).innerHTML = `<li><strong>Open Chrome or Edge extensions</strong><p>Reload saveXtension if it is already installed. For a new install, turn on <b>Developer mode</b>.</p><button class="text-button" id="desktop-open-extensions">Open extensions</button></li><li><strong>Load the included helper</strong><p>Click <b>Load unpacked</b> and choose the extension folder shown below. The desktop app keeps this folder updated.</p><div class="button-row"><button class="secondary" id="desktop-show-helper">Show helper folder</button><button class="text-button" id="desktop-copy-helper">Copy folder path</button></div><p class="fine-print" id="desktop-helper-path"></p></li><li><strong>Allow Chrome bookmarks</strong><p>Open the helper’s settings and approve bookmark access. X and Instagram connect directly inside saveXtension.</p></li>`;
+    $('.setup-steps', modal).innerHTML = `<li><strong>Open Chrome or Edge extensions</strong><p>Reload saveXtension if it is already installed. For a new install, turn on <b>Developer mode</b>.</p><button class="text-button" id="desktop-open-extensions">Open extensions</button></li><li><strong>Load the included helper</strong><p>Download the helper, click <b>Load unpacked</b> and choose the folder shown below. The desktop app keeps this folder updated.</p><div class="button-row"><button class="secondary" id="desktop-show-helper">Download helper</button><button class="text-button" id="desktop-copy-helper">Copy folder path</button></div><p class="fine-print" id="desktop-helper-path"></p></li><li><strong>Allow Chrome bookmarks</strong><p>Open the helper’s settings and approve bookmark access. X and Instagram connect directly inside saveXtension.</p></li>`;
     const zip = $('a[download="savextension.zip"]', modal); if (zip) zip.remove();
     $('#desktop-open-extensions').onclick = () => window.saveXDesktop.openExtensions().catch(error => toast(error.message, true));
-    $('#desktop-show-helper').onclick = () => window.saveXDesktop.showHelper().catch(error => toast(error.message, true));
-    $('#desktop-copy-helper').onclick = async () => { await window.saveXDesktop.copyHelperPath(); $('#desktop-copy-helper').textContent = 'Copied'; };
+    let downloaded = '';
+    $('#desktop-show-helper').onclick = async event => {
+      try { downloaded = (await window.saveXDesktop.saveHelper()).path; $('#desktop-helper-path').textContent = downloaded; event.target.textContent = 'Downloaded'; }
+      catch (error) { toast(error.message, true); }
+    };
+    $('#desktop-copy-helper').onclick = async () => { if (downloaded) await window.saveXDesktop.copyText(downloaded); else await window.saveXDesktop.copyHelperPath(); $('#desktop-copy-helper').textContent = 'Copied'; };
     void window.saveXDesktop.helperInfo().then(info => { if ($('#desktop-helper-path')) $('#desktop-helper-path').textContent = info.path; });
   } else if (missing && download && sessionStorage.getItem('savex-extension-downloaded') !== 'true') downloadExtension();
   if ($('#copy-extensions')) $('#copy-extensions').onclick = async () => { try { await navigator.clipboard.writeText('chrome://extensions'); $('#copy-extensions').textContent = 'Copied'; } catch { $('#setup-status').textContent = 'Enter chrome://extensions in Chrome’s address bar.'; } };
@@ -1311,7 +1359,8 @@ function saveSyncAccounts(selected) {
   localStorage.setItem('savex-sync-accounts', JSON.stringify(state.syncAccounts));
 }
 function allSourcesScanDialog() {
-  showModal(`<h2>Refresh all sources</h2><div class="scan-source-summary" role="img" aria-label="X, Instagram and Chrome">${sourceIcon('x')}${sourceIcon('instagram')}${sourceIcon('chrome')}</div><div class="scan-choices"><button class="scan-choice" data-action="scan-all" data-scan-mode="quick" aria-label="Quick scan" aria-describedby="quick-scan-description"><strong>Quick scan</strong><span id="quick-scan-description">New saves</span></button><button class="scan-choice" data-action="scan-all" data-scan-mode="deep" aria-label="Deep scan" aria-describedby="deep-scan-description"><strong>Deep scan</strong><span id="deep-scan-description">Full history · takes longer</span></button></div>`);
+  const withPinterest = !!state.sync?.nativeSocial?.enabled;
+  showModal(`<h2>Refresh all sources</h2><div class="scan-source-summary" role="img" aria-label="${withPinterest ? 'X, Instagram, Pinterest and Chrome' : 'X, Instagram and Chrome'}">${sourceIcon('x')}${sourceIcon('instagram')}${withPinterest ? sourceIcon('pinterest') : ''}${sourceIcon('chrome')}</div><div class="scan-choices"><button class="scan-choice" data-action="scan-all" data-scan-mode="quick" aria-label="Quick scan" aria-describedby="quick-scan-description"><strong>Quick scan</strong><span id="quick-scan-description">New saves</span></button><button class="scan-choice" data-action="scan-all" data-scan-mode="deep" aria-label="Deep scan" aria-describedby="deep-scan-description"><strong>Deep scan</strong><span id="deep-scan-description">Full history · takes longer</span></button></div>`);
   modal.dataset.syncOptions = 'true'; modal.dataset.allSourcesScan = 'true'; modal.classList.add('all-sources-scan-dialog');
   $('[data-action="scan-options"]')?.setAttribute('aria-expanded', 'true'); renderSync();
 }
@@ -1395,8 +1444,19 @@ function dismissSyncToast(id = state.sync?.job?.id) {
     try { sessionStorage.setItem('savex-dismissed-sync-jobs', JSON.stringify([...dismissedSyncJobs].slice(-40))); } catch { /* Dismissal still lasts until reload. */ }
   }
   clearTimeout(syncToastTimer); syncReportTimers.clear();
-  const el = $('#sync-status'); el.hidden = true; el.replaceChildren(); delete el.dataset.content;
+  slideOutSyncNotice();
 }
+// The sync toast slides off to the right before it goes, keeping its content until then.
+let syncLeaving = null;
+function slideOutSyncNotice() {
+  const el = $('#sync-status');
+  if (el.hidden || syncLeaving) return;
+  const finish = () => { el.hidden = true; el.replaceChildren(); delete el.dataset.content; };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+  const leaving = syncLeaving = el.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateX(calc(100% + 32px))', opacity: 0 }], { duration: 240, easing: 'cubic-bezier(.4,0,.8,.6)', fill: 'forwards' });
+  leaving.onfinish = () => { syncLeaving = null; finish(); leaving.cancel(); };
+}
+function cancelSyncSlideOut() { if (syncLeaving) { syncLeaving.onfinish = null; syncLeaving.cancel(); syncLeaving = null; } }
 function updateSyncCountdown() {
   if (syncReportTicking) return;
   syncReportTicking = true; clearTimeout(syncToastTimer);
@@ -1446,9 +1506,9 @@ function syncReportCards(job) {
     return `<article class="sync-platform-card" data-platform="${report.platform}" data-tone="${report.warning ? 'warning' : 'success'}" aria-label="${platformName(report.platform)} sync report"><div class="sync-report-header">${sourceIcon(report.platform)}<strong>${platformName(report.platform)}</strong><span class="sync-report-state">${report.warning ? 'Needs attention' : 'Sync complete'}</span>${!report.warning ? '<span class="sync-dismiss-timer" role="timer" aria-live="off" aria-label="Auto-dismiss countdown">8s</span>' : ''}<button class="icon-button" data-action="dismiss-sync-platform" data-platform="${report.platform}" aria-label="Dismiss ${platformName(report.platform)} sync report">${icon('close')}</button></div>${stats}${report.notes.length ? `<ul class="sync-report-issues">${report.notes.map(note => `<li>${esc(note)}</li>`).join('')}</ul>` : ''}${details || report.warning ? `<div class="sync-report-footer${report.warning ? ' has-retry' : ''}">${details ? `<details class="sync-report-details"><summary>Details${report.entries.length > 1 ? ` · ${report.entries.length} checks` : ''}${icon('chevron')}</summary><div class="sync-report-log">${details}</div></details>` : ''}${report.warning ? `<button class="sync-report-retry secondary" data-action="retry-sync-platform" data-platform="${report.platform}" aria-label="Retry ${platformName(report.platform)} sync">${icon('refresh')}Retry</button>` : ''}</div>` : ''}${!report.warning ? '<div class="sync-dismiss-progress" aria-hidden="true"><span></span></div>' : ''}</article>`;
   }).join('');
 }
-const syncNotice = $('#sync-status');
+const syncNotice = $('#sync-status'), syncNoticeGlide = glideSize(syncNotice);
 function expandSyncNotice(expanded) {
-  syncNotice.dataset.expanded = String(expanded);
+  syncNoticeGlide.change(() => { syncNotice.dataset.expanded = String(expanded); });
   syncNotice.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(expanded));
 }
 syncNotice.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') expandSyncNotice(true); });
@@ -1466,8 +1526,8 @@ function renderSyncToast(job, busy, message) {
   if (changed) { clearTimeout(syncToastTimer); syncToastKey = key; expandSyncNotice(el.matches(':hover') || el.contains(document.activeElement)); }
   const finished = ['failed', 'partial', 'completed'].includes(job?.status);
   const visible = checking || job && (busy || !dismissedSyncJobs.has(job.id) && (['failed', 'partial'].includes(job.status) || job.status === 'completed' && completedToastJob === job.id));
-  el.hidden = !visible;
-  if (!visible) { clearTimeout(syncToastTimer); syncReportTimers.clear(); el.replaceChildren(); delete el.dataset.content; return; }
+  if (!visible) { clearTimeout(syncToastTimer); syncReportTimers.clear(); slideOutSyncNotice(); return; }
+  cancelSyncSlideOut(); el.hidden = false;
   el.classList.toggle('sync-report-stack', finished && !checking);
   if (finished && !checking) {
     el.dataset.tone = job.status === 'completed' ? 'success' : 'warning';
@@ -1482,7 +1542,7 @@ function renderSyncToast(job, busy, message) {
   }
   clearTimeout(syncToastTimer); syncReportTimers.clear();
   const targets = checking ? ['chrome'] : job?.targets || [];
-  const active = /instagram/i.test(message) ? 'instagram' : /\bX\b|twitter/i.test(message) ? 'x' : /chrome/i.test(message) ? 'chrome' : targets.length === 1 ? targets[0] : '';
+  const active = /instagram/i.test(message) ? 'instagram' : /pinterest/i.test(message) ? 'pinterest' : /\bX\b|twitter/i.test(message) ? 'x' : /chrome/i.test(message) ? 'chrome' : targets.length === 1 ? targets[0] : '';
   const sources = active ? [active] : targets;
   const sourceName = active ? platformName(active) : 'saves';
   const title = checking ? 'Connecting to Chrome' : job.status === 'queued' ? 'Sync queued' : busy ? `${job.mode === 'deep' ? 'Deep scanning' : 'Syncing'} ${sourceName}` : job.status === 'failed' ? 'Sync needs attention' : job.status === 'partial' ? 'Sync finished with a few issues' : 'Sync complete';
@@ -1499,7 +1559,7 @@ function renderSyncToast(job, busy, message) {
   el.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(el.dataset.expanded === 'true'));
 }
 async function queueSync(targets, mode = 'quick', request = selectedSyncRequest()) {
-  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: request.xAccount, instagramAccount: request.instagramAccount, instagramCollectionId: request.instagramCollectionId, mode } });
+  const { job } = await api('/sync', { method: 'POST', body: { targets, xAccount: request.xAccount, instagramAccount: request.instagramAccount, instagramCollectionId: request.instagramCollectionId, pinterestAccount: request.pinterestAccount, pinterestCollectionId: request.pinterestCollectionId, mode } });
   state.sync = { ...state.sync, job }; renderSync(); wakeExtension();
 }
 let statusLoading = false;
@@ -1508,6 +1568,7 @@ async function syncStatus() {
   statusLoading = true;
   try {
     state.sync = await api('/sync'); renderSync(); void handleUnsaveStatus(state.sync.unsave);
+    renderChromeHelperSettings(); renderChromeHelperPage();
     if ($('.source-connect')) renderSourceConnect();
     else if ($('.chrome-setup')) {
       // The first copy from Chrome queues an import; wake the desktop worker so it starts now.
@@ -1602,6 +1663,12 @@ function mountUpdateSettings() {
   };
   void refreshUpdate(); updatePoll = setInterval(refreshUpdate, 1000);
 }
+// From Settings to one connected account's saves in the library.
+function browseAccount(platform, handle) {
+  state.archive = false; state.query = ''; const search = $('#search'); if (search) search.value = '';
+  state.filters = { ...defaultFilters(), sources: [platform], accounts: [`${platform}:${handle.toLowerCase()}`] };
+  modal.close(); selectSidebarView('accounts'); updateCollection();
+}
 async function settingsDialog() {
   if (state.localMode) {
     showModal(`<h2>Settings</h2><form id="library-form"><label>Library name<input name="name" value="${esc(state.name)}" maxlength="50" placeholder="My saves"></label><button class="primary" type="submit">Save name</button></form><section class="settings-section"><h3>Backup</h3><div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div></section>`);
@@ -1612,9 +1679,10 @@ async function settingsDialog() {
     void mountMcpSettings(mcpSection, { api, toast, esc, icon });
     if (window.saveXDesktop?.socialAccounts) {
       const section = document.createElement('section'); section.className = 'native-account-settings settings-section';
-      section.innerHTML = '<h3>Accounts<span class="settings-heading-detail" id="settings-account-count"></span></h3><div id="native-account-settings-list"></div>';
+      section.innerHTML = '<div class="native-accounts-heading"><h3>Accounts<span class="settings-heading-detail" id="settings-account-count"></span></h3><div id="chrome-helper-settings"></div></div><div id="native-account-settings-list"></div>';
       $('#library-form').insertAdjacentElement('afterend', section);
-      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.length}`; void syncStatus(); } });
+      mountSocialAccounts($('#native-account-settings-list'), { esc, icon, sourceIcon, onBrowse: browseAccount, onChange: accounts => { $('#settings-account-count', section).textContent = ` · ${accounts.length}`; void syncStatus(); } });
+      renderChromeHelperSettings();
     }
     mountUpdateSettings(); renderSync(); return;
   }
@@ -1651,7 +1719,7 @@ export function parseImport(content, name = '') {
     if (typeof url !== 'string') return;
     if (metadata.platform === 'chrome') { try { const u = new URL(url); if (['http:', 'https:'].includes(u.protocol) && !u.username && !u.password) found.set('chrome:' + u.href, { ...metadata, url: u.href }); } catch {} return; }
     const normalized = url.replace(/&amp;/g, '&');
-    if (!/^https?:\/\/(?:www\.|mobile\.)?(?:(?:x|twitter)\.com\/(?:\w+|i\/web)\/status\/\d+|instagram\.com\/(?:p|reels?|tv)\/[\w-]+)/i.test(normalized)) return;
+    if (!/^https?:\/\/(?:www\.|mobile\.)?(?:(?:x|twitter)\.com\/(?:\w+|i\/web)\/status\/\d+|instagram\.com\/(?:p|reels?|tv)\/[\w-]+)/i.test(normalized) && !isPinterestPin(normalized)) return;
     const p = { ...metadata, url: normalized }; found.set(normalized.split('?')[0], { ...found.get(normalized.split('?')[0]), ...p });
   }
   if (/\.html?$/i.test(name)) {
@@ -1702,14 +1770,14 @@ document.addEventListener('click', async e => {
     else if (button.dataset.navAccount) {
       if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; }
       const value = button.dataset.navAccount;
-      if (value.startsWith('instagram:')) toggleInstagramCollections(value);
+      if (/^(?:instagram|pinterest):/.test(value)) toggleInstagramCollections(value);
       state.filters.sources = [value.split(':')[0]]; state.filters.accounts = [value]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.topics = [];
       updateCollection();
     }
     else if (button.dataset.instagramCollection) {
       const collection = (state.instagramCollections || []).find(c => String(c.id) === button.dataset.instagramCollection);
       if (!collection) return;
-      state.archive = false; state.filters = { ...defaultFilters(), sources: ['instagram'], accounts: [`instagram:${collection.account.toLowerCase()}`], collection: String(collection.id), collectionName: collection.name };
+      state.archive = false; state.filters = { ...defaultFilters(), sources: [collection.platform || 'instagram'], accounts: [`${collection.platform || 'instagram'}:${collection.account.toLowerCase()}`], collection: String(collection.id), collectionName: collection.name };
       state.query = ''; $('#search').value = ''; updateCollection();
     }
     else if (button.dataset.navTopic || button.dataset.openCollection) {
@@ -1738,7 +1806,8 @@ document.addEventListener('click', async e => {
       case 'topics-view': setTopicsView('folders'); break;
       case 'card-view': {
         const view = button.dataset.cardView;
-        if (showingTopicsHome()) { setTopicsView('cards'); break; }
+        // Leaving the folders picks this layout too; cards built for another layout rebuild.
+        if (showingCollectionFolders()) { state.cardView = view; localStorage.setItem('savex-card-view', view); setTopicsView('cards'); break; }
         if (view === state.cardView) break;
         state.cardView = view; localStorage.setItem('savex-card-view', view);
         document.querySelectorAll('[data-action="card-view"]').forEach(control => control.setAttribute('aria-pressed', String(control.dataset.cardView === view)));
@@ -1755,7 +1824,9 @@ document.addEventListener('click', async e => {
       case 'connect-source': sourceConnect.awaiting = button.dataset.platform; renderSourceConnect(); await window.saveXDesktop.connectSocial({ platform: button.dataset.platform }); break;
       case 'sync-source': await startSync('quick', sourceSyncRequest(button.dataset.platform)); renderSourceConnect(); break;
       case 'import-chrome': await startSync('quick', { ...selectedSyncRequest(), targets: ['chrome'] }); renderChromeSetup(); break;
-      case 'save-chrome-helper': try { chromeSetup.saved = (await window.saveXDesktop.saveHelperToDownloads()).path; renderChromeSetup(); } catch (failure) { toast(failure.message, true); } break;
+      case 'chrome-helper-page': chromeHelperPage(button.dataset.from || ''); break;
+      case 'chrome-helper-back': if (button.dataset.from === 'settings') await settingsDialog(); else modal.close(); break;
+      case 'save-chrome-helper': try { chromeSetup.saved = (await window.saveXDesktop.saveHelper()).path; refreshSetupPanel(); } catch (failure) { toast(failure.message, true); } break;
       case 'open-chrome-extensions': try { await window.saveXDesktop.openExtensions(); } catch (failure) { toast(failure.message, true); } break;
       case 'copy-chrome-extensions': try { await window.saveXDesktop.copyText('chrome://extensions'); button.textContent = 'Copied'; } catch (failure) { toast(failure.message, true); } break;
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
@@ -1778,7 +1849,7 @@ document.addEventListener('click', async e => {
         break;
       }
       case 'scan-options': allSourcesScanDialog(); break;
-      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: connectedTargets(['chrome', 'x', 'instagram']), xAccount: 'all' }); break;
+      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: connectedTargets(['chrome', 'x', 'instagram', 'pinterest']), xAccount: 'all' }); break;
       case 'sync-options': syncOptionsDialog(); break;
       case 'sync': await startSync(); break;
       case 'deep-sync': await startSync('deep'); break;

@@ -1,26 +1,37 @@
-import { BrowserWindow, session, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, session, ipcMain, shell } from 'electron';
+import { isPinterestHost } from '../public/pinterest-host.js';
 import { Worker } from 'node:worker_threads';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readChromeBookmarks } from './chrome-bookmarks.mjs';
+import { findChrome, openChrome, waitForCookieSave, quitChrome, quitProfileChrome, readChromeCookies, electronCookie, extensionCookie } from './chrome-signin.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const platforms = new Set(['x', 'instagram']);
+const platforms = new Set(['x', 'instagram', 'pinterest']);
+const platformLabel = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram';
 const files = new Set(['extractors.js', 'collector.js', 'unsave-dom.js', 'x-accounts.js', 'background-render.js']);
-const handlePattern = platform => platform === 'x' ? /^@[A-Za-z0-9_]{1,30}$/ : /^@[\w.]{1,100}$/;
-const home = platform => platform === 'x' ? 'https://x.com/i/bookmarks' : 'https://www.instagram.com/';
+const handlePattern = platform => platform === 'x' ? /^@[A-Za-z0-9_]{1,30}$/ : platform === 'pinterest' ? /^@[\w.-]{1,100}$/ : /^@[\w.]{1,100}$/;
+const home = platform => platform === 'x' ? 'https://x.com/i/bookmarks' : platform === 'pinterest' ? 'https://www.pinterest.com/login/' : 'https://www.instagram.com/';
 export function socialUrl(value, platform, login = false) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
     const host = url.hostname.replace(/^www\./, '');
+    if (platform === 'pinterest' && isPinterestHost(host)) return true;
     return (platform === 'x' ? ['x.com', 'twitter.com'] : ['instagram.com']).includes(host) || login && ['accounts.google.com', 'facebook.com', 'm.facebook.com'].includes(host);
   } catch { return false; }
 }
 // Read account navigation only, never password fields, login forms or cookies.
 function pageIdentity(platform) {
+  if (platform === 'pinterest') {
+    // Every Pinterest page ships its signed-in user in this JSON, in any site language.
+    try {
+      const user = JSON.parse(document.getElementById('__PWS_DATA__')?.textContent || '{}').context?.user;
+      return user?.username ? { handle: `@${user.username}`, name: user.full_name || '' } : null;
+    } catch { return null; }
+  }
   if (platform === 'x') {
     const profile = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
     const handle = profile?.getClientRects().length && profile.getAttribute('href')?.match(/^\/([\w]+)\/?$/)?.[1];
@@ -54,8 +65,71 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     ses.setUserAgent(ses.getUserAgent().replace(/\s(?:saveXtension|savextension|Electron)\/[^\s]+/gi, ''));
     return ses;
   }
+  const signedInCookie = {
+    pinterest: cookie => cookie.name === '_auth' && cookie.value !== '0',
+    x: cookie => cookie.name === 'auth_token' && !!cookie.value,
+    instagram: cookie => cookie.name === 'sessionid' && !!cookie.value
+  };
+  // Fastest route: the Chrome helper hands over the person's existing sign-in. If Chrome is closed,
+  // has no helper or isn't signed in, this quietly leaves the sign-in window as it was.
+  async function signInFromHelper(login) {
+    const { win, profile } = login, helper = library.sync.status().chromeBrowser;
+    if (!helper?.online || !helper.chromeSessionSites?.includes(profile.platform)) return;
+    const id = library.sync.requestChromeSession(profile.platform), original = win.getTitle(), end = Date.now() + 45000;
+    win.setTitle(`Looking for your ${platformLabel(profile.platform)} sign-in in Chrome…`);
+    let cookies = null;
+    while (!cookies && Date.now() < end && !closed && !win.isDestroyed() && profile.status !== 'connected') {
+      cookies = library.sync.takeChromeSession(id);
+      if (!cookies) await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    library.sync.cancelChromeSession(id);
+    if (win.isDestroyed()) return;
+    win.setTitle(original);
+    // A signed-out Chrome has nothing to give, and reloading would interrupt someone typing here.
+    if (!cookies?.some(signedInCookie[profile.platform]) || profile.status === 'connected') return;
+    const ses = profileSession(profile);
+    await Promise.allSettled(cookies.map(cookie => ses.cookies.set(extensionCookie(cookie))));
+    await ses.cookies.flushStore();
+    if (!win.isDestroyed()) void win.loadURL(home(profile.platform)).catch(() => {});
+  }
+  const chromeProfile = () => join(app.getPath('userData'), 'chrome-sign-in');
+  const openChromes = new Set();
+  async function signInWithChrome(login) {
+    const { win, profile } = login, name = platformLabel(profile.platform);
+    if (login.chrome || win.isDestroyed()) return;
+    const notice = (message, detail) => win.isDestroyed() ? null : dialog.showMessageBox(win, { type: 'info', message, detail, buttons: ['OK'] });
+    const executable = await findChrome();
+    if (!executable) { await notice('Google sign-in needs Chrome', `Google doesn’t allow sign-in inside apps, so this step uses Google Chrome, which isn’t installed. You can sign in to ${name} with the QR code or your email instead.`); return; }
+    login.chrome = true;
+    try {
+      const child = openChrome(executable, chromeProfile(), home(profile.platform)), closed = new AbortController();
+      openChromes.add(child); login.chromeChild = child;
+      child.once('error', () => closed.abort());
+      const opened = Date.now();
+      // Exiting straight away means a Chrome already using this profile took the request, and
+      // its window is the one to sign in with. Only a later exit means the person quit Chrome.
+      child.once('exit', code => { openChromes.delete(child); if (code !== 0 || Date.now() - opened > 3000) closed.abort(); });
+      const { response } = await dialog.showMessageBox(win, { type: 'info', message: 'Continue in Chrome', detail: `Chrome has opened ${name}. Sign in there with Google, then come back and click Done. saveXtension closes that Chrome window and brings your sign-in here. Your everyday Chrome isn’t touched.`, buttons: ['Done', 'Cancel'], defaultId: 0, cancelId: 1, signal: closed.signal });
+      const finished = response === 0 || closed.signal.aborted;
+      if (finished && !closed.signal.aborted) {
+        win.setTitle('Bringing your sign-in from Chrome… this can take up to 30 seconds');
+        await waitForCookieSave(chromeProfile(), { closed: () => closed.signal.aborted });
+      }
+      await quitChrome(child); await quitProfileChrome(chromeProfile());
+      if (!finished || win.isDestroyed()) return;
+      const cookies = await readChromeCookies(executable, chromeProfile(), host => socialUrl(`https://${host}/`, profile.platform));
+      const ses = profileSession(profile);
+      await Promise.allSettled(cookies.map(cookie => ses.cookies.set(electronCookie(cookie))));
+      await ses.cookies.flushStore();
+      if (win.isDestroyed()) return;
+      void win.loadURL(home(profile.platform)).catch(() => {});
+      // A connected account closes this window; still being here means the sign-in didn't finish.
+      setTimeout(() => { if (profile.status !== 'connected') void notice(`${name} isn’t signed in yet`, `Chrome didn’t have a finished ${name} sign-in. Click Continue with Google to try again, or use the QR code or your email.`); }, 12000);
+    } catch (error) { onError(error); await notice('Chrome sign-in didn’t finish', `${error.message} You can try again, or use the QR code or your email.`); }
+    finally { login.chrome = false; }
+  }
   function makeWindow(profile, login) {
-    const win = new BrowserWindow({ width: 1100, height: 900, show: login, title: `${login ? 'Connect' : 'Sync'} ${profile.platform === 'x' ? 'X' : 'Instagram'}${profile.handle ? ` · ${profile.handle}` : ''}`, backgroundColor: '#ffffff', webPreferences: {
+    const win = new BrowserWindow({ width: 1100, height: 900, show: login, title: `${login ? 'Connect' : 'Sync'} ${platformLabel(profile.platform)}${profile.handle ? ` · ${profile.handle}` : ''}`, backgroundColor: '#ffffff', webPreferences: {
       session: profileSession(profile), preload: join(here, 'social-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false,
       backgroundThrottling: false, paintWhenInitiallyHidden: true
     } });
@@ -64,6 +138,11 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     win.webContents.on('will-redirect', (event, url) => { if (!socialUrl(url, profile.platform, login)) event.preventDefault(); });
     win.webContents.on('will-attach-webview', event => event.preventDefault());
     win.webContents.setWindowOpenHandler(({ url }) => {
+      // Google refuses sign-in inside app windows, so this button continues in real Chrome.
+      if (login && new URL(url).hostname === 'accounts.google.com') {
+        const attempt = logins.get(profile.id); if (attempt) void signInWithChrome(attempt).catch(onError);
+        return { action: 'deny' };
+      }
       if (login && socialUrl(url, profile.platform, true)) {
         void win.loadURL(url).catch(onError);
       }
@@ -72,20 +151,22 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     win.webContents.on('page-title-updated', event => event.preventDefault());
     return win;
   }
-  // A small app-owned window for Instagram posts the embed cannot play. It signs in
-  // with the connected Instagram account when there is one; other links go to the browser.
-  let viewer;
-  function openPost(url) {
+  // A small app-owned window for Instagram and Pinterest posts. It signs in with the
+  // connected account for that site when there is one; other links go to the browser.
+  const viewers = new Map();
+  function openPost(url, platform = 'instagram') {
+    let viewer = viewers.get(platform);
     if (!viewer || viewer.isDestroyed()) {
-      const profile = accounts.find(item => item.platform === 'instagram' && item.status === 'connected');
-      viewer = new BrowserWindow({ width: 460, height: 860, minWidth: 360, minHeight: 520, title: 'Instagram', backgroundColor: '#ffffff', autoHideMenuBar: true, webPreferences: {
-        session: profile ? profileSession(profile) : appSession('persist:savex-instagram-viewer', 'viewer'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false
+      const profile = accounts.find(item => item.platform === platform && item.status === 'connected');
+      viewer = new BrowserWindow({ width: 460, height: 860, minWidth: 360, minHeight: 520, title: platformLabel(platform), backgroundColor: '#ffffff', autoHideMenuBar: true, webPreferences: {
+        session: profile ? profileSession(profile) : appSession(`persist:savex-${platform}-viewer`, `${platform}-viewer`), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false
       } });
       const outside = url => { if (/^https?:/.test(url)) void shell.openExternal(url).catch(onError); };
-      viewer.webContents.on('will-navigate', (event, url) => { if (!socialUrl(url, 'instagram')) { event.preventDefault(); outside(url); } });
+      viewer.webContents.on('will-navigate', (event, url) => { if (!socialUrl(url, platform)) { event.preventDefault(); outside(url); } });
       viewer.webContents.on('will-attach-webview', event => event.preventDefault());
-      viewer.webContents.setWindowOpenHandler(({ url }) => { if (socialUrl(url, 'instagram')) void viewer.loadURL(url).catch(onError); else outside(url); return { action: 'deny' }; });
-      viewer.on('closed', () => { viewer = null; });
+      viewer.webContents.setWindowOpenHandler(({ url }) => { if (socialUrl(url, platform)) void viewer.loadURL(url).catch(onError); else outside(url); return { action: 'deny' }; });
+      viewer.on('closed', () => viewers.delete(platform));
+      viewers.set(platform, viewer);
     }
     void viewer.loadURL(url).catch(onError);
     if (viewer.isMinimized()) viewer.restore();
@@ -112,9 +193,9 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     // A sign-in page, check page or sign-in link means the session ended.
     // Anything else is a page saveXtension can no longer read; reconnecting would not help.
     const loginPage = /\/accounts\/login|\/challenge|\/checkpoint|\/i\/flow\/login|^\/login/.test(new URL(value.win.webContents.getURL() || 'about:blank').pathname);
-    const signedOut = loginPage || await evaluate(value, `!!document.querySelector('a[href^="/accounts/login"],a[href="/login"],a[href^="/i/flow/login"],a[href^="/i/flow/signup"]')`).catch(() => true);
+    const signedOut = loginPage || await evaluate(value, `!!document.querySelector('a[href^="/accounts/login"],a[href="/login"],a[href^="/i/flow/login"],a[href^="/i/flow/signup"],[data-test-id="login-button"],[data-test-id="unauth-header"]')`).catch(() => true);
     if (!seen && !signedOut) {
-      throw new Error(`${platform === 'x' ? 'X' : 'Instagram'} loaded, but saveXtension couldn’t confirm the signed-in account. The site’s layout may have changed, so saveXtension needs an update. No posts were changed.`);
+      throw new Error(`${platformLabel(platform)} loaded, but saveXtension couldn’t confirm the signed-in account. The site’s layout may have changed, so saveXtension needs an update. No posts were changed.`);
     }
     value.profile.status = 'needs-login'; publish();
     throw new Error(`Reconnect ${expected} in saveXtension before continuing. No posts were changed.`);
@@ -126,7 +207,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     accounts(platform) { const found = accounts.filter(item => item.platform === platform && item.status === 'connected'); return { active: found[0]?.handle || '', accounts: found.map(item => ({ handle: item.handle, name: item.name || '' })), checkedAt: Date.now(), busy: false }; },
     selectAccount(platform, handle) {
       selected = accounts.find(item => item.platform === platform && item.status === 'connected' && (!handle || handle === 'current' || item.handle.toLowerCase() === handle.toLowerCase()));
-      if (!selected) throw new Error(`Connect ${handle && handle !== 'current' ? handle : platform === 'x' ? 'X' : 'Instagram'} in saveXtension, then retry.`);
+      if (!selected) throw new Error(`Connect ${handle && handle !== 'current' ? handle : platformLabel(platform)} in saveXtension, then retry.`);
       return true;
     },
     verifyAccount: verify,
@@ -211,7 +292,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
   ipcMain.handle('savex-social-collector', collectorHandler);
 
   async function connect({ platform, id, expectedHandle } = {}) {
-    if (!platforms.has(platform)) throw new Error('Choose X or Instagram.');
+    if (!platforms.has(platform)) throw new Error('Choose X, Instagram or Pinterest.');
     if (expectedHandle && !handlePattern(platform).test(expectedHandle)) throw new Error('Choose a valid account handle.');
     if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before connecting accounts.');
     let profile = id ? accounts.find(item => item.id === id && item.platform === platform) : accounts.find(item => item.platform === platform && (expectedHandle ? item.handle.toLowerCase() === expectedHandle.toLowerCase() : !item.handle));
@@ -225,20 +306,23 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       login.pending = true;
       try {
         const actual = await identity({ win, profile });
+        // Pinterest can sign in without a page load, leaving that page's data signed out.
+        if (!actual && platform === 'pinterest' && Date.now() - (login.reloaded || 0) > 5000 && await evaluate({ win, profile }, `!!document.querySelector('[data-test-id="header-profile"]')`).catch(() => false)) { login.reloaded = Date.now(); win.webContents.reload(); }
         if (!actual || !handlePattern(platform).test(actual.handle)) { login.stable = 0; return; }
         if (profile.handle && profile.handle.toLowerCase() !== actual.handle.toLowerCase()) { win.setTitle(`Connect ${profile.handle} · currently signed in as ${actual.handle}`); login.stable = 0; return; }
         login.stable = login.last === actual.handle ? login.stable + 1 : 1; login.last = actual.handle;
         if (login.stable < 3) return;
         const duplicate = accounts.find(item => item.id !== profile.id && item.platform === platform && item.handle.toLowerCase() === actual.handle.toLowerCase());
-        if (duplicate) throw new Error(`${actual.handle} is already connected. Reconnect its existing account instead.`);
+        if (duplicate) throw new Error(`${actual.handle} is already connected. To add another, switch to it in Chrome and try again, or sign in here.`);
         Object.assign(profile, { handle: actual.handle, name: actual.name || '', status: 'connected' });
         profileSession(profile).flushStorageData(); publish(); wake(); win.close();
       } catch (error) { if (!win.isDestroyed() && /already connected/.test(error.message)) win.setTitle(error.message); }
       finally { login.pending = false; }
     };
     login.timer = setInterval(() => void verifyLogin(), 750);
-    win.on('closed', () => { clearInterval(login.timer); logins.delete(profile.id); publish(); });
+    win.on('closed', () => { clearInterval(login.timer); logins.delete(profile.id); login.chromeChild?.kill(); publish(); });
     void win.loadURL(home(platform)).catch(() => {});
+    void signInFromHelper(login).catch(onError);
     return publicAccounts();
   }
   return {
@@ -248,6 +332,8 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error('Finish or stop the current scan before disconnecting.');
       logins.get(id)?.win.close();
       await profileSession(profile).clearStorageData(); accounts = accounts.filter(item => item.id !== id); publish(); wake();
+      // With nothing left connected, the app keeps no Google sign-in either.
+      if (!accounts.length) await rm(chromeProfile(), { recursive: true, force: true }).catch(onError);
       return publicAccounts();
     },
     async close() {
@@ -260,7 +346,8 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       for (const { win, timer } of logins.values()) { clearInterval(timer); win.removeAllListeners('closed'); win.destroy(); }
       logins.clear();
       for (const value of work.values()) value.win.destroy(); work.clear();
-      if (viewer && !viewer.isDestroyed()) viewer.destroy();
+      for (const viewer of viewers.values()) if (!viewer.isDestroyed()) viewer.destroy();
+      for (const child of openChromes) child.kill();
       await worker.terminate();
     }
   };

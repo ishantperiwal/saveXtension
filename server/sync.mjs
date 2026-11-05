@@ -1,7 +1,24 @@
 import { instagramSyncScope } from './instagram-save-lists.mjs';
+import { isPinterestHost, PINTEREST_DOMAINS } from '../public/pinterest-host.js';
+
+// Each site's own domains, and how to tell its cookies apart. Google is never one of them.
+const SESSION_SITES = {
+  pinterest: { domains: PINTEREST_DOMAINS, owns: isPinterestHost },
+  x: { domains: ['x.com', 'twitter.com'], owns: host => /^(?:[\w-]+\.)?(?:x|twitter)\.com$/.test(host) },
+  instagram: { domains: ['instagram.com'], owns: host => /^(?:[\w-]+\.)?instagram\.com$/.test(host) }
+};
 import { randomBytes } from 'node:crypto';
 import { HttpError, text } from './domain.mjs';
 
+// Which Pinterest account or single board a job covers; null means every connected account.
+function pinterestSyncScope(store, account, collectionId, targets) {
+  if (account !== 'current' && (typeof account !== 'string' || !/^@[\w.-]{1,100}$/.test(account))) throw new HttpError(400, 'Choose a Pinterest account.');
+  if (collectionId === null || collectionId === undefined) return account === 'current' ? null : { account };
+  if (targets.length !== 1) throw new HttpError(400, 'A board refresh must target Pinterest only.');
+  const collection = store.instagramCollections().find(item => item.id === collectionId && item.platform === 'pinterest');
+  if (!collection) throw new HttpError(400, 'Choose a Pinterest board.');
+  return { account: collection.account, collection };
+}
 export function syncQueue(store, { native = false } = {}) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS sync_jobs (
     id TEXT PRIMARY KEY, targets TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
@@ -11,6 +28,7 @@ export function syncQueue(store, { native = false } = {}) {
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'x_account')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN x_account TEXT NOT NULL DEFAULT 'current'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'mode')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'instagram_scope')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN instagram_scope TEXT NOT NULL DEFAULT 'null'");
+  if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'pinterest_scope')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN pinterest_scope TEXT NOT NULL DEFAULT 'null'");
   if (native) {
     const now = new Date().toISOString();
     store.db.prepare("UPDATE sync_jobs SET status='failed',message='Sync was interrupted. Your imported saves are kept; retry to continue.',updated_at=? WHERE status IN ('queued','running')").run(now);
@@ -21,13 +39,13 @@ export function syncQueue(store, { native = false } = {}) {
   let setupRequest = null;
   let accountScanRequested = false;
   let xAccounts = null;
-  let nativeBrowser = null, nativeAccounts = [];
+  let nativeBrowser = null, nativeAccounts = [], sessionHandoff = null;
   const lastSync = store.db.prepare(`SELECT MAX(at) AS at FROM (
     SELECT finished_at AS at FROM sync_runs WHERE status IN ('completed', 'partial')
     UNION ALL SELECT updated_at AS at FROM sync_jobs WHERE status IN ('completed', 'partial')
   )`);
   try { xAccounts = JSON.parse(store.get('x_accounts') || 'null'); } catch { /* No discovered accounts yet. */ }
-  const decode = row => row && ({ ...row, instagramScope: JSON.parse(row.instagram_scope || 'null'), xAccount: row.x_account?.startsWith('[') ? JSON.parse(row.x_account) : row.x_account || 'current', targets: JSON.parse(row.targets), results: JSON.parse(row.results) });
+  const decode = row => row && ({ ...row, instagramScope: JSON.parse(row.instagram_scope || 'null'), pinterestScope: JSON.parse(row.pinterest_scope || 'null'), xAccount: row.x_account?.startsWith('[') ? JSON.parse(row.x_account) : row.x_account || 'current', targets: JSON.parse(row.targets), results: JSON.parse(row.results) });
   const latest = () => decode(store.db.prepare('SELECT * FROM sync_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1').get()) || null;
   return {
     status() {
@@ -50,26 +68,54 @@ export function syncQueue(store, { native = false } = {}) {
       return { ok: true, at };
     },
     chromeBookmarks() { try { return JSON.parse(store.get('chrome_bookmark_tree') || 'null'); } catch { return null; } },
+    // A one-time handoff of a site's sign-in from the Chrome helper. The cookies live in this
+    // variable only, are never written to the library, and go to the one extension instance
+    // that picked up the request. Nothing asks for them except a sign-in the person started.
+    requestChromeSession(platform) {
+      if (!Object.hasOwn(SESSION_SITES, platform)) throw new HttpError(400, 'This site can’t use a Chrome sign-in yet.');
+      sessionHandoff = { id: randomBytes(16).toString('hex'), platform, expires: Date.now() + 60000, instance: null, cookies: null };
+      return sessionHandoff.id;
+    },
+    chromeSessionRequestFor(instance) {
+      const handoff = sessionHandoff;
+      if (!instance || !handoff || handoff.cookies || Date.now() > handoff.expires || handoff.instance && handoff.instance !== instance) return null;
+      handoff.instance = instance;
+      return { id: handoff.id, platform: handoff.platform, domains: SESSION_SITES[handoff.platform].domains };
+    },
+    receiveChromeSession({ id, instance, cookies }) {
+      const handoff = sessionHandoff;
+      if (!handoff || handoff.id !== id || handoff.instance !== instance || handoff.cookies || Date.now() > handoff.expires) throw new HttpError(409, 'That sign-in request has ended.');
+      if (!Array.isArray(cookies) || cookies.length > 1000) throw new HttpError(400, 'Send a site’s cookies.');
+      handoff.cookies = cookies.filter(cookie => cookie && typeof cookie.name === 'string' && typeof cookie.value === 'string' && typeof cookie.domain === 'string' && cookie.name.length <= 4096 && cookie.value.length <= 16384 && SESSION_SITES[handoff.platform].owns(cookie.domain.replace(/^\./, '').toLowerCase()));
+      return { ok: true };
+    },
+    takeChromeSession(id) {
+      if (sessionHandoff?.id !== id || !sessionHandoff.cookies) return null;
+      const { cookies } = sessionHandoff; sessionHandoff = null; return cookies;
+    },
+    cancelChromeSession(id) { if (sessionHandoff?.id === id) sessionHandoff = null; },
     configureNativeAccounts(accounts) { nativeAccounts = accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status })); },
     nativeHeartbeat(input) { nativeBrowser = { seenAt: Date.now() }; if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, input.instance); },
     nativeStopped() { nativeBrowser = null; },
-    enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null) {
+    enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null, pinterestAccount = 'current', pinterestCollectionId = null) {
       if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
-      if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Chrome bookmarks, or all sources.');
+      if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'pinterest', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Pinterest, Chrome bookmarks, or all sources.');
+      if (targets.includes('pinterest') && !native) throw new HttpError(400, 'Pinterest syncs from the saveXtension desktop app.');
       if (Array.isArray(xAccount)) {
         if (!xAccount.length || xAccount.length > 30 || xAccount.some(handle => typeof handle !== 'string' || !/^@[A-Za-z0-9_]{1,30}$/.test(handle))) throw new HttpError(400, 'Choose valid X accounts.');
         xAccount = [...new Set(xAccount.map(handle => handle.toLowerCase()))];
       } else if (typeof xAccount !== 'string' || !/^(current|all|@[A-Za-z0-9_]{1,30})$/.test(xAccount)) throw new HttpError(400, 'Choose the current X account, all signed-in accounts, or a specific @handle.');
       if (instagramCollectionId !== null && (targets.length !== 1 || targets[0] !== 'instagram')) throw new HttpError(400, 'A collection refresh must target Instagram only.');
       const instagramScope = targets.includes('instagram') ? instagramSyncScope(store, instagramAccount, instagramCollectionId) : null;
+      const pinterestScope = targets.includes('pinterest') ? pinterestSyncScope(store, pinterestAccount, pinterestCollectionId, targets) : null;
       const current = this.status().job;
       if (current && ['queued', 'running'].includes(current.status)) return current;
       const id = randomBytes(12).toString('hex'), now = new Date().toISOString();
-      store.db.prepare('INSERT INTO sync_jobs (id,targets,created_at,updated_at,x_account,mode,instagram_scope) VALUES (?,?,?,?,?,?,?)').run(id, JSON.stringify([...new Set(targets)]), now, now, Array.isArray(xAccount) ? JSON.stringify(xAccount) : xAccount, mode, JSON.stringify(instagramScope));
+      store.db.prepare('INSERT INTO sync_jobs (id,targets,created_at,updated_at,x_account,mode,instagram_scope,pinterest_scope) VALUES (?,?,?,?,?,?,?,?)').run(id, JSON.stringify([...new Set(targets)]), now, now, Array.isArray(xAccount) ? JSON.stringify(xAccount) : xAccount, mode, JSON.stringify(instagramScope), JSON.stringify(pinterestScope));
       return latest();
     },
     heartbeat(input) {
-      browser = { unsave: input.unsave === true, desktopBookmarks: input.desktopBookmarks === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true };
+      browser = { chromeSession: input.chromeSession === true, chromeSessionSites: Array.isArray(input.chromeSessionSites) ? input.chromeSessionSites.filter(site => Object.hasOwn(SESSION_SITES, site)) : [], unsave: input.unsave === true, desktopBookmarks: input.desktopBookmarks === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true };
       store.set('sync_browser', JSON.stringify(browser));
       if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, browser.instance);
       return browser;

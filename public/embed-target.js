@@ -1,3 +1,5 @@
+import { isPinterestHost, PINTEREST_PIN } from './pinterest-host.js';
+
 export function embedTarget(value) {
   try {
     const url = new URL(value);
@@ -10,6 +12,10 @@ export function embedTarget(value) {
     if (host === 'instagram.com') {
       const match = url.pathname.match(/^\/(p|reels?|tv)\/([A-Za-z0-9_-]+)(?:\/|$)/);
       return match ? { platform: 'instagram', path: `/embed/instagram/${match[1] === 'reels' ? 'reel' : match[1]}/${match[2]}` } : null;
+    }
+    if (isPinterestHost(host)) {
+      const id = url.pathname.match(PINTEREST_PIN)?.[1];
+      return id ? { platform: 'pinterest', path: `/embed/pinterest/${id}` } : null;
     }
   } catch { /* Unsupported URLs keep their original link. */ }
   return null;

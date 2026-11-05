@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
 import { Store } from '../server/store.mjs';
 import { topicCatalog, importTopicCatalog, topicNames } from '../server/topics.mjs';
+import { isPinterestHost, PINTEREST_DOMAINS, PINTEREST_PIN } from '../public/pinterest-host.js';
 
 export const DEFAULT_PORT = 3217;
 export const isWebLink = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } };
@@ -13,6 +14,13 @@ export const instagramPost = value => {
   try {
     const url = new URL(value), path = url.pathname.match(/^\/(?:[\w.]+\/)?(?:p|reels?|tv)\/[\w-]+/)?.[0];
     return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['instagram.com', 'www.instagram.com'].includes(url.hostname) && path ? `https://www.instagram.com${path}/` : '';
+  } catch { return ''; }
+};
+// A Pinterest pin link, reduced to its canonical page.
+export const pinterestPost = value => {
+  try {
+    const url = new URL(value), id = url.pathname.match(PINTEREST_PIN)?.[1];
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && isPinterestHost(url.hostname) && id ? `https://www.pinterest.com/pin/${id}/` : '';
   } catch { return ''; }
 };
 export const isLibraryFrame = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
@@ -26,9 +34,13 @@ export async function prepareHelper(source, destination, origin) {
   // The desktop helper exists to read bookmarks, so it asks for them when it's loaded
   // instead of needing a second approval inside Chrome.
   const manifestPath = join(destination, 'manifest.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  manifest.permissions = [...new Set([...(manifest.permissions || []), 'bookmarks'])];
+  // It can also hand a site's sign-in to the app, so it may read those sites' cookies and no others.
+  manifest.permissions = [...new Set([...(manifest.permissions || []), 'bookmarks', 'cookies'])];
+  manifest.host_permissions = [...new Set([...(manifest.host_permissions || []), ...PINTEREST_DOMAINS.map(domain => `https://*.${domain}/*`), 'https://*.x.com/*', 'https://*.twitter.com/*', 'https://*.instagram.com/*'])];
   manifest.optional_permissions = (manifest.optional_permissions || []).filter(permission => permission !== 'bookmarks');
   if (!manifest.optional_permissions.length) delete manifest.optional_permissions;
+  // Sites it now holds outright can't also be optional; Chrome warns about that on load.
+  delete manifest.optional_host_permissions;
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   for (const name of ['background.js', 'options.js', 'options.html']) {
     const path = join(destination, name), contents = await readFile(path, 'utf8');
@@ -46,7 +58,7 @@ export function readDatabaseSnapshot(path) {
     const posts = db.prepare('SELECT * FROM posts').all().map(row => Store.prototype.decode(row));
     const topics = has('topics') ? topicCatalog(db, { all: true }) : [];
     if (has('post_topics')) for (const post of posts) post.topics = topicNames(db, post.id);
-    const collections = has('instagram_collections') ? db.prepare('SELECT id,account,external_id AS externalId,name,url FROM instagram_collections').all() : [];
+    const collections = has('instagram_collections') ? db.prepare(`SELECT id,${db.prepare('PRAGMA table_info(instagram_collections)').all().some(column => column.name === 'platform') ? 'platform' : "'instagram' AS platform"},account,external_id AS externalId,name,url FROM instagram_collections`).all() : [];
     if (has('instagram_collection_posts')) {
       const byId = new Map(posts.map(post => [post.id, post]));
       const folders = new Map(collections.map(c => [c.id, c]));
@@ -71,10 +83,11 @@ export function importSnapshot(store, snapshot) {
   const accounts = new Map();
   for (const collection of snapshot.instagramCollections || []) {
     if (!collection || typeof collection.account !== 'string') continue;
-    if (!accounts.has(collection.account)) accounts.set(collection.account, []);
-    accounts.get(collection.account).push(collection);
+    const platform = collection.platform === 'pinterest' ? 'pinterest' : 'instagram', key = `${platform}:${collection.account}`;
+    if (!accounts.has(key)) accounts.set(key, { platform, account: collection.account, collections: [] });
+    accounts.get(key).collections.push(collection);
   }
-  for (const [account, collections] of accounts) for (let i = 0; i < collections.length; i += 1000) store.upsertInstagramCollections(account, collections.slice(i, i + 1000));
+  for (const { platform, account, collections } of accounts.values()) for (let i = 0; i < collections.length; i += 1000) store.upsertInstagramCollections(account, collections.slice(i, i + 1000), platform);
   if (typeof snapshot.name === 'string' && !store.get('name')) store.set('name', snapshot.name.slice(0, 80));
   return { imported, updated, rejected };
 }

@@ -31,15 +31,16 @@ export function dateRangeSummary(filters, now = new Date()) {
   return `${start?.label || 'All time'} → ${end?.label || 'Now'}`;
 }
 
-export function accountOptions(posts, catalog = []) {
+export function accountOptions(posts, catalog = [], { pinterest = false } = {}) {
   const result = [];
-  for (const platform of ['instagram', 'x']) {
+  // Pinterest syncs from the desktop app, so elsewhere it appears only if a library already has pins.
+  for (const platform of ['instagram', 'x', ...(pinterest || posts.some(post => post.platform === 'pinterest') ? ['pinterest'] : [])]) {
     const saved = posts.filter(p => p.platform === platform), handles = new Map();
     for (const handle of [...saved.flatMap(p => p.accounts || []), ...(platform === 'x' ? catalog.map(a => a.handle) : [])]) {
       if (handle) handles.set(handle.toLowerCase(), handle);
     }
     for (const [key, label] of [...handles].sort(([a], [b]) => a.localeCompare(b))) result.push({ value: `${platform}:${key}`, platform, label });
-    if (!handles.size) result.push({ value: `${platform}:*`, platform, label: platform === 'x' ? 'X' : 'Instagram' });
+    if (!handles.size) result.push({ value: `${platform}:*`, platform, label: platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram' });
     else if (saved.some(p => !(p.accounts || []).length)) result.push({ value: `${platform}:`, platform, label: 'Unassigned' });
   }
   result.push({ value: 'chrome:*', platform: 'chrome', label: 'Chrome' });
@@ -95,9 +96,9 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
     if (filters.topics.length && !filters.topics.flatMap(topicScope).some(t => (p.topics || []).includes(t))) return false;
     // Shift-selected accounts and Instagram collections combine: a post in any of them matches.
     const collections = filters.collections || [];
-    if ((filters.accounts.length || collections.length) && !filters.accounts.some(value => matchesAccount(p, value)) && !(p.platform === 'instagram' && (p.collections || []).some(c => collections.includes(String(c.id))))) return false;
+    if ((filters.accounts.length || collections.length) && !filters.accounts.some(value => matchesAccount(p, value)) && !(p.collections || []).some(c => collections.includes(String(c.id)))) return false;
     if (filters.folder && !(p.folders || []).includes(filters.folder)) return false;
-    if (filters.collection && (p.platform !== 'instagram' || !(p.collections || []).some(c => String(c.id) === String(filters.collection)))) return false;
+    if (filters.collection && !(p.collections || []).some(c => String(c.id) === String(filters.collection))) return false;
     if (bounds.from || bounds.to) {
       const timestamp = Date.parse(libraryAddedAt(p));
       if (!Number.isFinite(timestamp) || (bounds.from && timestamp < +bounds.from) || (bounds.to && timestamp >= +bounds.to)) return false;
@@ -108,19 +109,20 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
   return orderLibraryPosts(result, filters, +now);
 }
 
-export function filterChips(filters, { collectionName = () => '' } = {}) {
-  const chips = [];
+const SOURCE_NAMES = { x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', chrome: 'Chrome' };
+export function filterChips(filters, { collectionName = () => '', collectionPlatform = () => 'instagram' } = {}) {
+  const chips = [], folderKind = platform => platform === 'pinterest' ? 'Pinterest board' : 'Instagram collection';
   if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Date added' });
-  if (filters.sources.length && !filters.accounts.length) chips.push({ key: 'sources', label: filters.sources.map(s => ({ x: 'X', instagram: 'Instagram', chrome: 'Chrome' }[s])).join(' + ') });
+  if (filters.sources.length && !filters.accounts.length) chips.push({ key: 'sources', label: filters.sources.map(s => SOURCE_NAMES[s]).join(' + ') });
   for (const value of filters.accounts) {
     const colon = value.indexOf(':'), platform = value.slice(0, colon), handle = value.slice(colon + 1);
-    const source = { x: 'X', instagram: 'Instagram', chrome: 'Chrome' }[platform];
+    const source = SOURCE_NAMES[platform];
     const label = handle === '*' ? source : handle || 'Unassigned';
     chips.push({ key: `account:${value}`, label, platform, title: `${source} ${label}`, removeLabel: `Remove ${source} ${label} filter` });
   }
-  for (const id of filters.collections || []) chips.push({ key: `collection:${id}`, label: collectionName(id) || 'Instagram collection', platform: 'instagram', title: 'Instagram collection', removeLabel: `Remove ${collectionName(id) || 'Instagram collection'} filter` });
+  for (const id of filters.collections || []) { const kind = folderKind(collectionPlatform(id)); chips.push({ key: `collection:${id}`, label: collectionName(id) || kind, platform: collectionPlatform(id), title: kind, removeLabel: `Remove ${collectionName(id) || kind} filter` }); }
   for (const topic of filters.topics) chips.push({ key: `topic:${topic}`, label: topic, icon: 'folder', title: 'Topic', removeLabel: `Remove ${topic} filter` });
   if (filters.folder) chips.push({ key: 'folder', label: filters.folder });
-  if (filters.collection) chips.push({ key: 'collection', label: filters.collectionName || 'Instagram collection', title: 'Instagram collection' });
+  if (filters.collection) { const kind = folderKind(collectionPlatform(filters.collection)); chips.push({ key: 'collection', label: filters.collectionName || kind, title: kind }); }
   return chips;
 }

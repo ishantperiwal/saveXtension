@@ -67,7 +67,7 @@ test('All Saves in Collections shows counted folders that open by click, double-
   await expect(folder('Future ideas').locator('.collection-folder-count')).toHaveText('0');
   await expect(folders.locator('.collection-folder-label')).toHaveText(['AI & models','Future ideas','Coding','Tools']);
   const layout=page.getByRole('group',{name:'Post layout'});
-  await expect(layout.getByRole('button')).toHaveCount(2);
+  await expect(layout.getByRole('button')).toHaveCount(3);
   await expect(layout.getByRole('button',{name:'Folder view',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#open-filters')).toBeHidden();
   await expect(page.locator('.save-card')).toHaveCount(0);await expect(folders).not.toContainText('Instagram folder');
@@ -76,6 +76,16 @@ test('All Saves in Collections shows counted folders that open by click, double-
   await expect(page.locator('.save-card').first()).toBeVisible();await expect(folders).toBeHidden();
   await expect(page.locator('#results .cards')).toHaveAttribute('data-view','grid');
   await expect(layout.getByRole('button',{name:'Grid view',exact:true})).toHaveAttribute('aria-pressed','true');
+  // Feed works from here too, and the folders stay one click away while filtered.
+  await layout.getByRole('button',{name:'Feed view',exact:true}).click();
+  await expect(page.locator('#results .cards')).toHaveAttribute('data-view','feed');
+  await expect(layout.getByRole('button',{name:'Folder view',exact:true})).toHaveAttribute('aria-pressed','false');
+  await page.locator('[data-nav-topic="Coding"]').first().click();
+  await expect(page.locator('.save-card')).toHaveCount(1);await expect(layout.getByRole('button')).toHaveCount(3);
+  await layout.getByRole('button',{name:'Folder view',exact:true}).click();await expect(folders).toBeVisible();
+  await expect(page.locator('#active-filters')).toBeHidden();
+  await expect(layout.getByRole('button',{name:'Folder view',exact:true})).toHaveAttribute('aria-pressed','true');
+  await layout.getByRole('button',{name:'Grid view',exact:true}).click();await expect(page.locator('#results .cards')).toHaveAttribute('data-view','grid');
   await layout.getByRole('button',{name:'Folder view',exact:true}).click();await expect(folders).toBeVisible();
   await folder('AI & models').click();expect(await ids(page)).toEqual([3,2,1]);
   await expect(collection(page,'AI & models')).toHaveAttribute('aria-pressed','true');

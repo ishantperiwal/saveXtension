@@ -5,6 +5,13 @@ import { fileURLToPath } from 'node:url';
 export function embedDocument(path, scriptOrigin, parentOrigin = scriptOrigin) {
   const x = path.match(/^\/embed\/x\/(\d+)$/);
   const ig = path.match(/^\/embed\/instagram\/(p|reel|tv)\/([A-Za-z0-9_-]+)$/);
+  const pin = path.match(/^\/embed\/pinterest\/(\d+)$/);
+  if (pin) {
+    // Pinterest's widget fetches the pin with a script tag and draws it into this page.
+    const url = `https://www.pinterest.com/pin/${pin[1]}/`;
+    const csp = `default-src 'none'; script-src ${scriptOrigin} 'unsafe-inline' https://assets.pinterest.com https://widgets.pinterest.com; style-src ${scriptOrigin} 'unsafe-inline'; connect-src https://*.pinterest.com; img-src data: https://i.pinimg.com https://s.pinimg.com https://*.pinterest.com; media-src https://*.pinimg.com; frame-ancestors ${parentOrigin}; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin`;
+    return { csp, html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pinterest original post</title><link rel="stylesheet" href="/embed-host.css"><script src="/embed-host.js" defer></script></head><body data-platform="pinterest" data-post-id="${pin[1]}" data-url="${url}"><main id="embed-root"><a href="${url}" data-pin-do="embedPin" data-pin-width="large" data-pin-terse="true" target="_blank" rel="noopener noreferrer">View this pin on Pinterest</a></main></body></html>` };
+  }
   if (!x && !ig) return null;
   const platform = x ? 'x' : 'instagram', id = x ? x[1] : ig[2];
   const url = x ? `https://x.com/i/status/${id}` : `https://www.instagram.com/${ig[1]}/${id}/`;

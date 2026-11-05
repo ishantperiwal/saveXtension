@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { Store } from '../server/store.mjs';
 import { createApp } from '../server/app.mjs';
-import { startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink, instagramPost } from '../desktop/runtime.mjs';
+import { startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink, instagramPost, pinterestPost } from '../desktop/runtime.mjs';
 import { windowsBrowsers } from '../desktop/browser.mjs';
 
 test('desktop navigation and browser candidates do not expose arbitrary protocols or credentials', () => {
@@ -17,6 +17,9 @@ test('desktop navigation and browser candidates do not expose arbitrary protocol
   assert.equal(isWebLink('https://x.com/i/status/123'), true);
   assert.equal(instagramPost('https://www.instagram.com/reel/DQ8x_ab-1/?utm_source=ig_embed&ig_rid=1'), 'https://www.instagram.com/reel/DQ8x_ab-1/');
   assert.equal(instagramPost('https://instagram.com/fra_motion_design/p/ABC123'), 'https://www.instagram.com/fra_motion_design/p/ABC123/');
+  assert.equal(pinterestPost('https://in.pinterest.com/pin/891220213759928481/?utm=1'), 'https://www.pinterest.com/pin/891220213759928481/');
+  assert.equal(pinterestPost('https://www.pinterest.co.uk/pin/a-title--123/'), 'https://www.pinterest.com/pin/123/');
+  for (const url of ['https://in.pinterest.com/maker/board/', 'https://pinterest.evil.com/pin/123/', 'http://www.pinterest.com/pin/123/']) assert.equal(pinterestPost(url), '');
   for (const url of ['https://www.instagram.com/fra_motion_design/', 'https://evil.example/reel/ABC/', 'http://www.instagram.com/reel/ABC/', 'https://www.instagram.com.evil.example/reel/ABC/']) assert.equal(instagramPost(url), '');
   assert.deepEqual(windowsBrowsers({ PROGRAMFILES: 'C:\\Program Files' }), ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe']);
 });
@@ -39,6 +42,8 @@ test('desktop copies an existing library without modifying it or copying its que
     assert(helper.includes(`const DEFAULT_ORIGIN = '${desktop.origin}'`));
     assert((await readFile(join(desktop.helperPath, 'options.js'), 'utf8')).includes(desktop.origin));
     const helperManifest = JSON.parse(await readFile(join(desktop.helperPath, 'manifest.json'), 'utf8'));
+    assert(helperManifest.permissions.includes('cookies')); for (const host of ['pinterest.com', 'x.com', 'instagram.com']) assert(helperManifest.host_permissions.includes(`https://*.${host}/*`)); assert.equal(helperManifest.optional_host_permissions, undefined, 'Chrome warns when optional permissions repeat required ones'); assert(!helperManifest.host_permissions.some(host => /google/.test(host)), 'the helper can’t read Google’s cookies');
+    assert(!JSON.parse(await readFile(resolve('extension/manifest.json'), 'utf8')).permissions.includes('cookies'), 'the store extension doesn’t ask for cookies');
     assert(helperManifest.permissions.includes('bookmarks')); assert(!helperManifest.optional_permissions?.includes('bookmarks'));
     assert(JSON.parse(await readFile(resolve('extension/manifest.json'), 'utf8')).optional_permissions.includes('bookmarks'), 'the store extension still asks separately');
     const post = desktop.store.posts()[0]; desktop.store.updatePost(post.id, { notes: 'New desktop note' });
