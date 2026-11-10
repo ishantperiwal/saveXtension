@@ -11,6 +11,15 @@ test('X captures stable status IDs, text, author and media without duplicate pho
   const posts = parser.extract(document, 'x'); assert.equal(posts.length, 2); assert.equal(posts[0].authorName, 'Alice Example'); assert.equal(posts[0].url, 'https://x.com/alice/status/123456789'); assert.match(posts[0].text, /coding workflow/); assert.match(posts[0].thumbnail, /pbs.twimg.com/);
   dom.window.close();
 });
+test('X skips the avatar on a video tile and uses the post\'s own image', () => {
+  const avatar = 'https://pbs.twimg.com/profile_images/1/a_normal.jpg', cover = name => `https://pbs.twimg.com/media/${name}.jpg`;
+  const tile = name => `<div data-testid="tweetPhoto"><img src="${avatar}"><img src="${cover(name)}"></div>`;
+  const dom = new JSDOM(`<article data-testid="tweet"><a href="/sai/status/9"><time datetime="2026-11-01T00:00:00.000Z"></time></a>${tile('one')}${tile('two')}</article>`, { url: 'https://x.com/i/bookmarks', runScripts: 'outside-only' });
+  dom.window.eval(script);
+  const [post] = dom.window.SaveXExtractors.extract(dom.window.document, 'x');
+  assert.equal(post.thumbnail, cover('one')); assert.deepEqual([...post.media], [cover('one'), cover('two')]); assert.equal(post.kind, 'carousel');
+  dom.window.close();
+});
 test('Instagram collects unique grid posts, accessibility text and Reel type', async () => {
   const dom = await fixture('instagram', 'https://www.instagram.com/my_account/saved/all-posts/');
   const { document, SaveXExtractors: parser, location } = dom.window;

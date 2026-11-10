@@ -41,7 +41,7 @@ test('archive and restore work across search, accounts, notes, sync refreshes an
 });
 
 test.describe('without the archive setting', () => {
-  test.use({ storageState: { cookies: [], origins: [{ origin: 'http://localhost:3211', localStorage: [{ name: 'savex-card-view', value: 'grid' }] }] } });
+  test.use({ storageState: { cookies: [], origins: [{ origin: 'http://localhost:3211', localStorage: [{ name: 'savex-live-previews', value: 'true' }, { name: 'savex-card-view', value: 'grid' }] }] } });
   test('archive controls stay hidden while unsave replaces them', async ({ page, baseURL }) => {
     await page.route('https://platform.twitter.com/**', route => route.abort());
     const fixture = { platform: 'chrome', url: 'https://archive-hidden.example/reference', bookmarkTitle: 'Hidden archive reference', savedAt: '2025-05-01T00:00:00Z' };

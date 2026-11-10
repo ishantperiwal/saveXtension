@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-test.use({ storageState: { cookies: [], origins: [] } });
+test.use({ storageState: { cookies: [], origins: [{ origin: 'http://localhost:3211', localStorage: [{ name: 'savex-live-previews', value: 'true' }] }] } });
 async function setup(page, count = 8, tall = false, instagramIndex = 1) {
   const posts = Array.from({length: count}, (_, i) => ({id: 8800+i, platform: i===instagramIndex?'instagram':'x', externalId: i===instagramIndex?'View1':String(900000+i), url: i===instagramIndex?'https://www.instagram.com/p/View1/':`https://x.com/i/status/${900000+i}`, title: `Reference ${i}`, text:'A useful reference with captured metadata.', author:'creator', authorName:'Creator', media:[], topics:['Design'], accounts:[], notes:i===0?'My interpretation of this post.':'', archived:false, savedAt:'2026-11-03T08:00:00Z', addedAt:new Date(Date.parse('2026-11-03T08:00:00Z')-i*60000).toISOString()}));
   await page.route('**/api/posts?scope=all',r=>r.fulfill({json:{posts,runs:[]}}));
@@ -120,7 +120,7 @@ test('feed is the default; animated grid switches preserve native players, notes
   const cards=page.locator('.save-card'), first=cards.first();
   const feed=page.getByRole('button',{name:'Feed view',exact:true}), grid=page.getByRole('button',{name:'Grid view',exact:true});
   await expect(feed).toHaveAttribute('aria-pressed','true');
-  const before=await first.boundingBox();expect(before.width).toBe(796);
+  const before=await first.boundingBox();expect(before.width).toBe(856);
   const rows=await cards.evaluateAll(items=>items.map(el=>el.getBoundingClientRect().x));expect(new Set(rows).size).toBe(1);
   const iframe=await first.locator('.embed-stage>iframe').elementHandle();
   const note=await first.getByLabel('Note',{exact:true}).elementHandle();
@@ -131,7 +131,7 @@ test('feed is the default; animated grid switches preserve native players, notes
   expect(new Set(await cards.evaluateAll(items=>items.slice(0,3).map(el=>el.getBoundingClientRect().x))).size).toBe(3);
   expect(await iframe.evaluate(el=>el.isConnected)).toBe(true);expect(await note.evaluate(el=>el.isConnected)).toBe(true);
   await feed.click();await grid.click();await feed.click();await settled(page);
-  expect((await first.boundingBox()).width).toBe(796);
+  expect((await first.boundingBox()).width).toBe(856);
   expect(await iframe.evaluate(el=>el.isConnected)).toBe(true);
   await page.reload();await expect(feed).toHaveAttribute('aria-pressed','true');
   await grid.click();await settled(page);await page.reload();await expect(grid).toHaveAttribute('aria-pressed','true');
@@ -235,8 +235,8 @@ test('empty feed notes are directly editable, stay visible when cleared, and kee
   const player=await card.locator('.embed-stage>iframe').elementHandle();
   await field.fill('');await card.locator('.collection-add').focus();await expect(field).toHaveValue('');await expect(field).toBeVisible();
   await page.route('**/api/posts/8801/collections',r=>{const post=posts.find(p=>p.id===8801);post.topics=['Design','Research'];return r.fulfill({json:{post,topics:[{id:42,name:'Research'}]}});});
-  await card.getByRole('button',{name:'Add to collection',exact:true}).click();
-  await page.getByRole('searchbox',{name:'Collection name',exact:true}).fill('Research');await page.getByRole('button',{name:'Create “Research”',exact:true}).click();
+  await card.getByRole('button',{name:'Add to topic',exact:true}).click();
+  await page.getByRole('searchbox',{name:'Topic name',exact:true}).fill('Research');await page.getByRole('button',{name:'Create “Research”',exact:true}).click();
   await expect(card.locator('.card-tags .tag')).toHaveText(['Design','Research']);
   await expect(field).toBeVisible();expect(await player.evaluate(el=>el.isConnected)).toBe(true);
   await card.screenshot({path:'test-results/feed-direct-note.png'});

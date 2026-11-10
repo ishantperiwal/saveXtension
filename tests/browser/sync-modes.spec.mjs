@@ -90,7 +90,7 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     const previous = (await status()).id;
     await startDeepSync(page);
     await expect.poll(async () => (await status())?.id).not.toBe(previous);
-    await expect.poll(async () => (await status())?.status, { timeout: 55000 }).toBe('partial');
+    await expect.poll(async () => (await status())?.status, { timeout: 55000 }).toBe('completed');
     saved = await posts();
     expect(saved.some(p => p.externalId === gap)).toBe(true);
     expect(saved.some(p => p.externalId === unsaved)).toBe(false);

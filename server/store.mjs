@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cleanPost, cleanCollection, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
+import { cleanPost, cleanCollection, imageUrl, instagramCaption, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
 import { initializeTopics, topicNames, writeTopicNames } from './topics.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
@@ -67,7 +67,21 @@ export class Store {
       // the browser bookmark date; leave unrecoverable historic imports unknown.
       this.db.exec("BEGIN IMMEDIATE; ALTER TABLE posts ADD COLUMN added_at TEXT; UPDATE posts SET added_at=saved_at WHERE platform!='chrome'; COMMIT;");
     }
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'gif_checked')) this.db.exec('ALTER TABLE posts ADD COLUMN gif_checked INTEGER NOT NULL DEFAULT 0');
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'image_description')) this.db.exec("ALTER TABLE posts ADD COLUMN image_description TEXT NOT NULL DEFAULT ''");
+    // Every description before this column came from Haiku 5.5, the only model that had read images.
+    if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'image_description_model')) this.db.exec("BEGIN IMMEDIATE; ALTER TABLE posts ADD COLUMN image_description_model TEXT NOT NULL DEFAULT ''; UPDATE posts SET image_description_model='Haiku 5.5' WHERE image_description!=''; COMMIT;");
     if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'media')) this.db.exec("ALTER TABLE posts ADD COLUMN media TEXT NOT NULL DEFAULT '[]'");
+    // Earlier versions kept Instagram's counts and date at the top of captions.
+    for (const row of this.db.prepare("SELECT id,text FROM posts WHERE platform='instagram' AND text LIKE '% comment%'").all()) {
+      const caption = instagramCaption(row.text);
+      if (caption !== row.text) this.db.prepare('UPDATE posts SET text=? WHERE id=?').run(caption, row.id);
+    }
+    // Earlier versions could capture a profile picture as one of a post's images.
+    for (const row of this.db.prepare("SELECT id,thumbnail,media FROM posts WHERE thumbnail||media LIKE '%/profile_images/%' OR thumbnail||media LIKE '%/t51.2885-19/%'").all()) {
+      const media = JSON.parse(row.media).filter(imageUrl);
+      this.db.prepare('UPDATE posts SET thumbnail=?,media=? WHERE id=?').run(imageUrl(row.thumbnail) || media[0] || '', JSON.stringify(media), row.id);
+    }
     if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'bookmark_title')) this.db.exec("ALTER TABLE posts ADD COLUMN bookmark_title TEXT NOT NULL DEFAULT ''");
     if (!this.db.prepare('PRAGMA table_info(posts)').all().some(c => c.name === 'folders')) this.db.exec("ALTER TABLE posts ADD COLUMN folders TEXT NOT NULL DEFAULT '[]'");
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'activity_at')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN activity_at TEXT');
@@ -109,11 +123,15 @@ export class Store {
   }
   devices() { return this.db.prepare('SELECT id,name,created_at AS createdAt,last_seen AS lastSeen FROM devices ORDER BY created_at DESC').all(); }
   revoke(id) { this.db.prepare('DELETE FROM devices WHERE id=?').run(id); }
+  // What an AI saw in a post's image, kept apart from the person's notes. It doesn't count as an edit to the post.
+  uncheckedPins(limit) { return this.db.prepare("SELECT id,thumbnail FROM posts WHERE platform='pinterest' AND kind='image' AND gif_checked=0 AND archived=0 ORDER BY id LIMIT ?").all(limit); }
+  markPinChecked(id, isGif) { this.db.prepare(`UPDATE posts SET gif_checked=1${isGif ? ",kind='video',updated_at=?" : ''} WHERE id=?`).run(...(isGif ? [new Date().toISOString(), id] : [id])); }
+  setImageDescription(id, description, model = '') { this.db.prepare('UPDATE posts SET image_description=?,image_description_model=? WHERE id=?').run(description, model, id); }
   decode(row, sourceOrder = []) {
     return { id: row.id, platform: row.platform, externalId: row.external_id, url: row.url, title: row.title, text: row.text, author: row.author, authorName: row.author_name,
       thumbnail: row.thumbnail, bookmarkTitle: row.bookmark_title || '', folders: JSON.parse(row.folders || '[]'), media: JSON.parse(row.media || '[]'), kind: row.kind, tags: JSON.parse(row.tags), topics: JSON.parse(row.topics), accounts: JSON.parse(row.accounts),
-      publishedAt: row.published_at, savedAt: row.saved_at, addedAt: row.added_at === undefined ? (row.platform === 'chrome' ? null : row.saved_at) : row.added_at, updatedAt: row.updated_at, notes: row.notes, favorite: !!row.favorite, archived: !!row.archived,
-      topicsCurated: !!row.topics_curated, ...(row.platform === 'x' ? { sourceOrder } : {}) };
+      publishedAt: row.published_at, savedAt: row.saved_at, addedAt: row.added_at === undefined ? (row.platform === 'chrome' ? null : row.saved_at) : row.added_at, updatedAt: row.updated_at, notes: row.notes, imageDescription: row.image_description || '', imageDescriptionModel: row.image_description_model || '', favorite: !!row.favorite, archived: !!row.archived,
+      topicsCurated: !!row.topics_curated, ...(row.platform === 'x' || sourceOrder.length ? { sourceOrder } : {}) };
   }
   posts({ scope = 'active' } = {}) {
     if (!['active', 'archive', 'all'].includes(scope)) throw new HttpError(400, 'Unknown library scope.');
@@ -124,14 +142,32 @@ export class Store {
       if (!memberships.has(post_id)) memberships.set(post_id, []);
       memberships.get(post_id).push(collection);
     }
-    const sourceOrder = this.sourceOrder();
-    return this.db.prepare(`SELECT * FROM posts${where} ORDER BY saved_at DESC,id DESC`).all().map(row => ({ ...this.decode(row, sourceOrder.get(row.id) || []), topics: topicNames(this.db, row.id), collections: memberships.get(row.id) || [] }));
+    const sourceOrder = this.sourceOrder(), listOrder = this.listOrder();
+    return this.db.prepare(`SELECT * FROM posts${where} ORDER BY saved_at DESC,id DESC`).all().map(row => ({ ...this.decode(row, sourceOrder.get(row.id) || listOrder.get(`${row.platform}:${row.external_id}`) || []), topics: topicNames(this.db, row.id), collections: memberships.get(row.id) || [] }));
   }
   post(id) {
     const row = this.db.prepare('SELECT * FROM posts WHERE id=?').get(id);
     if (!row) return null;
     const collections = this.db.prepare(`SELECT c.id,c.platform,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
     return { ...this.decode(row, this.sourceOrder(id).get(id) || []), topics: topicNames(this.db, id), collections };
+  }
+  // Where each Instagram post and Pinterest pin sits in the lists read from the site, top first. What a running scan
+  // has read so far goes first. A place in a list always outranks a post no scan has placed yet, so they all share one far-off date.
+  listOrder() {
+    const lists = new Map(), result = new Map();
+    for (const { key, value } of this.db.prepare(`SELECT key,value FROM settings WHERE key LIKE 'list-order:instagram:%' OR key LIKE 'list-order:pinterest:%' OR key LIKE 'list-reading:instagram:%' OR key LIKE 'list-reading:pinterest:%'`).all()) {
+      const [kind, platform, account, list] = key.split(':'), name = `${platform}:${account}:${list}`;
+      if (!lists.has(name)) lists.set(name, { platform, account, list, order: [], reading: [] });
+      try { if (kind === 'list-reading') lists.get(name).reading = JSON.parse(value).ids || []; else lists.get(name).order = JSON.parse(value); } catch { /* Left out until the next scan. */ }
+    }
+    for (const { platform, account, list, order, reading } of lists.values()) {
+      [...new Set([...reading, ...order])].forEach((externalId, position) => {
+        const id = `${platform}:${externalId}`;
+        if (!result.has(id)) result.set(id, []);
+        result.get(id).push({ account, collection: list === 'all' ? null : Number(list), position, observedAt: '9999-01-01T00:00:00.000Z' });
+      });
+    }
+    return result;
   }
   sourceOrder(postId = null) {
     const result = new Map();
@@ -184,8 +220,8 @@ export class Store {
           // An incomplete re-import must never erase a better caption, thumbnail or user edits.
           const old = this.decode(row);
           this.db.prepare(`UPDATE posts SET text=?, title=?, author=?, author_name=?, thumbnail=?, media=?, kind=?, tags=?, topics=?, accounts=?, published_at=?, updated_at=? WHERE id=?`).run(
-            p.text.length > old.text.length ? p.text : old.text, old.title || p.title, p.author || old.author, p.authorName || old.authorName,
-            p.thumbnail || old.thumbnail, JSON.stringify(p.media.length > old.media.length ? p.media : old.media), p.kind === 'text' ? old.kind : p.kind, JSON.stringify([...new Set([...old.tags, ...p.tags])]),
+            (p.platform === 'pinterest' && p.text) || p.text.length > old.text.length ? p.text : old.text, old.title || p.title, p.author || old.author, p.authorName || old.authorName,
+            p.thumbnail || old.thumbnail, JSON.stringify(p.media.length > old.media.length ? p.media : old.media), p.kindSure || !['text', 'image'].includes(p.kind) ? p.kind : p.kind === 'image' && old.kind === 'text' ? 'image' : old.kind, JSON.stringify([...new Set([...old.tags, ...p.tags])]),
             JSON.stringify(row.topics_curated ? topicNames(this.db, row.id) : [...new Set([...topicNames(this.db, row.id), ...p.topics])]), JSON.stringify([...accounts]), p.publishedAt || old.publishedAt, now, row.id);
           result.updated++;
         } else {
@@ -218,6 +254,19 @@ export class Store {
       JSON.stringify(input.tags === undefined ? post.tags : tags(input.tags)), input.favorite === undefined ? +post.favorite : +!!input.favorite,
       input.archived === undefined ? +post.archived : +!!input.archived, updatedTime(post.updatedAt), id);
     return this.post(id);
+  }
+  // A pin left one board. It stays while it's on another board. On its last, it goes, unless asked to keep what someone added to it.
+  pinLeftBoard(id, boardId, keepAdditions = false) {
+    this.db.prepare('DELETE FROM instagram_collection_posts WHERE collection_id=? AND post_id=?').run(boardId, id);
+    if (this.db.prepare('SELECT 1 FROM instagram_collection_posts WHERE post_id=? LIMIT 1').get(id)) return { deleted: false };
+    const post = this.post(id); if (!post) return { deleted: false };
+    if (keepAdditions && (post.notes.trim() || post.topicsCurated)) { this.db.prepare('UPDATE posts SET archived=1,updated_at=? WHERE id=?').run(new Date().toISOString(), id); return { deleted: false, archived: true }; }
+    this.deletePost(id); return { deleted: true };
+  }
+  // Who saved a post, for opening it as the right account.
+  saveOwners(platform, externalId) {
+    const row = this.db.prepare('SELECT accounts,archived FROM posts WHERE platform=? AND external_id=?').get(platform, externalId);
+    return row ? { accounts: JSON.parse(row.accounts), archived: !!row.archived } : null;
   }
   confirmSourceUnsave(id, account) {
     const post=this.post(id);if(!post)throw new HttpError(404,'Save not found.');

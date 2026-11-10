@@ -37,7 +37,7 @@ test('choose one X account or all, switch automatically, and deduplicate with so
     const previousJobId = (await job())?.id;
     await startQuickSync(library);
     await expect.poll(async () => (await job())?.id).not.toBe(previousJobId);
-    await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 35000 }).toBe('partial');
+    await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 35000 }).toBe('completed');
     expect((await job()).results.map(r => r.account)).toEqual(['@beta']);
     let saved = await library.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     expect(saved.find(p => p.externalId === '800000003').accounts).toEqual(['@beta']); expect(saved.some(p => p.externalId === '800000001')).toBe(false);
@@ -45,7 +45,7 @@ test('choose one X account or all, switch automatically, and deduplicate with so
     // The job API supports all signed-in X accounts; individual account UI is exercised above.
     await library.evaluate(async()=>{await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targets:['x'],xAccount:'all',mode:'quick'})});window.postMessage({source:'savex-library',type:'WAKE_SYNC'},location.origin);});
     await expect.poll(async () => (await job())?.id).not.toBe(firstJobId);
-    await expect.poll(async () => (await job())?.status, { timeout: 45000 }).toBe('partial');
+    await expect.poll(async () => (await job())?.status, { timeout: 45000 }).toBe('completed');
     expect((await job()).results.map(r => r.account).sort()).toEqual(['@alpha', '@beta']);
     saved = await library.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     expect(saved.filter(p => p.externalId.startsWith('80000000'))).toHaveLength(3);

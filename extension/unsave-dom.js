@@ -78,6 +78,29 @@
     const buttons=[...dialogs[0].querySelectorAll('button,[role="button"]')].filter(button=>visible(button)&&!button.disabled&&/^(remove|unsave|remove from saved)$/i.test((button.innerText||button.textContent||'').trim()));
     if(buttons.length!==1)return false;if(click)buttons[0].click();return true;
   }
+  // Pinterest: the board page proves the account and that the pin is on it, and is where the unsave is sent from.
+  const pinTile=id=>{const list=document.querySelector('[data-test-id="board-feed"]')||document;return [...list.querySelectorAll('[data-test-id="pin"]')].find(pin=>pin.getAttribute('data-test-pin-id')===id||pin.querySelector('a[href*="/pin/"]')?.getAttribute('href')?.match(/\/pin\/(?:[^/]*--)?(\d+)/)?.[1]===id)||null;};
+  const onBoard=target=>{try{const page=new URL(location.href),board=new URL(target.board);return /(^|\.)pinterest\.[a-z.]+$/.test(page.hostname)&&page.pathname.replace(/\/$/,'')===board.pathname.replace(/\/$/,'')&&page.pathname.split('/')[1]?.toLowerCase()===target.account.replace(/^@/,'').toLowerCase();}catch{return false;}};
+  const pinScroller=()=>document.scrollingElement||document.documentElement;
+  globalThis.SaveXPinterest={
+    // Where the pin stands right now. Moves down the board if it hasn't appeared, and says when the board has run out.
+    find:target=>{
+      if(!onBoard(target))return {page:false};
+      const tile=pinTile(target.externalId),pins=(document.querySelector('[data-test-id="board-feed"]')||document).querySelectorAll('[data-test-id="pin"]').length;
+      if(tile){tile.scrollIntoView({block:'center',behavior:'instant'});return {page:true,present:true,pins};}
+      const end=pinScroller(),atEnd=end.scrollTop+end.clientHeight>=end.scrollHeight-5;
+      end.scrollBy({top:Math.max(500,end.clientHeight*.8),behavior:'instant'});window.dispatchEvent(new Event('scroll'));
+      return {page:true,present:false,pins,atEnd,loading:!!document.querySelector('[role="progressbar"],[data-visualcompletion="loading-state"]'),checkedAt:Date.now()};
+    },
+    // The request Pinterest's own page sends to unsave. It depends on no layout, and only ever works on your own pins.
+    remove:async target=>{
+      if(!onBoard(target)||!pinTile(target.externalId))return {sent:false,message:'The pin is no longer on this board page.'};
+      const token=document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1];
+      if(!token)return {sent:false,message:'Pinterest didn’t provide what it needs to unsave.'};
+      const response=await fetch('/resource/PinResource/delete/',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json, text/javascript, */*; q=0.01','X-CSRFToken':token,'X-Requested-With':'XMLHttpRequest'},body:new URLSearchParams({source_url:location.pathname,data:JSON.stringify({options:{id:target.externalId},context:{}})})});
+      return {sent:response.ok,status:response.status};
+    }
+  };
   globalThis.SaveXUnsave={
     inspect:target=>evidence(context(target)),
     act:target=>{const value=context(target);if(!value||value.state!=='saved')return {clicked:false};value.button.click();return {clicked:true};},

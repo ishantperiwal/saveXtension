@@ -22,12 +22,12 @@ test.afterEach(async({page})=>{
 
 test('collection pills add an existing unassigned collection without replacing the player or note',async({page})=>{
   const posts=await seed(page),post=posts.find(p=>p.url===xUrl);await setup(page);
-  const item=card(page,post.id),plus=item.getByRole('button',{name:'Add to collection',exact:true});
+  const item=card(page,post.id),plus=item.getByRole('button',{name:'Add to topic',exact:true});
   await expect(item.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
   const player=await item.locator('.embed-stage > iframe').elementHandle(),editor=await item.getByLabel('Note',{exact:true}).elementHandle();
   await expect(item.locator('.tag')).toHaveCSS('border-radius','999px');
   const order=await item.locator('.card-footer').evaluate(el=>[...el.children].map(child=>child.className));expect(order).toEqual(['collection-add','card-tags']);
-  await plus.click();const picker=page.getByRole('dialog',{name:'Add to collection',exact:true});
+  await plus.click();const picker=page.getByRole('dialog',{name:'Add to topic',exact:true});
   await expect(picker).toBeVisible();await expect(picker.getByRole('button',{name:'Add to Already assigned',exact:true})).toHaveCount(0);
   await picker.getByRole('button',{name:'Add to Available collection',exact:true}).click();
   await expect(picker).toHaveCount(0);await expect(item.locator('.tag')).toHaveText(['Already assigned','Available collection']);
@@ -41,11 +41,11 @@ test('collection pills add an existing unassigned collection without replacing t
 
 test('an unorganized card creates and adds a collection inline, retries failure and fits mobile',async({page})=>{
   const posts=await seed(page),post=posts.find(p=>p.url===chromeUrl);await setup(page);await page.setViewportSize({width:390,height:844});
-  const item=card(page,post.id),plus=item.getByRole('button',{name:'Add to collection',exact:true});
+  const item=card(page,post.id),plus=item.getByRole('button',{name:'Add to topic',exact:true});
   await expect(plus).toBeVisible();await expect(item.locator('.tag')).toHaveCount(0);
   let online=false;
   await page.route(`**/api/posts/${post.id}/collections`,route=>online?route.continue():route.fulfill({status:503,json:{error:'Please try again.'}}));
-  await plus.click();const picker=page.getByRole('dialog',{name:'Add to collection',exact:true}),input=picker.getByRole('searchbox',{name:'Collection name',exact:true});
+  await plus.click();const picker=page.getByRole('dialog',{name:'Add to topic',exact:true}),input=picker.getByRole('searchbox',{name:'Topic name',exact:true});
   await input.fill('Personal <ideas>');await picker.getByRole('button',{name:'Create “Personal <ideas>”',exact:true}).click();
   await expect(picker.getByRole('alert')).toHaveText('Please try again.');await expect(input).toHaveValue('Personal <ideas>');await expect(item.locator('.tag')).toHaveCount(0);
   online=true;await picker.getByRole('button',{name:'Create “Personal <ideas>”',exact:true}).click();
@@ -53,7 +53,7 @@ test('an unorganized card creates and adds a collection inline, retries failure 
   await page.getByRole('tab',{name:'Topics',exact:true}).click();await expect(page.locator('[data-nav-topic="Personal <ideas>"]')).toContainText('1');
   await page.locator('[data-open-collection="Personal <ideas>"]').click();
   await plus.click();await expect(picker.getByRole('button',{name:'Add to Personal <ideas>',exact:true})).toHaveCount(0);
-  await picker.getByRole('searchbox',{name:'Collection name',exact:true}).fill('Available collection');await page.keyboard.press('ArrowDown');
+  await picker.getByRole('searchbox',{name:'Topic name',exact:true}).fill('Available collection');await page.keyboard.press('ArrowDown');
   await expect(picker.getByRole('button',{name:'Add to Available collection',exact:true})).toBeFocused();await page.keyboard.press('Enter');
   await expect(item.locator('.tag')).toHaveText(['Available collection','Personal <ideas>']);
   await plus.click();const bounds=await picker.boundingBox();expect(bounds.x).toBeGreaterThanOrEqual(0);expect(bounds.x+bounds.width).toBeLessThanOrEqual(390);

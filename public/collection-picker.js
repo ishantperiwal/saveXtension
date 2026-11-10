@@ -11,10 +11,10 @@ export function closeCollectionPicker(restoreFocus = false) {
 export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, restoreFocus, icons = {} }) {
   closeCollectionPicker();
   const root = document.createElement('section'); root.id = 'collection-picker'; root.className = 'select-menu collection-picker';
-  root.setAttribute('role','dialog'); root.setAttribute('aria-label','Add to collection');
+  root.setAttribute('role','dialog'); root.setAttribute('aria-label','Add to topic');
   const form = document.createElement('form'), input = document.createElement('input');
-  input.type = 'search'; input.maxLength = 80; input.placeholder = 'Find or create a collection'; input.setAttribute('aria-label','Collection name');
-  const list = document.createElement('div'); list.className = 'collection-picker-list'; list.setAttribute('role','group'); list.setAttribute('aria-label','Available collections');
+  input.type = 'search'; input.maxLength = 80; input.placeholder = 'Find or create a topic'; input.setAttribute('aria-label','Topic name');
+  const list = document.createElement('div'); list.className = 'collection-picker-list'; list.setAttribute('role','group'); list.setAttribute('aria-label','Available topics');
   const hint = document.createElement('p'); hint.className = 'collection-picker-hint';
   const create = document.createElement('button'); create.type = 'submit'; create.className = 'collection-create';
   const error = document.createElement('p'); error.className = 'form-error collection-picker-error'; error.setAttribute('role','alert');
@@ -23,10 +23,11 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
   const picker = { root, trigger, restoreFocus, busy:false, frame:0 }; current = picker; trigger.setAttribute('aria-expanded','true');
   function position() {
     if (!trigger.isConnected) { closeCollectionPicker(); return; }
-    const rect = trigger.getBoundingClientRect(), box = root.getBoundingClientRect();
-    root.style.left = `${Math.max(8,Math.min(rect.left,innerWidth-box.width-8))}px`;
-    const below = rect.bottom+8;
-    root.style.top = `${Math.max(8,below+box.height<=innerHeight-8?below:rect.top-box.height-8)}px`;
+    // Sizes without the opening animation, which starts it slightly smaller. It grows out of the + button, whichever side it opens on.
+    const rect = trigger.getBoundingClientRect(), box = { width: root.offsetWidth, height: root.offsetHeight }, below = rect.bottom+8, fits = below+box.height<=innerHeight-8, left = Math.max(8,Math.min(rect.left,innerWidth-box.width-8));
+    root.style.left = `${left}px`;
+    root.style.top = `${Math.max(8,fits?below:rect.top-box.height-8)}px`;
+    root.style.transformOrigin = `${rect.left+rect.width/2-left}px ${fits?'-8px':`calc(100% + 8px)`}`;
   }
   async function add(selection) {
     if (picker.busy) return;
@@ -54,7 +55,7 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
       list.append(button);
     }
     hint.hidden = !!available.length;
-    hint.textContent = query&&assigned.has(query)?'Already in this collection.':query?'No matching collections.':'Type a name to create a collection.';
+    hint.textContent = query&&assigned.has(query)?'Already in this topic.':query?'No matching topics.':'Type a name to create a topic.';
     const exists = catalog.some(topic=>key(topic.name)===query);
     create.hidden = !query || exists || assigned.has(query);
     create.textContent = query ? `Create “${input.value.trim()}”` : '';
@@ -74,7 +75,7 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
       event.preventDefault(); controls[next].focus({preventScroll:true});
     }
   };
-  root.onfocusout = event => { if (event.relatedTarget&&!root.contains(event.relatedTarget)) closeCollectionPicker(); };
+  root.addEventListener('focusout', event => { if (event.relatedTarget&&!root.contains(event.relatedTarget)) closeCollectionPicker(); });
   // Stay attached to the + button when the card grows or the layout moves it,
   // for example as a preview finishes loading above it.
   let last = '';

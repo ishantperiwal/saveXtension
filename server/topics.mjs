@@ -46,11 +46,12 @@ export function initializeTopics(db) {
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   }
 }
-export function topicCatalog(db, { all = false, hidden = [] } = {}) {
+// The app lists every topic that exists, at 0 if it has to. A limited reader (MCP) doesn't get the name of a topic whose saves it can't see, though a topic with no saves at all is fine.
+export function topicCatalog(db, { all = false, hidden = [], limited = false } = {}) {
   return db.prepare(`SELECT t.id,t.name,t.description,t.managed,t.parent_id AS parentId,t.created_at AS createdAt,t.updated_at AS updatedAt,
     COUNT(CASE WHEN p.archived=0 AND p.id NOT IN (SELECT value FROM json_each(?)) THEN 1 END) AS count FROM topics t
     LEFT JOIN post_topics m ON m.topic_id=t.id LEFT JOIN posts p ON p.id=m.post_id
-    GROUP BY t.id ${all ? '' : 'HAVING count>0 OR t.managed=1 OR EXISTS(SELECT 1 FROM topics c WHERE c.parent_id=t.id)'} ORDER BY t.position IS NULL, t.position, t.name_key`).all(JSON.stringify(hidden)).map(({ managed, ...t }) => all ? { ...t, managed: !!managed, parent: t.parentId ? db.prepare('SELECT name FROM topics WHERE id=?').get(t.parentId)?.name : undefined, aliases: db.prepare('SELECT name_key FROM topic_aliases WHERE topic_id=?').all(t.id).map(a => a.name_key) } : t);
+    GROUP BY t.id ${limited && !all ? 'HAVING count>0 OR t.managed=1 OR COUNT(m.post_id)=0 OR EXISTS(SELECT 1 FROM topics c WHERE c.parent_id=t.id)' : ''} ORDER BY t.position IS NULL, t.position, t.name_key`).all(JSON.stringify(hidden)).map(({ managed, ...t }) => all ? { ...t, managed: !!managed, parent: t.parentId ? db.prepare('SELECT name FROM topics WHERE id=?').get(t.parentId)?.name : undefined, aliases: db.prepare('SELECT name_key FROM topic_aliases WHERE topic_id=?').all(t.id).map(a => a.name_key) } : t);
 }
 export function importTopicCatalog(db, inputs) {
   if (!Array.isArray(inputs) || inputs.length > 2000) throw new HttpError(400, 'Import up to 2,000 topics at a time.');
@@ -74,8 +75,9 @@ export function importTopicCatalog(db, inputs) {
     db.exec('COMMIT');
   } catch(e) { db.exec('ROLLBACK'); throw e; }
 }
-// Snapshot only organization fields. Source content, sessions and sync credentials never enter the journal.
-function snapshot(db, noteIds) {
+// Snapshot only organization fields and AI-written image descriptions. Source content, sessions and sync credentials never enter the journal.
+function snapshot(db, noteIds, descriptionIds = []) {
+  const described = new Set(descriptionIds);
   const map = new Map();
   for (const t of db.prepare('SELECT * FROM topics ORDER BY id').all()) map.set(`topic:${t.id}`, t);
   for (const a of db.prepare('SELECT * FROM topic_aliases ORDER BY name_key').all()) map.set(`alias:${a.name_key}`, a);
@@ -87,6 +89,7 @@ function snapshot(db, noteIds) {
   for (const p of db.prepare('SELECT id,topics_curated FROM posts ORDER BY id').all()) {
     const value = { id: p.id, curated: p.topics_curated, topics: memberships.get(p.id) || [] };
     if (noteIds.includes(p.id)) value.notes = db.prepare('SELECT notes FROM posts WHERE id=?').get(p.id).notes;
+    if (described.has(p.id)) { const row = db.prepare('SELECT image_description,image_description_model FROM posts WHERE id=?').get(p.id); value.imageDescription = row.image_description; value.imageDescriptionModel = row.image_description_model; }
     map.set(`post:${p.id}`, value);
   }
   return map;
@@ -94,8 +97,8 @@ function snapshot(db, noteIds) {
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export class TopicLibrary {
   // hidden lists saves this reader may not see, beyond the archive. The library UI has none.
-  constructor(store, { hidden = () => [] } = {}) { this.store = store; this.db = store.db; this.hidden = hidden; }
-  catalog() { return topicCatalog(this.db, { hidden: this.hidden() }); }
+  constructor(store, { hidden } = {}) { this.store = store; this.db = store.db; this.hidden = hidden || (() => []); this.limited = !!hidden; }
+  catalog() { return topicCatalog(this.db, { hidden: this.hidden(), limited: this.limited }); }
   requireTopic(id) {
     const t = this.catalog().find(t => t.id === id);
     if (!t) throw new HttpError(404, 'Topic not found in the accessible library.');
@@ -114,10 +117,15 @@ export class TopicLibrary {
       if (row) this.db.prepare('UPDATE posts SET updated_at=? WHERE id=?').run(updatedTime(row.updated_at),id);
     }
   }
-  change(action, apply, noteIds = []) {
+  // Several edits as one change, so one undo takes them all back and a failure leaves nothing behind.
+  batch(action, apply) {
+    return this.change(action, () => { this.batching = true; try { return apply(); } finally { this.batching = false; } });
+  }
+  change(action, apply, noteIds = [], descriptionIds = []) {
+    if (this.batching) return { ...apply(), changeId: null };
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const before = snapshot(this.db, noteIds), result = apply(), after = snapshot(this.db, noteIds);
+      const before = snapshot(this.db, noteIds, descriptionIds), result = apply(), after = snapshot(this.db, noteIds, descriptionIds);
       const changes = [...new Set([...before.keys(), ...after.keys()])].filter(k => !equal(before.get(k), after.get(k))).map(key => ({ key, before: before.get(key) ?? null, after: after.get(key) ?? null }));
       const changeId = changes.length ? randomUUID() : null;
       if (changeId) {
@@ -193,7 +201,7 @@ export class TopicLibrary {
   addToCollection({ postId, topicId, name }, { allowArchived = false } = {}) {
     const post = this.store.post(postId);
     if (!post || (post.archived && !allowArchived)) throw new HttpError(404, 'Save not found.');
-    if ((topicId === undefined) === (name === undefined)) throw new HttpError(400, 'Choose a collection or give a new collection a name.');
+    if ((topicId === undefined) === (name === undefined)) throw new HttpError(400, 'Choose a topic or give a new topic a name.');
     if (topicId !== undefined) this.requireTopic(topicId);
     if (name !== undefined) name = cleanTopicName(name);
     return this.change('add_collection', () => {
@@ -251,6 +259,17 @@ export class TopicLibrary {
     if (expectedUpdatedAt !== p.updatedAt) throw new HttpError(409, 'This save changed. Read it again before replacing its note.');
     return this.change('update_note', () => ({ save: this.store.updatePost(postId, { notes }) }), [postId]);
   }
+  // Only saves this reader can see. The next AI search reads those images again.
+  clearDescriptions({ postIds, all }) {
+    if (!postIds === !all) throw new HttpError(400, 'Pass either postIds or all, not both.');
+    const hidden = new Set(this.hidden());
+    const targets = all ? this.db.prepare("SELECT id FROM posts WHERE image_description!='' AND archived=0").all().map(p => p.id).filter(id => !hidden.has(id)) : this.requirePosts(postIds).filter(p => p.imageDescription).map(p => p.id);
+    if (!targets.length) return { cleared: 0, changeId: null };
+    return this.change('clear_image_descriptions', () => {
+      for (const id of targets) this.store.setImageDescription(id, '', '');
+      return { cleared: targets.length };
+    }, [], targets);
+  }
   accessibleChanges() {
     const hidden = new Set(this.hidden());
     return this.db.prepare('SELECT * FROM mcp_changes ORDER BY created_at DESC,rowid DESC LIMIT 100').all().filter(row => {
@@ -258,16 +277,17 @@ export class TopicLibrary {
     });
   }
   history(limit = 20) { return this.accessibleChanges().slice(0, limit).map(({ id, action, created_at, undone }) => ({ id, action, createdAt: created_at, undone: !!undone })); }
-  undo(id) {
-    const row = this.accessibleChanges().find(r => r.id === id && !r.undone);
+  // everything is for the library's own Undo: a change can reach an archived save's topics, which MCP mustn't touch.
+  undo(id, { everything = false } = {}) {
+    const row = everything ? this.db.prepare('SELECT * FROM mcp_changes WHERE id=? AND undone=0').get(id) : this.accessibleChanges().find(r => r.id === id && !r.undone);
     if (!row) throw new HttpError(404, 'Change unavailable or already undone.');
-    const changes = JSON.parse(row.changes), noteIds = changes.filter(c => c.key.startsWith('post:') && c.after?.notes !== undefined).map(c => c.after.id);
+    const changes = JSON.parse(row.changes), noteIds = changes.filter(c => c.key.startsWith('post:') && c.after?.notes !== undefined).map(c => c.after.id), descriptionOnly = c => c.after?.imageDescription !== undefined, descriptionIds = changes.filter(c => c.key.startsWith('post:') && descriptionOnly(c)).map(c => c.after.id);
     // A note edit's only affected field is the note, so later topic changes don't block undoing it.
     const noteOnly = c => c.after?.notes !== undefined && equal({ ...c.before, notes: 0 }, { ...c.after, notes: 0 });
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const current = snapshot(this.db, noteIds);
-      if (changes.some(c => noteOnly(c) ? current.get(c.key)?.notes !== c.after.notes : !equal(current.get(c.key) ?? null, c.after))) throw new HttpError(409, 'These fields changed again. Undo newer changes first.');
+      const current = snapshot(this.db, noteIds, descriptionIds);
+      if (changes.some(c => noteOnly(c) ? current.get(c.key)?.notes !== c.after.notes : descriptionOnly(c) ? current.get(c.key)?.imageDescription !== c.after.imageDescription : !equal(current.get(c.key) ?? null, c.after))) throw new HttpError(409, 'These fields changed again. Undo newer changes first.');
       // Restore catalog before memberships; delete newly-created topics last.
       const restored = changes.filter(c => c.key.startsWith('topic:') && c.before);
       for (const c of restored) {
@@ -278,6 +298,7 @@ export class TopicLibrary {
       for (const c of changes.filter(c => c.key.startsWith('post:'))) {
         const p = c.before;
         if (noteOnly(c)) { this.db.prepare('UPDATE posts SET notes=?,updated_at=? WHERE id=?').run(p.notes,updatedTime(this.db.prepare('SELECT updated_at FROM posts WHERE id=?').get(p.id).updated_at),p.id); continue; }
+        if (descriptionOnly(c)) { this.store.setImageDescription(p.id, p.imageDescription, p.imageDescriptionModel); continue; }
         this.db.prepare('DELETE FROM post_topics WHERE post_id=?').run(p.id);
         for (const t of p.topics) this.db.prepare('INSERT INTO post_topics VALUES(?,?)').run(p.id,t);
         this.db.prepare('UPDATE posts SET topics_curated=?,topics=?,updated_at=? WHERE id=?').run(p.curated,JSON.stringify(topicNames(this.db,p.id)),updatedTime(this.db.prepare('SELECT updated_at FROM posts WHERE id=?').get(p.id).updated_at),p.id);

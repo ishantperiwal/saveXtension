@@ -47,7 +47,7 @@ test('a save keeps its image after the link expires, the app uses the copy, and 
   await app.images.idle();
   cdn.live.clear();
   const { posts } = await (await fetch(`${app.url}/api/posts?scope=all`)).json(), withImage = posts.find(p => p.url.endsWith('/1')), plain = posts.find(p => p.url.endsWith('/2'));
-  assert.equal(withImage.localImage, `/api/posts/${withImage.id}/image`); assert.equal(plain.localImage, undefined);
+  assert.match(withImage.localImage, new RegExp(`^/api/posts/${withImage.id}/image\\?v=\\d+$`)); assert.equal(plain.localImage, undefined);
   const response = await fetch(`${app.url}${withImage.localImage}`);
   assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'image/jpeg');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), JPEG);
@@ -72,6 +72,35 @@ test('the first media link stands in for a dead thumbnail, and only non-image an
   assert.deepEqual(await readdir(dir), [`${fallback.id}.jpg`]);
 });
 
+test('the second link tried is a different image when the first media link repeats the thumbnail', async t => {
+  const cdn = fakeCdn({ [link('two')]: {} }), { store, images } = await library(t, cdn);
+  store.importPosts([{ url: 'https://x.com/alice/status/1', thumbnail: link('one'), media: [link('one'), link('two')] }]);
+  await images.idle();
+  assert.equal(images.has(store.posts()[0].id), true);
+});
+test('a profile picture saved by an earlier version is removed from the post and its copy replaced', async t => {
+  const dir = await folder(t), path = join(dir, 'library.sqlite'), imagesDir = join(dir, 'images');
+  const avatar = 'https://pbs.twimg.com/profile_images/1/a_normal.jpg', photo = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9]);
+  const cdn = fakeCdn({ [avatar]: {}, [link('photo')]: { bytes: photo } });
+  let store = new Store(path);
+  store.importPosts([{ url: 'https://x.com/alice/status/1', thumbnail: link('photo') }]);
+  const id = store.posts()[0].id;
+  store.db.prepare('UPDATE posts SET thumbnail=?,media=? WHERE id=?').run(avatar, JSON.stringify([avatar, link('photo'), link('second')]), id);
+  let images = savedImages(store, { dir: imagesDir, download: cdn.download });
+  images.schedule(); await images.idle();
+  assert.deepEqual((await images.read(id)).bytes, JPEG, 'starts with the avatar as its copy');
+  store.db.prepare('UPDATE post_images SET attempted_at=1 WHERE post_id=?').run(id);
+  const oldAddress = images.annotate(store.posts())[0].localImage;
+  images.close(); store.close();
+
+  store = new Store(path); images = savedImages(store, { dir: imagesDir, download: cdn.download });
+  t.after(() => { images.close(); store.close(); });
+  const [post] = store.posts();
+  assert.equal(post.thumbnail, link('photo')); assert.deepEqual(post.media, [link('photo'), link('second')]);
+  images.schedule(); await images.idle();
+  assert.deepEqual((await images.read(id)).bytes, photo);
+  assert.notEqual(images.annotate(store.posts())[0].localImage, oldAddress, 'a replaced copy gets a new address, so the browser cache can\'t show the old one');
+});
 test('a failed link waits for a new link or a day, instead of being retried on every sync', async t => {
   const cdn = fakeCdn(), { store, images } = await library(t, cdn);
   store.importPosts([{ url: 'https://x.com/alice/status/1', thumbnail: link('expired') }]);

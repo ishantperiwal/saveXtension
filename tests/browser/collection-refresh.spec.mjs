@@ -45,8 +45,8 @@ test('the installed helper visits only the requested Instagram collection for bo
   await page.request.post('/api/instagram-save-list',{headers,data:{account:'@collection_user',all:true,collectionIds:[design.id,food.id]}});
   for(const mode of ['quick','deep']){
    visits.length=0;workGroups.length=0;const response=await page.request.post('/api/sync',{headers,data:{targets:['instagram'],instagramAccount:'@collection_user',instagramCollectionId:design.id,mode}});expect(response.ok()).toBe(true);const queued=(await response.json()).job;
-   expect(queued.instagramScope).toEqual({account:'@collection_user',selections:{'@collection_user':[design.id]}});
-   await expect.poll(async()=>(await(await page.request.get('/api/sync')).json()).job.status,{timeout:45000}).toBe('partial');
+   expect(queued.instagramScope).toEqual({account:'@collection_user',refresh:true,selections:{'@collection_user':[design.id]}});
+   await expect.poll(async()=>(await(await page.request.get('/api/sync')).json()).job.status,{timeout:45000}).toBe('completed');
    expect(workGroups.length).toBeGreaterThan(0);for(const item of workGroups){expect(item.active).toBe(false);expect(item.muted).toBe(true);expect(item.group.title).toBe('Save Extension Tabs');expect(item.group.collapsed).toBe(true);}
    await expect.poll(()=>worker.evaluate(async()=>Object.keys((await chrome.storage.session.get('savexWorkTabs')).savexWorkTabs?.tabs||{}))).toEqual([]);
    expect(await worker.evaluate(async()=>(await chrome.tabGroups.query({title:'Save Extension Tabs'})).length)).toBe(0);

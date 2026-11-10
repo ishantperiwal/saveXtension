@@ -34,6 +34,20 @@ export function finishNoteAnimation(section) {
   current.animation.onfinish = null; current.animation.oncancel = null;
   section.hidden = !current.open; current.animation.cancel();
 }
+// Clicking into a long note to edit it shows all of it, and leaving shrinks it back. The note glides between the two.
+const noteHeights = new WeakMap(), noteGlides = new WeakMap();
+export function noteHeightSeen(field) { if (!noteGlides.has(field)) noteHeights.set(field, field.offsetHeight); }
+export function glideNote(field) {
+  const section = field.closest('.card-note'), running = noteGlides.get(field);
+  const from = running ? field.getBoundingClientRect().height : noteHeights.get(field);
+  running?.cancel(); noteGlides.delete(field);
+  const to = field.offsetHeight; noteHeights.set(field, to);
+  if (!section || !from || Math.abs(from - to) < 2 || reducedMotion.matches || noteAnimations.has(section)) return;
+  section.dataset.layoutHeight = String(section.offsetHeight);
+  const animation = field.animate([{ height: `${from}px`, maxHeight: `${from}px`, minHeight: '0px' }, { height: `${to}px`, maxHeight: `${to}px`, minHeight: '0px' }], timing);
+  noteGlides.set(field, animation);
+  animation.onfinish = animation.oncancel = () => { if (noteGlides.get(field) === animation) { noteGlides.delete(field); delete section.dataset.layoutHeight; } };
+}
 export function setNoteVisibility(section, open, prepare) {
   const current = noteAnimations.get(section);
   if (current?.open === open || (!current && section.hidden === !open)) { section.dataset.noteOpen = String(open); prepare?.(); return; }

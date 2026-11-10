@@ -20,7 +20,7 @@
     if (running) throw new Error('A sync is already running in this tab.');
     running = true; stopped = false;
     const info = SaveXExtractors.pageInfo(document, location);
-    let status = 'partial', message = '', total = 0;
+    let status = 'partial', message = '', total = 0, reachedEnd = false;
     const deep = options.mode === 'deep';
     const known = new Set(options.knownIds || []);
     const postId = post => post.url.match(info.platform === 'x' ? /\/status\/(\d+)/ : info.platform === 'pinterest' ? /\/pin\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1];
@@ -99,9 +99,9 @@
           if (seen.size === 0) message = info.platform === 'pinterest' ? 'No pins found on this page. An empty page or a layout change can cause this.' : 'No posts found. On Instagram, open All posts or a saved collection first. An empty page or a layout change can also cause this.';
           else message = `${deep ? 'Deep scan' : 'Quick check'} stopped after five checks without more posts loading. Saved batches are kept; complete history and removals are not verified.`;
           status = 'partial';
-          // A short Pinterest board simply ends; only a list still able to scroll is unfinished.
+          // A short list simply ends; only a list still able to scroll, or still loading, is unfinished.
           const end = scroller();
-          if (info.platform === 'pinterest' && seen.size && end.scrollTop + end.clientHeight >= end.scrollHeight - 5) { status = 'completed'; message = 'Reached the end of this list.'; }
+          if (seen.size && end.scrollTop + end.clientHeight >= end.scrollHeight - 5 && !document.querySelector('[role="progressbar"],[data-visualcompletion="loading-state"]')) { status = 'completed'; reachedEnd = true; message = 'Reached the end of this list.'; }
           break;
         }
         const target = scroller();
@@ -116,7 +116,7 @@
       await flush();
       if (stopped) { status = 'cancelled'; message = 'Stopped by you. All acknowledged batches remain saved.'; }
       else if (!message) message = seen.size >= options.maxPosts ? `Reached the ${options.maxPosts}-post safety limit. ${deep ? 'Deep scan is incomplete.' : 'Use Deep scan to check older saves.'}` : `Reached the ${minutes}-minute limit. The scan is incomplete; saved batches are kept.`;
-      await send({ type: 'SYNC_FINISH', runId: options.runId, status, message, seen: seen.size });
+      await send({ type: 'SYNC_FINISH', runId: options.runId, status, message, seen: seen.size, seenIds: [...seen].slice(0, 2000), reachedEnd });
     } catch (error) {
       await send({ type: 'SYNC_FINISH', runId: options.runId, status: 'failed', message: error.message, seen: total }).catch(() => {});
     } finally {

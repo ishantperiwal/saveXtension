@@ -33,6 +33,7 @@ export function syncQueue(store, { native = false } = {}) {
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'mode')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'instagram_scope')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN instagram_scope TEXT NOT NULL DEFAULT 'null'");
   if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'pinterest_scope')) store.db.exec("ALTER TABLE sync_jobs ADD COLUMN pinterest_scope TEXT NOT NULL DEFAULT 'null'");
+  if (!store.db.prepare('PRAGMA table_info(sync_jobs)').all().some(c => c.name === 'quiet')) store.db.exec('ALTER TABLE sync_jobs ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0');
   if (native) {
     const now = new Date().toISOString();
     store.db.prepare("UPDATE sync_jobs SET status='failed',message='Sync was interrupted. Your imported saves are kept; retry to continue.',updated_at=? WHERE status IN ('queued','running')").run(now);
@@ -49,8 +50,9 @@ export function syncQueue(store, { native = false } = {}) {
     UNION ALL SELECT updated_at AS at FROM sync_jobs WHERE status IN ('completed', 'partial')
   )`);
   try { xAccounts = JSON.parse(store.get('x_accounts') || 'null'); } catch { /* No discovered accounts yet. */ }
-  const decode = row => row && ({ ...row, instagramScope: JSON.parse(row.instagram_scope || 'null'), pinterestScope: JSON.parse(row.pinterest_scope || 'null'), xAccount: row.x_account?.startsWith('[') ? JSON.parse(row.x_account) : row.x_account || 'current', targets: JSON.parse(row.targets), results: JSON.parse(row.results) });
+  const decode = row => row && ({ ...row, instagramScope: JSON.parse(row.instagram_scope || 'null'), pinterestScope: JSON.parse(row.pinterest_scope || 'null'), xAccount: row.x_account?.startsWith('[') ? JSON.parse(row.x_account) : row.x_account || 'current', targets: JSON.parse(row.targets), results: JSON.parse(row.results), quiet: row.quiet === 1 });
   const latest = () => decode(store.db.prepare('SELECT * FROM sync_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1').get()) || null;
+  const chosen = () => decode(store.db.prepare('SELECT * FROM sync_jobs WHERE quiet=0 ORDER BY created_at DESC, rowid DESC LIMIT 1').get()) || null;
   return {
     status() {
       const job = latest();
@@ -101,7 +103,23 @@ export function syncQueue(store, { native = false } = {}) {
     configureNativeAccounts(accounts) { nativeAccounts = accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status })); },
     nativeHeartbeat(input) { nativeBrowser = { seenAt: Date.now() }; if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, input.instance); },
     nativeStopped() { nativeBrowser = null; },
-    enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null, pinterestAccount = 'current', pinterestCollectionId = null) {
+    // The last scan someone asked for, which background checks repeat.
+    chosenJob: chosen,
+    // What the library shows. A background check stays out of sight unless it found new saves,
+    // and then only those show; anything else it ran into waits for a scan someone asks for.
+    presented() {
+      const status = this.status(), job = status.job;
+      if (!job?.quiet) return status;
+      const found = job.results.filter(result => Number(result.imported) > 0);
+      if (!found.length || ['queued', 'running'].includes(job.status)) return { ...status, job: chosen() };
+      return { ...status, job: { ...job, status: 'completed', targets: [...new Set(found.map(result => result.platform))], results: found.map(result => ({ ...result, status: 'completed' })) } };
+    },
+    // Anything a person starts comes before a background check.
+    giveWay() {
+      const job = latest();
+      if (job?.quiet && ['queued', 'running'].includes(job.status)) this.cancel();
+    },
+    enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null, pinterestAccount = 'current', pinterestCollectionId = null, quiet = false) {
       if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
       if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'pinterest', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Pinterest, Chrome bookmarks, or all sources.');
       if (targets.includes('pinterest') && !native) throw new HttpError(400, 'Pinterest syncs from the saveXtension desktop app.');
@@ -115,7 +133,7 @@ export function syncQueue(store, { native = false } = {}) {
       const current = this.status().job;
       if (current && ['queued', 'running'].includes(current.status)) return current;
       const id = randomBytes(12).toString('hex'), now = new Date().toISOString();
-      store.db.prepare('INSERT INTO sync_jobs (id,targets,created_at,updated_at,x_account,mode,instagram_scope,pinterest_scope) VALUES (?,?,?,?,?,?,?,?)').run(id, JSON.stringify([...new Set(targets)]), now, now, Array.isArray(xAccount) ? JSON.stringify(xAccount) : xAccount, mode, JSON.stringify(instagramScope), JSON.stringify(pinterestScope));
+      store.db.prepare('INSERT INTO sync_jobs (id,targets,created_at,updated_at,x_account,mode,instagram_scope,pinterest_scope,quiet) VALUES (?,?,?,?,?,?,?,?,?)').run(id, JSON.stringify([...new Set(targets)]), now, now, Array.isArray(xAccount) ? JSON.stringify(xAccount) : xAccount, mode, JSON.stringify(instagramScope), JSON.stringify(pinterestScope), quiet ? 1 : 0);
       return latest();
     },
     heartbeat(input) {

@@ -121,6 +121,17 @@ test('a refused action says what is blocked and why, stays above dialogs, and of
   await expect(notice).toBeHidden();
 });
 
+test('Settings has no image recovery switch, in the desktop app or the browser', async ({ page }) => {
+  await desktopLibrary(page, [], [xPost]);
+  await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(page.locator('[data-panel="image-recovery"]')).toHaveCount(0);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(page.locator('[data-panel="image-recovery"]')).toHaveCount(0);
+});
+
 test('without a Pinterest account its empty page offers sign-in', async ({ page }) => {
   const { connections } = await desktopLibrary(page, [], [xPost]);
   await page.locator('[data-nav-account="pinterest:*"]').click();

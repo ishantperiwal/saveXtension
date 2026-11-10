@@ -1,14 +1,15 @@
-import { app, BrowserWindow, Menu, dialog, shell, ipcMain, clipboard, session } from 'electron';
+import { app, BrowserWindow, Menu, dialog, shell, ipcMain, clipboard, session, powerMonitor, safeStorage } from 'electron';
 import { mkdir, readFile, appendFile, cp } from 'node:fs/promises';
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
+import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, xPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
 import { BUSY } from '../public/busy-messages.js';
 import { readChromeBookmarks } from './chrome-bookmarks.mjs';
+import { backgroundChecks } from '../server/background-checks.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
 // Google's sign-in buttons prefer the browser's FedCM feature when it exists, but Electron has
@@ -45,6 +46,7 @@ async function log(error) {
 
 async function start() {
   library = await startDesktopLibrary({
+    keyVault: safeStorage.isEncryptionAvailable() ? { encrypt: text => safeStorage.encryptString(text), decrypt: bytes => safeStorage.decryptString(bytes) } : null,
     dataDir: userData, helperSource: app.isPackaged ? join(process.resourcesPath, 'extension') : join(root, 'extension'),
     legacyOrigin: process.env.SAVEX_DESKTOP_LEGACY_ORIGIN || 'http://localhost:3210',
     legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
@@ -53,6 +55,7 @@ async function start() {
   const saved = helperFolder();
   if (existsSync(join(saved, 'manifest.json'))) await cp(library.helperPath, saved, { recursive: true, force: true }).catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
+  library.mcp.setPostViewer((post, options) => social.viewPost(post, options));
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -83,6 +86,12 @@ async function start() {
       case 'browseSocial': return social.browse(message.id);
       case 'disconnectSocial': return social.disconnect(message.id);
       case 'wakeSocial': social.wake(); return true;
+      case 'postBounds': social.movePost(message.bounds); return true;
+      case 'closePost': social.closePost(); return true;
+      case 'capturePost': return social.capturePost();
+      case 'hidePost': social.hidePost(); return true;
+      case 'browsingAccounts': browsingAccounts = Array.isArray(message.accounts) ? message.accounts.filter(handle => typeof handle === 'string').slice(0, 30) : []; return true;
+      case 'openPostInBrowser': await social.openPostInBrowser(); return true;
       case 'returnAfterUnsave': {
         const status=await api('/sync'),id=message.id;
         if(!/^[a-f0-9]{24}$/.test(id||'')||status.unsave?.id!==id&&!status.unsaveDiagnostics?.some(job=>job.id===id&&Date.now()-job.finishedAt<10000))throw new Error('Unsave request not found.');
@@ -117,9 +126,42 @@ async function start() {
   setInterval(() => void updater.check().catch(log), 4 * 60 * 60 * 1000);
   // Only a previously chosen set of accounts may sync on launch. Deep scans are never automatic.
   if (library.store.get('desktop_auto_sync') !== 'false' && !process.env.SAVEX_DESKTOP_DISABLE_AUTO_SYNC) {
-    const previous = (await api('/sync')).job;
+    const previous = library.sync.chosenJob();
     if (previous?.targets?.length) void autoQuickSync(previous).catch(log);
   }
+  checks = backgroundChecks({ check: quietCheck, onError: log });
+  library.store.onSavesMissing = reports => reports.forEach(report => panelUnsaved(report));
+  let boardRecheck = null;
+  library.store.onBoardsRecheck = () => { clearTimeout(boardRecheck); boardRecheck = setTimeout(() => checks?.saved({ targets: ['pinterest'] }), 70000); boardRecheck.unref?.(); };
+  // Show new saves as they arrive, rather than at the library's next regular refresh.
+  const onImported = library.store.onPostsImported;
+  library.store.onPostsImported = (...args) => { onImported(...args); if (window && !window.isDestroyed()) window.webContents.send('savex-library-changed'); };
+}
+
+// An unsave made in the panel is checked on the post itself before anything leaves the library.
+function panelUnsaved(report, left = 150) {
+  if (quitting) return;
+  let outcome;
+  try { outcome = library.unsaves.expectUnsaved(report); } catch (error) { void log(error); return; }
+  if (outcome === 'busy') { if (left > 0) setTimeout(() => panelUnsaved(report, left - 1), 2000).unref?.(); return; }
+  if (outcome) social.wake();
+}
+
+// A sign-in page or a rate limit is the site pushing back, so background checks leave it alone for a while.
+const PUSHBACK = /sign in|complete a check|limiting requests/i, PUSHBACK_PAUSE = 2 * 60 * 60 * 1000, IDLE_SECONDS = 5 * 60;
+async function quietCheck(request) {
+  if (quitting || library.store.get('desktop_background_checks') === 'false') return true;
+  const latest = library.sync.status().job;
+  if (['queued', 'running'].includes(latest?.status) || library.unsaves.busy()) return false;
+  if (latest?.quiet && Date.now() - Date.parse(latest.updated_at) < PUSHBACK_PAUSE && [latest.message, ...latest.results.map(result => result.message)].some(message => PUSHBACK.test(message || ''))) return true;
+  // A save just made in the panel is someone at the computer, so it always goes ahead.
+  if (request) { await autoQuickSync(request, true); return true; }
+  // Nobody's here, so there's nothing to keep fresh, and reading sites all night is what gets noticed.
+  if (powerMonitor.getSystemIdleTime() >= IDLE_SECONDS) return true;
+  // Instagram is the least tolerant of automated visits, so it's only read when asked for, or when the app opens.
+  const previous = library.sync.chosenJob(), targets = previous?.targets?.filter(target => target !== 'instagram');
+  if (targets?.length) await autoQuickSync({ ...previous, targets }, true);
+  return true;
 }
 
 async function returnAfterUnsave(id){
@@ -145,7 +187,7 @@ async function api(path, body) {
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'The library request failed.'); return result;
 }
 
-async function autoQuickSync(previous) {
+async function autoQuickSync(previous, quiet = false) {
   let status = await api('/sync');
   for (let attempt = 0; !status.browser?.online && attempt < 15 && !quitting; attempt++) { await new Promise(resolve => setTimeout(resolve, 200)); status = await api('/sync'); }
   const browser = status.browser;
@@ -157,7 +199,7 @@ async function autoQuickSync(previous) {
     if (!available.length || requested.some(handle => !available.some(account => account.handle.toLowerCase() === handle.toLowerCase()))) return;
   }
   const instagramAccount = previous.instagramScope?.account || 'current', selected = previous.instagramScope?.selections?.[instagramAccount.toLowerCase()];
-  await api('/sync', { targets: previous.targets, xAccount: previous.xAccount || 'current', instagramAccount, ...(previous.targets.length === 1 && previous.targets[0] === 'instagram' && selected?.length === 1 ? { instagramCollectionId: selected[0] } : {}), mode: 'quick' });
+  await api('/sync', { targets: previous.targets, xAccount: previous.xAccount || 'current', instagramAccount, ...(previous.targets.length === 1 && previous.targets[0] === 'instagram' && selected?.length === 1 ? { instagramCollectionId: selected[0] } : {}), mode: 'quick', quiet });
   await connect('WAKE_SYNC');
 }
 
@@ -185,17 +227,23 @@ async function connect(type = 'PROBE_EXTENSION') {
   try { return await connecting; } finally { connecting = null; }
 }
 
+let checks = null, browsingAccounts = [];
 async function createWindow() {
   if (quitting) return;
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
   window = new BrowserWindow({ title: 'saveXtension', width: 1280, height: 900, minWidth: 760, minHeight: 560, show: false, backgroundColor: '#f7f8f3', icon: join(root, 'desktop', 'assets', 'icon.png'),
     webPreferences: { preload: join(root, 'desktop', 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false }
   });
-  // Instagram and Pinterest posts open in saveXtension's own small viewer; every other link opens in the browser.
-  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url), pin = pinterestPost(url); if (post) social.openPost(post); else if (pin) social.openPost(pin, 'pinterest'); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  // Instagram, X and Pinterest posts and saved Chrome bookmarks open in the library's slide-in panel; every other link opens in the browser.
+  const savedBookmark = url => !!library.store.db.prepare("SELECT 1 FROM posts WHERE platform='chrome' AND url=?").get(url);
+  const openPost = (url, platform) => { social.openPost(url, platform, window, { browsing: browsingAccounts, onSaved: ({ platform, account }) => checks?.saved({ targets: [platform], xAccount: account || 'all' }), onUnsaved: panelUnsaved }); window.webContents.send('savex-post', { url, layout: platform === 'instagram' ? `instagram-${/\/reels?\//.test(url) ? 'reel' : 'post'}` : platform }); };
+  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url), pin = pinterestPost(url), tweet = xPost(url); if (post) openPost(post, 'instagram'); else if (pin) openPost(pin, 'pinterest'); else if (tweet) openPost(tweet, 'x'); else if (savedBookmark(url)) openPost(url, 'chrome'); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  // A reload loses the panel, and the post must not stay over the library without it.
+  window.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) social.closePost(); });
   window.webContents.on('will-navigate', (event, url) => { if (!isLibraryFrame(url, library.origin)) { event.preventDefault(); if (isWebLink(url)) void shell.openExternal(url); } });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
-  window.on('closed', () => { window = null; });
+  window.on('focus', () => checks?.returned());
+  window.on('closed', () => { social.closePost(); window = null; });
   window.once('ready-to-show', () => window?.show());
   await window.loadURL(library.origin);
 }
@@ -218,7 +266,7 @@ function installMenu() {
     ...(process.platform === 'darwin' ? [{ label: 'saveXtension', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'Library', submenu: [{ label: 'Open library', accelerator: 'CmdOrCtrl+Shift+L', click: safe(createWindow) }, { label: 'Import existing library…', click: safe(importLibrary) }, { label: 'Show library folder', click: safe(() => shell.openPath(userData)) }, { type: 'separator' },
       { label: 'Quick sync when app opens', type: 'checkbox', checked: library.store.get('desktop_auto_sync') !== 'false', click: item => library.store.set('desktop_auto_sync', String(item.checked)) },
-      { label: 'Recover expired images in the background', type: 'checkbox', checked: library.store.get('image_recovery') !== 'false', click: item => library.store.set('image_recovery', String(item.checked)) },
+      { label: 'Check for new saves in the background', type: 'checkbox', checked: library.store.get('desktop_background_checks') !== 'false', click: item => library.store.set('desktop_background_checks', String(item.checked)) },
       ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]) ] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },

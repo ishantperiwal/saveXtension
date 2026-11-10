@@ -79,6 +79,33 @@ test('HTTP endpoints prevent cross-origin confirmation, serialize sync with unsa
   }finally{await app.mcp.close();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
 });
 
+test('a panel unsave is only ever checked, and what someone added to the post is kept in Archive',()=>{
+  const{store,sync,queue}=setup();try{
+    const p=seed(store),expect={platform:'x',account:'@one',externalId:p.externalId};
+    assert.equal(queue.expectUnsaved({...expect,externalId:'999'}),null,'not in the library');
+    assert.equal(queue.expectUnsaved({...expect,account:'@other'}),null,'not saved by this account');
+    const scan=sync.enqueue(['x']);assert.equal(queue.expectUnsaved(expect),'busy','a scan someone asked for goes first');sync.cancel();assert.ok(scan);
+    const check=sync.enqueue(['x'],'all','quick','current',null,'current',null,true);
+    let job=queue.expectUnsaved(expect);assert.equal(job.verify_only,1);assert.equal(sync.status().job.id,check.id);assert.equal(sync.status().job.status,'cancelled','a background check gives way');
+    assert.equal(queue.expectUnsaved(expect),'busy','one at a time');
+    queue.claim('browser',true);
+    assert.throws(()=>queue.act(job.id,'browser'),/never unsaves/);
+    assert.throws(()=>queue.finish(job.id,'browser',{status:'succeeded',observations:[]}),/Two fresh/);
+    queue.finish(job.id,'browser',{status:'succeeded',observations:evidence(job)});
+    const kept=store.post(p.id);assert.equal(kept.archived,true,'it has a note, so it moves to Archive');assert.match(kept.notes,/Private note/);
+    assert.equal(queue.status().deleted,0);assert.match(queue.status().message,/Archive/);queue.acknowledge(job.id);
+    assert.equal(queue.expectUnsaved(expect),null,'an archived save is left alone');
+    store.importPosts([{url:'https://x.com/i/status/222',accounts:['@one']}]);
+    const plain=store.posts().find(post=>post.externalId==='222');
+    job=queue.expectUnsaved({...expect,externalId:'222'});queue.claim('browser',true);queue.finish(job.id,'browser',{status:'succeeded',observations:evidence(job)});
+    assert.equal(store.post(plain.id),null,'nothing added, so it is removed');assert.equal(queue.status().deleted,1);queue.acknowledge(job.id);
+    store.importPosts([{url:'https://x.com/i/status/333',accounts:['@one']}]);
+    const again=store.posts().find(post=>post.externalId==='333');
+    job=queue.expectUnsaved({...expect,externalId:'333'});queue.claim('browser',true);queue.finish(job.id,'browser',{status:'failed',message:'This post is still saved.'});
+    assert.ok(store.post(again.id),'a failed check changes nothing');
+  }finally{store.close();}
+});
+
 test('a refused unsave or scan names what is running, in the words the library explains',async()=>{
   const app=createApp({origin:'http://localhost:3221'});app.server.listen(3221,'127.0.0.1');await once(app.server,'listening');
   try{

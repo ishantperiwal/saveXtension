@@ -34,6 +34,15 @@ test('unsave accepts the same exact post after X removes its marker or normalize
     assert.equal(f.calls.filter(call=>call.path.endsWith('/act')).length,1);assert.deepEqual([...f.tabs.keys()],[1]);assert.equal(f.local.unsaveWork,undefined);
   }
 });
+test('checking a panel unsave never clicks, stays in the background, and accepts only a post that stays unsaved after a reload',async()=>{
+  const check={...job,verify_only:1};
+  const still=fixture({saved:true}),refused=await still.run(check);
+  assert.equal(refused.status,'failed');assert.match(refused.message,/still saved/);assert.equal(still.clicks,0);assert(!still.calls.some(call=>call.path.endsWith('/act')));assert.deepEqual(still.windowUpdates,[],'nothing comes to the front');
+  const gone=fixture({saved:false}),confirmed=await gone.run(check);
+  assert.equal(confirmed.status,'succeeded');assert.equal(gone.clicks,0);assert.equal(gone.reloads,1);assert.equal(confirmed.observations.length,2);assert.deepEqual(gone.windowUpdates,[]);
+  const rejected=fixture({saved:false,rejectReload:true}),undone=await rejected.run(check);
+  assert.equal(undone.status,'failed','the site shows it saved again after a reload');assert.equal(rejected.clicks,0);
+});
 test('a marker cannot authorize a different post, origin, login page or pending navigation',async()=>{
   for(const options of [
     {postUrl:'https://x.com/minchoi/status/99999#savex-unsave'},

@@ -24,6 +24,8 @@ test('rejects unsupported, deceptive and credential-bearing URLs', () => {
 test('thumbnail allowlist and plain local topic suggestions', () => {
   assert.equal(imageUrl('https://pbs.twimg.com/media/abc.jpg'), 'https://pbs.twimg.com/media/abc.jpg');
   for (const url of ['http://pbs.twimg.com/a', 'https://pbs.twimg.com.evil.com/a', 'data:image/svg+xml,<svg/>', 'https://127.0.0.1/admin', 'https://pbs.twimg.com:444/a']) assert.equal(imageUrl(url), '');
+  for (const url of ['https://pbs.twimg.com/profile_images/1/a_normal.jpg', 'https://scontent.cdninstagram.com/v/t51.2885-19/1_n.jpg']) assert.equal(imageUrl(url), '', 'a profile picture is not the post\'s image');
+  assert.deepEqual(cleanPost({ url: 'https://x.com/a/status/1', media: ['https://pbs.twimg.com/media/a.jpg', 'https://pbs.twimg.com/profile_images/1/a_normal.jpg'] }).media, ['https://pbs.twimg.com/media/a.jpg']);
   assert.deepEqual(topicsFor('A new AI coding tool from GitHub'), ['Tech']);
   assert.deepEqual(topicsFor('Figma tips for your startup'), ['Design', 'Business']);
   assert.deepEqual(topicsFor('Easy weeknight recipe'), ['Lifestyle']);

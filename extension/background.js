@@ -262,6 +262,10 @@ async function startSource(platform, selectedAccount = null, collection = null) 
       url = await instagramUrl(tab.id);
       const account = '@' + decodeURIComponent(new URL(url).pathname.split('/')[1]);
       if (job.instagramScope?.account && job.instagramScope.account !== 'current' && account.toLowerCase() !== job.instagramScope.account.toLowerCase()) throw new Error(`Sign into Instagram as ${job.instagramScope.account} before refreshing this account. No posts were imported.`);
+      // A quick scan reads All posts first, since every save appears there. The collections are only read if it shows something changed.
+      const checkAllFirst = job.mode !== 'deep' && !job.instagramScope?.refresh && !job.plan[job.index].afterGate;
+      if (checkAllFirst) { job.plan[job.index].gate = true; await chrome.storage.local.set({ job }); }
+      else {
       const selected = job.instagramScope?.selections?.[account.toLowerCase()];
       let collections = [], saved = [];
       try { ({ collections, saved } = await discoverInstagramCollections(tab.id, url, 'instagram', selected || [])); }
@@ -272,17 +276,20 @@ async function startSource(platform, selectedAccount = null, collection = null) 
       }
       job = await get('job');
       if (!job.plan[job.index].collectionsDiscovered) {
+        // The last collection closes the pass, which is what lets the next quick scan trust All posts alone.
+        const passStep = (collection, index, list) => ({ platform: 'instagram', account: collection.account, collection, ...(index === list.length - 1 ? { closesPass: true } : {}) });
         if (Array.isArray(selected)) {
           const chosen = collections.filter(item => selected.includes(item.id));
           if (!chosen.length) throw new Error('None of the selected Instagram collections could be found. Choose your collections and try again.');
           if (chosen.length !== selected.length) job.instagramCollectionWarning = skippedWarning(saved, chosen, selected, 'Instagram collections');
-          job.plan.splice(job.index, 1, ...chosen.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
+          job.plan.splice(job.index, 1, ...chosen.map(passStep));
           collection = chosen[0]; url = collection.url;
         } else {
-          job.plan.splice(job.index + 1, 0, ...collections.map(collection => ({ platform: 'instagram', account: collection.account, collection })));
+          job.plan.splice(job.index + 1, 0, ...collections.map(passStep));
           job.plan[job.index].collectionsDiscovered = true;
         }
         await chrome.storage.local.set({ job });
+      }
       }
     }
     await chrome.tabs.update(tab.id, { url: `${url}#savex-sync` }); await sleep(500); await loaded(tab.id);
@@ -290,8 +297,11 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   if (platform === 'pinterest') {
     // Like Instagram: all pins first, which also covers pins inside board sections,
     // then each board and the unorganized pins to record where every pin belongs.
-    const handle = selectedAccount.slice(1);
-    if (!collection && !job.plan[job.index].collectionsDiscovered) {
+    // A quick scan only goes on to the boards if All pins shows something changed.
+    const handle = selectedAccount.slice(1), step = job.plan[job.index];
+    const checkAllFirst = !collection && job.mode !== 'deep' && !step.afterGate;
+    if (checkAllFirst) { step.gate = true; await chrome.storage.local.set({ job }); }
+    else if (!collection && !step.collectionsDiscovered) {
       const selected = job.pinterestScope?.selections?.[selectedAccount.toLowerCase()];
       let boards = [], saved = [];
       try { ({ collections: boards, saved } = await discoverInstagramCollections(tab.id, `https://www.pinterest.com/${handle}/_boards/`, 'pinterest', selected || [])); }
@@ -302,16 +312,22 @@ async function startSource(platform, selectedAccount = null, collection = null) 
         await chrome.storage.local.set({ job });
       }
       job = await get('job');
+      // The last board closes the pass, which is what lets the next quick scan trust All pins alone.
+      const boardStep = (board, index, list) => ({ platform, account: board.account, collection: board, ...(index === list.length - 1 ? { closesPass: true } : {}) });
       if (Array.isArray(selected)) {
         // Ticked boards replace the all-pins pass, so nothing else is read. A board can vanish
         // (Unorganized empties out), which shouldn't stop the ones still there.
         const chosen = boards.filter(board => selected.includes(board.id));
         if (!chosen.length) throw new Error('None of the selected Pinterest boards could be found. Choose your boards and try again.');
         if (chosen.length !== selected.length) job.pinterestBoardWarning = skippedWarning(saved, chosen, selected, 'Pinterest boards');
-        job.plan.splice(job.index, 1, ...chosen.map(board => ({ platform, account: board.account, collection: board })));
+        job.plan.splice(job.index, 1, ...chosen.map(boardStep));
         collection = chosen[0];
+      } else if (job.plan[job.index].afterGate && boards.length) {
+        // All pins was read a moment ago, so only the boards are left.
+        job.plan.splice(job.index, 1, ...boards.map(boardStep));
+        collection = boards[0];
       } else {
-        job.plan.splice(job.index + 1, 0, ...boards.map(board => ({ platform, account: board.account, collection: board })));
+        job.plan.splice(job.index + 1, 0, ...boards.map(boardStep));
         job.plan[job.index].collectionsDiscovered = true;
       }
       await chrome.storage.local.set({ job });
@@ -327,7 +343,7 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   const mode = job.mode === 'deep' ? 'deep' : 'quick';
   const { ids: knownIds } = await request(`/known?platform=${platform}&account=${encodeURIComponent(info.account)}${collection ? `&collectionId=${collection.id}` : ''}`);
   const { runId } = await request('/runs', { platform, account: info.account, mode, collectionId: collection?.id });
-  const run = { runId, tabId: tab.id, platform, account: info.account, collectionId: collection?.id, collectionName: collection?.name, collectionWarning: platform === 'instagram' ? job.instagramCollectionWarning : platform === 'pinterest' ? job.pinterestBoardWarning : '', status: 'running', stage: 'collecting', imported: 0, updated: 0, rejected: 0, seen: 0, enriched: 0, posts: [], message: 'Finding your saved posts…', startedAt: Date.now() };
+  const run = { runId, tabId: tab.id, platform, account: info.account, gate: !collection && !!job.plan[job.index].gate, closesPass: !!job.plan[job.index].closesPass, collectionId: collection?.id, collectionName: collection?.name, collectionWarning: platform === 'instagram' ? job.instagramCollectionWarning : platform === 'pinterest' ? job.pinterestBoardWarning : '', status: 'running', stage: 'collecting', imported: 0, updated: 0, rejected: 0, seen: 0, enriched: 0, posts: [], message: 'Finding your saved posts…', startedAt: Date.now() };
   // A warning belongs to this run alone, not every collection or account after it.
   job = await get('job'); job.phase = 'collecting'; job.instagramCollectionWarning = job.pinterestBoardWarning = ''; await chrome.storage.local.set({ job }); await setRun(run);
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['collector.js'] });
@@ -335,8 +351,9 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   if (!response?.ok) throw new Error(response?.error || 'Couldn’t start collection.');
 }
 async function finishRun(run, status, message) {
-  await request(`/runs/${run.runId}/finish`, { status, message }).catch(() => {});
+  const finished = await request(`/runs/${run.runId}/finish`, { status, message, seenIds: run.seenIds, reachedEnd: run.reachedEnd, collectionsDone: run.closesPass === true && status === 'completed' }).catch(() => null);
   await setRun({ ...run, status, stage: 'done', message, posts: [] });
+  return finished;
 }
 async function readBookmarkState(run, post, reload = false) {
   if (reload) await chrome.tabs.reload(run.tabId);
@@ -388,7 +405,7 @@ async function enrich() {
   let run = await get('syncState'), job = await get('job');
   if (!run || !job) return;
   // Collection passes record membership and list metadata; don't multiply detail visits by folder count.
-  if (run.collectionId && !job.detailPosts) { job.detailPosts = []; job.detailsRemaining = 0; await chrome.storage.local.set({ job }); }
+  if ((run.collectionId || run.gate) && !job.detailPosts) { job.detailPosts = []; job.detailsRemaining = 0; await chrome.storage.local.set({ job }); }
   if (!job.detailPosts) { const data = await request(`/details?platform=${run.platform}&account=${encodeURIComponent(run.account || '')}&runId=${run.runId}`); job.detailPosts = data.posts; job.detailsRemaining = data.remaining; await chrome.storage.local.set({ job }); }
   const posts = job.detailPosts; let missed = 0;
   await setRun({ ...run, stage: 'enriching' });
@@ -414,8 +431,11 @@ async function enrich() {
   const cancelled = await stopped();
   const pendingDetails = (job.detailsRemaining || 0) + Math.max(0, posts.length - (job.detailIndex || 0));
   const message = cancelled ? 'Stopped. Everything already imported is saved.' : `${run.collectionName ? `${run.collectionName} · ` : ''}${run.imported} new saves · ${run.enriched} posts with added details. ${run.removed || 0} confirmed unsaves removed. ${run.collectorMessage || ''}${missed ? ' Some details were unavailable; captured links and previews are kept.' : ''}${pendingDetails ? ` ${pendingDetails} posts still have pending details; detail fetching is limited to 25 posts per scan.` : ''}${job.missingRemaining ? ` ${job.missingRemaining} missing saves remain unchecked; removal checks are limited to 25 posts per deep scan.` : ''}`;
-  await finishRun(run, cancelled ? 'cancelled' : run.collectorStatus || 'partial', message);
-  job = await get('job'); job.results.push({ platform: run.platform, account: run.account, imported: run.imported, updated: run.updated, enriched: run.enriched, status: cancelled ? 'cancelled' : run.collectorStatus || 'partial', message });
+  const finished = await finishRun(run, cancelled ? 'cancelled' : run.collectorStatus || 'partial', message);
+  job = await get('job');
+  // Only a clear "nothing changed" skips the collections. Any doubt reads them.
+  if (run.gate && !cancelled && finished?.listChanged !== false) job.plan.splice(job.index + 1, 0, { platform: run.platform, account: run.account, afterGate: true });
+  job.results.push({ platform: run.platform, account: run.account, imported: run.imported, updated: run.updated, enriched: run.enriched, status: cancelled ? 'cancelled' : run.collectorStatus || 'partial', message });
   await closeOwned(); job.ownedTabs = []; job.index++; job.phase = 'next'; job.detailIndex = 0;
   for (const key of ['detailPosts', 'detailsRemaining', 'missingPosts', 'missingRemaining', 'missingIndex']) delete job[key];
   await chrome.storage.local.set({ job });
@@ -440,6 +460,8 @@ async function advanceJob() {
       if (desktop) await desktop.accountError(e.message);
       const run = await get('syncState'); if (run?.status === 'running') await finishRun(run, 'failed', e.message);
       job = await get('job'); job.results.push({ platform: job.plan[job.index].platform, account: job.plan[job.index].account || '', imported: run?.status === 'running' ? run.imported : 0, updated: 0, enriched: 0, status: 'failed', message: e.message });
+      // All posts couldn't be read, so it can't rule anything out, unless the site itself is the problem.
+      if (job.plan[job.index].gate && !/sign.?in|challenge|checkpoint|limiting/i.test(e.message)) job.plan.splice(job.index + 1, 0, { platform: job.plan[job.index].platform, account: job.plan[job.index].account, afterGate: true });
       await closeOwned(); job.ownedTabs = []; job.index++; job.phase = 'next'; await chrome.storage.local.set({ job });
     }
   } catch (e) { failed = true; console.error('Background sync:', e.message); const job = await get('job'); if (job) { await closeOwned(); await updateJob({ status: 'failed', results: job.results || [], message: e.message }).catch(() => {}); await chrome.storage.local.remove(['job', 'cancelRequested']); } }
@@ -548,7 +570,7 @@ async function handle(message, sender) {
     }
     if (message.type === 'SYNC_PROGRESS') { await setRun({ ...run, seen: message.seen, message: message.message }); await progress(`${run.platform === 'x' ? 'X ' + run.account : sourceName(run.platform)}${run.collectionName ? ` · ${run.collectionName}` : ''} · ${message.message}`); return {}; }
     if (message.type === 'SYNC_FINISH') {
-      await setRun({ ...run, stage: 'enriching', collectorStatus: run.collectionWarning && message.status === 'completed' ? 'partial' : message.status, collectorMessage: `${run.collectionWarning ? `${run.collectionWarning} ` : ''}${message.message}` });
+      await setRun({ ...run, stage: 'enriching', seenIds: message.seenIds, reachedEnd: message.reachedEnd === true, collectorStatus: run.collectionWarning && message.status === 'completed' ? 'partial' : message.status, collectorMessage: `${run.collectionWarning ? `${run.collectionWarning} ` : ''}${message.message}` });
       const job = await get('job'); job.phase = 'enriching'; await chrome.storage.local.set({ job }); void advanceJob(); return {};
     }
     throw new Error('Unsupported collector action.');

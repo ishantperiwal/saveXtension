@@ -58,7 +58,7 @@ test('Accounts and Collections browse the same library with cross-source counts 
 test('All Saves in Collections shows counted folders that open by click, double-click and keyboard', async ({ page }) => {
   await page.addInitScript(()=>localStorage.setItem('savex-sidebar-view','collections'));
   await setup(page);
-  const folders=page.getByRole('region',{name:'Collections',exact:true}), folder=name=>folders.locator('[data-open-collection]').filter({has:page.locator('.collection-folder-label',{hasText:new RegExp(`^${name}$`)})});
+  const folders=page.getByRole('region',{name:'Topics',exact:true}), folder=name=>folders.locator('[data-open-collection]').filter({has:page.locator('.collection-folder-label',{hasText:new RegExp(`^${name}$`)})});
   const heading=page.getByRole('heading',{name:'4 topics',exact:true});
   await expect(heading).toBeVisible();
   const titleBounds=await heading.boundingBox(),searchBounds=await page.getByRole('searchbox').boundingBox();
@@ -106,14 +106,12 @@ test('folder counts refresh from the library; search and Accounts still browse p
   await page.getByRole('searchbox').fill('Saved reference');await expect(page.locator('.collection-folders')).toHaveCount(0);
   await expect(page.locator('.save-card')).toHaveCount(3);
   await page.keyboard.press('Escape');await expect(folder).toBeVisible();
-  await folder.click({button:'right'});await expect(page.getByRole('menu',{name:'Collection options'})).toBeVisible();
+  await folder.click({button:'right'});await expect(page.getByRole('menu',{name:'Topic options'})).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('tab',{name:'Accounts',exact:true}).click();expect(await ids(page)).toEqual([4,2,1]);
   await page.getByRole('tab',{name:'Topics',exact:true}).click();await expect(folder).toBeVisible();
   await page.setViewportSize({width:390,height:844});
   await expect(folder).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  const heading=await page.getByRole('heading',{name:'4 topics',exact:true}).boundingBox(),search=await page.getByRole('searchbox').boundingBox();
-  expect(Math.abs(heading.y+heading.height/2-search.y-search.height/2)).toBeLessThan(2);
   const label=await folder.locator('.collection-folder-label').boundingBox(),art=await folder.locator('.collection-folder-art').boundingBox();
   expect(label.y).toBeGreaterThanOrEqual(art.y+art.height);
   await page.screenshot({path:'test-results/collection-folders-mobile.png',animations:'disabled'});

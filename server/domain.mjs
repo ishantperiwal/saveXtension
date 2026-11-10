@@ -54,11 +54,25 @@ export function tags(value) {
   return [...new Set(value.map(t => text(t, 40).toLowerCase()).filter(Boolean))].slice(0, 16);
 }
 
+// X and Instagram profile pictures: a person's face, never what the post shows.
+const PROFILE_PICTURE = /^\/profile_images\/|\/t51\.2885-19\//;
+
+// Instagram's page summary puts its counts and the date before the caption, as in
+// 448 likes, 12 comments - someone on July 26, 2026: "The caption". Only the caption is worth keeping.
+const INSTAGRAM_SUMMARY = /^(?:[\d.,]+[KkMm]?\s+likes?(?:,\s*)?)?(?:[\d.,]+[KkMm]?\s+comments?)?\s*[-–—]\s*[\w.]+\s+on\s+[^:"\n]{3,40}?(?::\s*|\.?\s*$)/i;
+export function instagramCaption(value) {
+  if (!/^[\d.,]+[KkMm]?\s+(?:likes?|comments?)\b/i.test(value)) return value;
+  const prefix = value.match(INSTAGRAM_SUMMARY)?.[0];
+  if (!prefix) return value;
+  const rest = value.slice(prefix.length).trim(), quoted = rest.match(/^["“]([\s\S]*)["”]\.?$/);
+  return quoted ? quoted[1].trim() : rest;
+}
+
 export function imageUrl(value) {
   try {
     const u = new URL(value);
     const host = u.hostname.toLowerCase();
-    if (u.protocol !== 'https:' || u.username || u.password || u.port) return '';
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || PROFILE_PICTURE.test(u.pathname)) return '';
     if (host === 'pbs.twimg.com' || host === 'i.pinimg.com' || host.endsWith('.cdninstagram.com') || host.endsWith('.fbcdn.net')) return u.href;
   } catch { /* Missing or unsupported thumbnail. */ }
   return '';
@@ -77,7 +91,7 @@ export function topicsFor(content) { return TOPICS.filter(([, regex]) => regex.t
 export function cleanPost(input) {
   if (!input || typeof input !== 'object') throw new HttpError(400, 'Invalid post.');
   const canonical = input.platform === 'chrome' ? canonicalBookmark(input.url) : canonicalPost(input.url);
-  const caption = text(input.text, 20000);
+  const caption = canonical.platform === 'instagram' ? instagramCaption(text(input.text, 20000)) : text(input.text, 20000);
   const title = text(input.title, 180);
   return {
     ...canonical, text: caption, title, author: text(input.author, 100),
@@ -85,6 +99,7 @@ export function cleanPost(input) {
     folders: canonical.platform === 'chrome' && Array.isArray(input.folders) ? [...new Set(input.folders.map(f => text(f, 2000)).filter(Boolean))].slice(0, 200) : [],
     authorName: text(input.authorName, 120), thumbnail: imageUrl(input.thumbnail),
     media: [...new Set((Array.isArray(input.media) ? input.media : []).map(imageUrl).filter(Boolean))].slice(0, 20),
+    kindSure: input.kindSure === true,
     kind: ['image', 'video', 'carousel', 'text'].includes(input.kind) ? input.kind : ['instagram', 'pinterest'].includes(canonical.platform) ? 'image' : 'text',
     tags: tags(input.tags), topics: typeof input.topicsCurated === 'boolean' && Array.isArray(input.topics) ? [...new Set(input.topics.filter(t => typeof t === 'string' && t.trim() && t.trim().length <= 80 && !/[\p{Cc}]/u.test(t)).map(t => t.normalize('NFKC').trim()))].slice(0, 50) : topicsFor(`${title} ${caption} ${text(input.bookmarkTitle, 1000)} ${(Array.isArray(input.folders) ? input.folders : []).join(" ")}`),
     sourceAccount: text(input.sourceAccount, 100), accounts: Array.isArray(input.accounts) ? input.accounts.map(a => text(a, 100)).filter(Boolean).slice(0, 50) : [],

@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-test.use({storageState:{cookies:[],origins:[]}});
+test.use({storageState:{cookies:[],origins:[{origin:'http://localhost:3211',localStorage:[{name:'savex-live-previews',value:'true'}]}]}});
 test('X keeps its source sequence inside addition groups and reorders existing players without reloading them',async({page})=>{
   await page.clock.setFixedTime(new Date('2026-11-03T12:00:00Z'));
   const model={posts:Array.from({length:4},(_,i)=>({id:700+i,platform:'x',externalId:String(90000+i),url:`https://x.com/i/status/${90000+i}`,author:'creator',text:`Reference ${i}`,notes:'',topics:[],media:[],accounts:['@one'],addedAt:i===3?'2026-10-01T10:00:00Z':new Date(Date.parse('2026-11-03T10:00:00Z')+i).toISOString(),savedAt:'2026-11-03T10:00:00Z',archived:false,sourceOrder:[{account:'@one',observedAt:'2026-11-03T09:59:00Z',runOrder:1,position:i}]}))};

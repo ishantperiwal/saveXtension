@@ -1,0 +1,1 @@
+@docs/NEW_CHAT_CONTEXT.md

@@ -33,7 +33,8 @@ export function syncReport(job) {
       else if (/without more posts loading|stall|timed? out/i.test(message)) notes.add('Some posts did not finish loading. Try syncing again.');
       else if (/sign.?in|log.?in|logged.?in|reconnect|Connect @/i.test(message)) notes.add('Check that you’re signed in to this account, then retry.');
       else if (/permission|Allow .*access|Allow Chrome bookmarks/i.test(message)) notes.add('Chrome needs access before this source can sync.');
-      else notes.add('Some saves could not be checked. See details below.');
+      // A job-level message is all an older helper reports, so it is shown as it is.
+      else notes.add(missing && message ? readableMessage(message) : 'Some saves could not be checked. Try syncing again.');
     }
     if (missing && warning && !notes.size) notes.add('Sync ended before this source finished.');
     return {
@@ -42,9 +43,6 @@ export function syncReport(job) {
       updated: entries.reduce((sum, result) => sum + count(result.updated), 0),
       enriched: entries.reduce((sum, result) => sum + count(result.enriched), 0),
       removed: entries.reduce((sum, result) => sum + count(result.message?.match(/(\d+) confirmed unsaves removed/i)?.[1]), 0),
-      // Older helpers may have only a job-level message. Keep it available without
-      // guessing counts or repeating a multi-platform paragraph on every card.
-      fallback: missing && sources.length === 1 ? readableMessage(job.message) : '',
       missing
     };
   });

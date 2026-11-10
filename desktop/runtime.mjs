@@ -16,6 +16,13 @@ export const instagramPost = value => {
     return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['instagram.com', 'www.instagram.com'].includes(url.hostname) && path ? `https://www.instagram.com${path}/` : '';
   } catch { return ''; }
 };
+// An X post link, reduced to its canonical page.
+export const xPost = value => {
+  try {
+    const url = new URL(value), id = url.pathname.match(/^\/(?:\w+|i\/web|i)\/status\/(\d+)(?:\/|$)/)?.[1];
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['x.com', 'www.x.com', 'mobile.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(url.hostname) && id ? `https://x.com/i/status/${id}` : '';
+  } catch { return ''; }
+};
 // A Pinterest pin link, reduced to its canonical page.
 export const pinterestPost = value => {
   try {
@@ -23,6 +30,77 @@ export const pinterestPost = value => {
     return url.protocol === 'https:' && !url.username && !url.password && !url.port && isPinterestHost(url.hostname) && id ? `https://www.pinterest.com/pin/${id}/` : '';
   } catch { return ''; }
 };
+// The ID a post is stored under, read from its link.
+export const postExternalId = (platform, url) => url.match(platform === 'x' ? /\/status\/(\d+)/ : platform === 'pinterest' ? /\/pin\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1] || null;
+// Which connected account a post opens as: one that saved it, preferring one being browsed.
+// `owner` says whether it saved the post, since any other account's Save button says nothing about this save.
+export function panelAccount(connected, savedBy = [], browsing = []) {
+  const saved = new Set(savedBy.map(handle => handle.toLowerCase())), viewing = new Set(browsing.map(handle => handle.toLowerCase()));
+  const owners = connected.filter(account => saved.has(account.handle.toLowerCase()));
+  const profile = owners.find(account => viewing.has(account.handle.toLowerCase())) || owners[0];
+  return { profile: profile || connected[0] || null, owner: !!profile };
+}
+// What a request from the post panel does: 'save', 'unsave' or nothing. These are the sites' own web
+// requests, so one can change; a save missed here is found by the next background check, and an unsave stays as it was.
+export function panelRequestKind(platform, { method, url, body = '' }) {
+  if (method !== 'POST') return null;
+  let path; try { path = new URL(url).pathname; } catch { return null; }
+  if (platform === 'x') return /\/graphql\/[^/]+\/CreateBookmark$/.test(path) ? 'save' : /\/graphql\/[^/]+\/DeleteBookmark$/.test(path) ? 'unsave' : null;
+  if (platform === 'pinterest') return /^\/resource\/(?:Repin|Pin)Resource\/create\/?$/.test(path) ? 'save' : /^\/resource\/PinResource\/delete\/?$/.test(path) ? 'unsave' : null;
+  const direct = path.match(/\/api\/v1\/web\/save\/\d+\/(save|unsave)\/?$/)?.[1];
+  if (direct) return direct;
+  const name = decodeBody(body).match(/fb_api_req_friendly_name=([^&\s]+)/)?.[1] || '';
+  return !/save/i.test(name) || !/mutation/i.test(name) ? null : /unsave/i.test(name) ? 'unsave' : 'save';
+}
+const decodeBody = body => { try { return decodeURIComponent(body.replace(/\+/g, ' ')); } catch { return body; } };
+// Instagram posts are stored by their link's shortcode, which is the media ID its requests use, in base 64.
+const SHORTCODE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// The real addresses of the links on a post's page, because page text can cut them short. Takes each link's text and address.
+// Links within the site itself are left out, since they're its own menus and profiles, and the site's redirects are unwrapped.
+const SITE_LINK = /(^|\.)(x\.com|twitter\.com|instagram\.com|threads\.(net|com)|facebook\.com|fbcdn\.net|cdninstagram\.com|twimg\.com|pinimg\.com|pinterest\.[a-z.]+)$/i;
+export function pageLinks(anchors, limit = 100) {
+  const found = new Set();
+  for (const [shown, href] of anchors) {
+    let url;
+    try { url = new URL(href); } catch { continue; }
+    const wrapped = /^l\.(instagram|facebook)\.com$/i.test(url.hostname) ? url.searchParams.get('u') : /pinterest\./i.test(url.hostname) && url.pathname.startsWith('/offsite') ? url.searchParams.get('url') : null;
+    if (wrapped) { try { url = new URL(wrapped); } catch { continue; } }
+    // X's short links hide the address, but the text of a link in a post holds it in full, ending in "…" when it's only cut for display.
+    // Text like "From github.com" on a link card, or a bare site name, isn't the address, so those stay short links for expandShortLinks.
+    if (/^t\.co$/i.test(url.hostname)) {
+      const text = String(shown || '').trim().replace(/…$/, '');
+      if (/^https?:\/\/[\w-]+(\.[\w-]+)+(\/\S*)?$/i.test(text) || /^[\w-]+(\.[\w-]+)+\/\S+$/.test(text)) { try { url = new URL(/^https?:/i.test(text) ? text : `https://${text}`); } catch { /* Keep the short link. */ } }
+    }
+    if (!/^https?:$/.test(url.protocol) || SITE_LINK.test(url.hostname)) continue;
+    url.hash = ''; found.add(url.href);
+    if (found.size >= limit) break;
+  }
+  return [...found];
+}
+// Short links that are still left, such as link cards. Only t.co itself is asked, without following it, so the destination isn't visited and no sign-in is sent.
+const SHORT_LINK = /^https:\/\/t\.co\/\w+$/;
+export async function expandShortLinks(links, ask = fetch, limit = 20) {
+  let asked = 0;
+  const expanded = await Promise.all(links.map(async link => {
+    if (!SHORT_LINK.test(link) || ++asked > limit) return link;
+    try {
+      const reply = await ask(link, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(4000) });
+      return new URL(reply.headers.get('location')).href;
+    } catch { return link; }
+  }));
+  return pageLinks(expanded.map(link => ['', link]), links.length);
+}
+export function instagramShortcode(mediaId) {
+  let id = BigInt(mediaId), code = '';
+  while (id > 0n) { code = SHORTCODE[Number(id % 64n)] + code; id /= 64n; }
+  return code;
+}
+// Which post a panel unsave was for. The request says, even when scrolling a feed; failing that, the page on screen does.
+export function panelRequestPost(platform, { url, body = '', pageUrl = '' }) {
+  if (platform === 'x') return decodeBody(body).match(/"tweet_id"\s*:\s*"(\d+)"/)?.[1] || pageUrl.match(/\/status\/(\d+)/)?.[1] || null;
+  const mediaId = url.match(/\/web\/save\/(\d+)\//)?.[1] || decodeBody(body).match(/"media_id"\s*:\s*"?(\d+)/)?.[1];
+  return mediaId ? instagramShortcode(mediaId) : pageUrl.match(/\/(?:p|reels?|tv)\/([\w-]+)/)?.[1] || null;
+}
 export const isLibraryFrame = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
 
 export async function prepareHelper(source, destination, origin) {
@@ -104,7 +182,7 @@ async function legacySnapshot(origin, databasePath) {
   return null;
 }
 
-export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin = 'http://localhost:3210', legacyDatabasePath, preferredPort = DEFAULT_PORT, nativeTransport }) {
+export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin = 'http://localhost:3210', legacyDatabasePath, preferredPort = DEFAULT_PORT, nativeTransport, keyVault = null }) {
   await mkdir(dataDir, { recursive: true });
   const settingsPath = join(dataDir, 'desktop.json');
   let settings = {};
@@ -113,7 +191,7 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
   let instance, origin;
   for (let offset = 0; offset < 20; offset++) {
     origin = `http://localhost:${initialPort + offset}`;
-    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), origin, localMode: true, nativeTransport });
+    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), meaningDir: join(dataDir, 'meaning-search'), origin, localMode: true, nativeTransport, checkPinterestGifs: true, keyVault, aiKeysFile: join(dataDir, 'ai-keys.json') });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(initialPort + offset, '127.0.0.1', resolve); });
       break;

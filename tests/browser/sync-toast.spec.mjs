@@ -8,7 +8,7 @@ async function setup(page) {
 }
 
 test('sync progress stays visible with Stop while active; only finished notices can be dismissed', async ({ page }) => {
-  await page.addInitScript(()=>sessionStorage.setItem('savex-dismissed-sync-jobs','["toast-active"]'));
+  await page.addInitScript(()=>{ if (!sessionStorage.getItem('savex-dismissed-sync-jobs')) sessionStorage.setItem('savex-dismissed-sync-jobs','["toast-active"]'); });
   const state = await setup(page), toast = page.locator('#sync-status');
   const before = await page.locator('#results').boundingBox();
   let stops = 0;
@@ -39,7 +39,7 @@ test('sync progress stays visible with Stop while active; only finished notices 
   await expect(toast).toContainText('The background Instagram tab closed', { timeout: 6000 });
   await expect(toast).not.toContainText('2128255104'); await expect(toast).toHaveAttribute('data-tone', 'warning');
   await page.getByRole('button', { name: 'Dismiss Instagram sync report' }).click(); await expect(toast).toBeHidden();
-  await page.reload(); await expect(toast).toBeHidden();
+  await page.reload(); await page.waitForResponse('**/api/sync'); await page.waitForTimeout(300); await expect(toast).toBeHidden();
 });
 
 test('finished sync reports group account and collection results into readable platform cards', async ({ page }) => {
@@ -61,19 +61,28 @@ test('finished sync reports group account and collection results into readable p
   await expect(instagram.locator('.sync-report-issues li')).toHaveCount(1);
   await expect(instagram.locator('.sync-report-issues')).toHaveText('Some posts did not finish loading. Try syncing again.');
   await expect(toast).not.toContainText(state.job.message);
-  await expect(instagram.locator('.sync-report-log')).toBeHidden();
-  await instagram.locator('summary').click();
-  await expect(instagram.locator('.sync-report-log')).toBeVisible();
-  await expect(instagram.locator('.sync-report-entry strong').first()).toHaveText('@ishantperiwal · ae. motion');
-  const reads = state.reads;
-  await expect.poll(() => state.reads, { timeout: 6000 }).toBeGreaterThan(reads);
-  await expect(instagram.locator('details')).toHaveAttribute('open', '', { timeout: 6000 });
-  await page.screenshot({ path: 'test-results/sync-report-details.png' });
-  await instagram.locator('summary').click();
+  // Just the source, its counts, and for a warning its message with Retry beneath, in one container.
+  await expect(instagram.locator('.sync-report-header')).toHaveText('Instagram');
+  await expect(instagram.locator('.sync-report-alert')).toBeVisible();
+  await expect(x.locator('.sync-report-header')).toHaveText('X');
+  await expect(x.locator('.sync-report-alert')).toHaveCount(0);
+  await expect(x.locator('.sync-report-problem')).toHaveCount(0);
+  await expect(toast).not.toContainText('Sync complete');
+  await expect(toast).not.toContainText('Details');
+  await expect(toast).not.toContainText('checks');
+  await expect(toast).not.toContainText('Needs attention');
+  await expect(instagram.locator('.sync-report-issues')).toBeVisible();
+  const message = await instagram.locator('.sync-report-issues').boundingBox(), retry = await instagram.getByRole('button', { name: 'Retry Instagram sync' }).boundingBox(), counts = await instagram.locator('.sync-report-counts').boundingBox();
+  expect(message.y, 'the message sits below the counts').toBeGreaterThanOrEqual(counts.y + counts.height);
+  expect(retry.y, 'Retry sits below the message').toBeGreaterThanOrEqual(message.y + message.height);
+  const plain = (await instagram.boundingBox()).height;
+  await instagram.click({ position: { x: 40, y: 10 } }); await instagram.hover();
+  expect((await instagram.boundingBox()).height, 'nothing expands').toBe(plain);
   await page.screenshot({ path: 'test-results/sync-report-platforms.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  const box = await toast.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(12); expect(box.y).toBeGreaterThanOrEqual(12); expect(box.x + box.width).toBeLessThanOrEqual(378);
+  await expect.poll(async () => (await toast.boundingBox()).x, { message: 'fits once the resize settles' }).toBeGreaterThanOrEqual(12);
+  const box = await toast.boundingBox(); expect(box.y).toBeGreaterThanOrEqual(12); expect(box.x + box.width).toBeLessThanOrEqual(378);
   await page.screenshot({ path: 'test-results/sync-report-mobile.png' });
   await page.getByRole('button', { name: 'Dismiss X sync report', exact: true }).click();
   await expect(toast.locator('.sync-platform-card')).toHaveCount(2);
@@ -89,7 +98,7 @@ test('finished notices fade away, later jobs still appear, and the notification 
   state.job = { id: 'toast-finishes', status: 'running', targets: ['chrome'], message: 'Chrome · reading bookmarks' };
   await expect(toast).toBeVisible({ timeout: 6000 });
   state.job = { ...state.job, status: 'completed', message: '23 bookmarks synced' };
-  await expect(toast).toContainText('Sync complete', { timeout: 6000 });
+  await expect(toast.getByRole('article', { name: 'Chrome bookmarks sync report', exact: true })).toBeVisible({ timeout: 6000 });
   await expect(toast).toBeHidden({ timeout: 10000 });
   state.job = { id: 'toast-next', status: 'running', targets: ['chrome', 'x', 'instagram'], message: 'Syncing your saves in the background' };
   await expect(toast).toBeVisible({ timeout: 6000 }); await expect(toast.locator('.source-icon')).toHaveCount(3);
@@ -124,19 +133,16 @@ test('successful cards count down independently, pause for reading, and warning 
   const x = toast.getByRole('article', { name: 'X sync report', exact: true });
   const instagram = toast.getByRole('article', { name: 'Instagram sync report', exact: true });
   const chrome = toast.getByRole('article', { name: 'Chrome bookmarks sync report', exact: true });
-  await expect(x.getByRole('timer')).toHaveText(/^[1-8]s$/, { timeout: 6000 });
-  await expect(x.getByRole('timer')).not.toHaveText('8s');
-  await expect(x.locator('.sync-dismiss-progress')).toBeVisible();
-  await expect(instagram.getByRole('timer')).toHaveCount(0);
+  await expect(x.locator('.sync-dismiss-progress')).toBeVisible({ timeout: 6000 });
+  await expect(x).toHaveAttribute('data-paused', 'false');
+  await expect(instagram.locator('.sync-dismiss-progress')).toHaveCount(0);
   await expect(instagram.getByRole('button', { name: 'Retry Instagram sync' })).toBeVisible();
   await chrome.hover();
-  await expect(chrome.getByRole('timer')).toHaveText('Paused');
+  await expect(chrome).toHaveAttribute('data-paused', 'true');
   await page.screenshot({ path: 'test-results/sync-report-countdown-retry.png' });
   await expect(x).toHaveCount(0, { timeout: 10000 });
-  await expect(chrome.getByRole('timer')).toHaveText('Paused');
+  await expect(chrome).toHaveAttribute('data-paused', 'true');
   await expect(instagram).toBeVisible();
-  await chrome.locator('summary').click(); await page.mouse.move(0, 0);
-  await expect(chrome.getByRole('timer')).toHaveText('Paused');
   await instagram.getByRole('button', { name: 'Retry Instagram sync' }).click();
   await expect.poll(() => requests.length, { timeout: 6000 }).toBe(1);
   expect(requests[0]).toMatchObject({ targets: ['instagram'], mode: 'deep', instagramAccount: '@collector', instagramCollectionId: 42 });

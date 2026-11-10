@@ -88,7 +88,7 @@ test('account chips combine without duplicates, respect topics and can be cancel
   await page.getByRole('group', { name: 'Topics', exact: true }).getByRole('checkbox', { name: 'Coding', exact: true }).check();
   await apply(page); expect(await visibleIds(page)).toEqual([704]);
   await open(page); await page.getByRole('group', { name: 'Topics', exact: true }).getByRole('checkbox', { name: 'Coding', exact: true }).uncheck();
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click(); await expect(page.locator('#modal')).toBeHidden();
+  await page.evaluate(() => document.querySelector('#modal').close()); await expect(page.locator('#modal')).toBeHidden();
   expect(await visibleIds(page)).toEqual([704]);
   await page.getByRole('button', { name: 'Remove Coding filter', exact: true }).click();
   await page.getByRole('button', { name: 'Remove Instagram @ig filter', exact: true }).click(); expect(await visibleIds(page)).toEqual([702, 704]);
@@ -97,7 +97,7 @@ test('account chips combine without duplicates, respect topics and can be cancel
   await expect(page.locator('.save-card')).toHaveCount(5);
   await page.setViewportSize({ width: 1280, height: 720 }); await open(page);
   const footerInside = () => page.evaluate(() => document.querySelector('.filter-footer').getBoundingClientRect().bottom <= document.querySelector('#modal').getBoundingClientRect().bottom);
-  const reset = await page.getByRole('button', { name: 'Cancel', exact: true }).boundingBox(), show = await page.locator('#show-filtered-saves').boundingBox();
+  const reset = await page.getByRole('button', { name: 'Clear all', exact: true }).boundingBox(), show = await page.locator('#show-filtered-saves').boundingBox();
   expect(reset.x + reset.width).toBeLessThan(show.x); expect(Math.abs(reset.y - show.y)).toBeLessThan(2);
   expect(show.x - reset.x - reset.width).toBeLessThanOrEqual(20);
   expect(await footerInside()).toBeTruthy();
@@ -128,7 +128,7 @@ test('topic search narrows folder pills without losing hidden selections and can
   await search.press('Enter');await expect(page.locator('#modal')).toBeVisible();
   await search.fill('does not exist');await expect(topics.getByRole('status')).toHaveText('No matching topics');
   await expect(topics.locator('.filter-choice:not([hidden])')).toHaveCount(0);
-  await page.getByRole('button',{name:'Cancel',exact:true}).click();await expect(page.locator('#modal')).toBeHidden();
+  await page.evaluate(()=>document.querySelector('#modal').close());await expect(page.locator('#modal')).toBeHidden();
   await open(page);await expect(search).toHaveValue('');
   await expect(topics.getByRole('status')).toBeHidden();await expect(topics.locator('.filter-choice:not([hidden])')).toHaveCount(2);
   await expect(topics.getByRole('checkbox',{name:'Coding',exact:true})).not.toBeChecked();

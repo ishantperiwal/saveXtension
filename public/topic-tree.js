@@ -134,7 +134,7 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
     // The floating label guides moves within the sidebar; over posts the card's own overlay speaks instead.
     ghost.classList.toggle('is-away', !under?.closest('.sidebar'));
     clear(); drag.action = null;
-    if (list && drag.rows.length) {
+    if (list && drag.rows.length && !drag.tagOnly) {
       unveil();
       const info = nearestRow(event.clientY), action = info && rowAction(info, event.clientY);
       if (action?.type === 'into') action.element.classList.add('is-drop-target');
@@ -162,11 +162,11 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
         return;
       }
       unveil();
-      if (folder && drag.ids.every(item => canNest(topics(), item, folder.dataset.dropTopic))) { folder.classList.add('is-drop-target'); drag.action = { type: 'into', parentId: folder.dataset.dropTopic, element: folder }; }
-      else if (!folder && root && drag.ids.some(item => describe(item)?.parentId)) { root.classList.add('is-drop-root'); drag.action = { type: 'top', element: root }; }
+      if (!drag.tagOnly && folder && drag.ids.every(item => canNest(topics(), item, folder.dataset.dropTopic))) { folder.classList.add('is-drop-target'); drag.action = { type: 'into', parentId: folder.dataset.dropTopic, element: folder }; }
+      else if (!drag.tagOnly && !folder && root && drag.ids.some(item => describe(item)?.parentId)) { root.classList.add('is-drop-root'); drag.action = { type: 'top', element: root }; }
     }
     const action = drag.action, into = action?.type === 'into' ? describe(action.parentId)?.name : '';
-    const hint = !action ? '' : into ? `Move into ${into}` : action.type === 'top' || action.type === 'place' && !action.parentId && drag.ids.some(item => describe(item)?.parentId) ? 'Move to top level' : 'Move here';
+    const hint = !action ? drag.tagOnly ? 'Drop on a post to add it' : '' : into ? `Move into ${into}` : action.type === 'top' || action.type === 'place' && !action.parentId && drag.ids.some(item => describe(item)?.parentId) ? 'Move to top level' : 'Move here';
     ghost.querySelector('.topic-drag-hint').textContent = hint; ghost.classList.toggle('has-target', !!action);
   }
   // Dragging near the top or bottom of the sidebar list scrolls it, so far-apart
@@ -200,9 +200,12 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
     else void arrange(arrangedLayout(topics(), ids, action), ids, action);
   }
   document.addEventListener('pointerdown', event => {
-    // A sidebar topic drags from anywhere on its row; a click that barely moves still opens it.
+    // A sidebar topic reorders from the left end of its row, up to its icon. From anywhere else it only tags posts,
+    // so reaching for a post can't reshuffle the list. A click that barely moves still opens it.
     const source = event.button === 0 && event.target.closest('[data-drag-topic], #topic-navigation [data-topic-row]');
-    pending = source ? { source, id: source.dataset.dragTopic || source.dataset.topicRow, x: event.clientX, y: event.clientY } : null;
+    const row = source && source.closest('#topic-navigation [data-topic-row]'), icon = row?.querySelector('svg[data-drag-topic]');
+    const tagOnly = !!row && !!icon && event.clientX > icon.getBoundingClientRect().right + 2;
+    pending = source ? { source, tagOnly, id: source.dataset.dragTopic || source.dataset.topicRow, x: event.clientX, y: event.clientY } : null;
   });
   document.addEventListener('pointermove', event => {
     if (pending && Math.hypot(event.clientX - pending.x, event.clientY - pending.y) >= THRESHOLD) start(event);

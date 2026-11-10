@@ -57,11 +57,11 @@
       const link = pin.querySelector('a[href*="/pin/"]'), id = pin.getAttribute('data-test-pin-id') || link?.getAttribute('href')?.match(/\/pin\/(?:[^/]*--)?(\d+)/)?.[1];
       if (!id || !/^\d+$/.test(id) || found.has(id)) continue;
       const img = pin.querySelector('img'), video = pin.querySelector('video,[data-test-id="pincard-video-with-link"]');
+      // Only the title, on the user's decision. The image's alt text can hold the whole description.
       const title = (link?.getAttribute('aria-label') || '').replace(/\s*pin page$/i, '').trim();
-      const alt = (img?.getAttribute('alt') || '').replace(/^This contains an image of:\s*/i, '').trim();
       const source = img?.getAttribute('src') || pin.querySelector('video')?.getAttribute('poster') || '';
       const thumbnail = source.replace('/236x/', '/736x/');
-      found.set(id, { url: `https://www.pinterest.com/pin/${id}/`, author: '', authorName: '', text: /^untitled$/i.test(title) ? alt : title.length >= alt.length ? title : alt, thumbnail, media: thumbnail ? [thumbnail] : [], kind: video ? 'video' : 'image' });
+      found.set(id, { url: `https://www.pinterest.com/pin/${id}/`, author: '', authorName: '', text: /^untitled$/i.test(title) ? '' : title, thumbnail, media: thumbnail ? [thumbnail] : [], kind: video ? 'video' : 'image' });
     }
     return [...found.values()];
   }
@@ -91,13 +91,23 @@
       const name = article.querySelector('[data-testid="User-Name"]');
       const authorName = visibleText(name?.querySelector('a:not([tabindex="-1"]) span')) || visibleText(name?.querySelector('span'));
       const caption = [...article.querySelectorAll('[data-testid="tweetText"]')].map(visibleText).join('\n\n');
-      const image = article.querySelector('[data-testid="tweetPhoto"] img');
-      const video = article.querySelector('video');
+      // A quoted post sits inside this one's box, in a link block with its own author, so its media isn't this post's.
+      const quoted = el => { for (let box = el.closest('[role="link"]'); box && box !== article && article.contains(box); box = box.parentElement?.closest('[role="link"]')) if (box.querySelector('[data-testid="User-Name"]')) return true; return false; };
+      // A video tile can carry a small avatar of whoever first posted it; that isn't the post's image.
+      const allPhotos = [...article.querySelectorAll('[data-testid="tweetPhoto"] img:not([src*="/profile_images/"])')], photos = allPhotos.filter(img => !quoted(img));
+      const allVideos = [...article.querySelectorAll('video')], ownVideo = allVideos.find(el => !quoted(el));
+      const hasVideo = !!ownVideo || [...article.querySelectorAll('[data-testid="videoPlayer"]')].some(el => !quoted(el));
+      const hasQuote = [...allPhotos, ...allVideos, ...article.querySelectorAll('[data-testid="tweetText"]')].some(quoted);
+      const tiles = [...article.querySelectorAll('[data-testid="tweetPhoto"]')].filter(el => !quoted(el)).length;
+      const image = photos[0];
       const cardImage = article.querySelector('[data-testid="card.wrapper"] img');
       result.push({ url: `https://x.com/${match[1]}/status/${match[2]}`, author: match[1], authorName, text: caption,
-        media: [...new Set([...article.querySelectorAll('[data-testid="tweetPhoto"] img')].map(img => img.getAttribute('src')).filter(Boolean))],
-        thumbnail: image?.getAttribute('src') || video?.getAttribute('poster') || cardImage?.getAttribute('src') || '',
-        kind: video || article.querySelector('[data-testid="videoPlayer"]') ? 'video' : article.querySelectorAll('[data-testid="tweetPhoto"]').length > 1 ? 'carousel' : image ? 'image' : 'text',
+        media: [...new Set(photos.map(img => img.getAttribute('src')).filter(Boolean))],
+        // With no media of its own, a post still shows what it quotes, without claiming it as its own.
+        thumbnail: image?.getAttribute('src') || ownVideo?.getAttribute('poster') || allPhotos[0]?.getAttribute('src') || allVideos[0]?.getAttribute('poster') || cardImage?.getAttribute('src') || '',
+        kind: hasVideo ? 'video' : tiles > 1 ? 'carousel' : image ? 'image' : 'text',
+        // A plain "text" reading could just be media that hasn't loaded yet, so only this much is certain.
+        kindSure: hasVideo || !!image || hasQuote,
         publishedAt: article.querySelector('time')?.getAttribute('datetime') || null });
     }
     return result;
@@ -115,7 +125,9 @@
       const author = alt.match(/(?:Photo|Video|Reel) by ([\w.]+) (?:on|in) /i)?.[1] || match[1] || '';
       const prior = found.get(match[3]);
       const post = { url: `https://www.instagram.com/${match[2] === 'reels' ? 'reel' : match[2]}/${match[3]}/`, author,
-        authorName: '', text: alt, thumbnail: img?.getAttribute('src') || '', kind: match[2].startsWith('reel') || match[2] === 'tv' || anchor.querySelector('video') ? 'video' : /carousel/i.test(anchor.getAttribute('aria-label') || '') ? 'carousel' : 'image' };
+        authorName: '', text: alt, thumbnail: img?.getAttribute('src') || '', kind: match[2].startsWith('reel') || match[2] === 'tv' || anchor.querySelector('video') ? 'video' : /carousel/i.test(anchor.getAttribute('aria-label') || '') ? 'carousel' : 'image',
+        // The grid can't tell a photo from a video on a /p/ link, so "image" here is only a guess.
+        kindSure: match[2].startsWith('reel') || match[2] === 'tv' || !!anchor.querySelector('video') || /carousel/i.test(anchor.getAttribute('aria-label') || '') };
       if (!prior || post.text.length > prior.text.length || (!prior.thumbnail && post.thumbnail)) found.set(match[3], post);
     }
     return [...found.values()];
@@ -131,9 +143,11 @@
     const caption = visibleText(article?.querySelector('h1')) || description;
     const author = article?.querySelector('header a[href]')?.getAttribute('href')?.match(/^\/([\w.]+)\/?$/)?.[1] || description.match(/(?:[—–-]\s*|\()([\w.]+)(?:\)| on |:)/)?.[1] || '';
     const images = [...(article?.querySelectorAll('img') || [])].filter(img => !img.closest('header') && !/profile picture/i.test(img.getAttribute('alt') || '') && (Number(img.getAttribute('width')) > 100 || /cdninstagram|fbcdn/.test(img.getAttribute('src') || ''))).map(img => img.getAttribute('src')).filter(Boolean);
+    // Only this post's own media counts, not recommendations further down the page.
+    const postMedia = doc.querySelector('main article,article') || doc.querySelector('main');
     const thumbnail = meta('og:image') || images[0] || '';
     if (!caption && !thumbnail) return null;
-    return { url, text: caption, author, authorName: '', thumbnail, media: [...new Set([thumbnail, ...images].filter(Boolean))].slice(0, 20), publishedAt: article?.querySelector('time')?.getAttribute('datetime') || null, kind: doc.querySelector('video') || /\/reel\//.test(url) ? 'video' : images.length > 1 ? 'carousel' : 'image' };
+    return { url, text: caption, author, authorName: '', thumbnail, media: [...new Set([thumbnail, ...images].filter(Boolean))].slice(0, 20), publishedAt: article?.querySelector('time')?.getAttribute('datetime') || null, kind: postMedia?.querySelector('video') || /\/reel\//.test(url) ? 'video' : images.length > 1 ? 'carousel' : 'image', kindSure: !!postMedia?.querySelector('video') || /\/reel\//.test(url) || !!doc.querySelector('main article') && images.length > 0 };
   }
   function xBookmarkState(doc, url) {
     const externalId = url.match(/\/status\/(\d+)/)?.[1];

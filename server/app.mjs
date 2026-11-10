@@ -8,33 +8,46 @@ import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
 import { previewServer } from './embeds.mjs';
 import { websitePreviews } from './website-previews.mjs';
 import { savedImages } from './saved-images.mjs';
+import { knownForScan, listReadSoFar, listScanFinished, missingFromList, pinterestBoardChanges, savedListGate } from './list-changes.mjs';
 import { BUSY } from '../public/busy-messages.js';
+import { meaningSearch } from './meaning-search.mjs';
+import { aiSearch as createAiSearch } from './ai-search.mjs';
+import { aiOrganize } from './ai-organize.mjs';
+import { aiKeys } from './ai-keys.mjs';
+import { pinterestGifs } from './pinterest-gifs.mjs';
 import { noteLinkAssets } from './note-link-assets.mjs';
-import { instagramSaveLists, setInstagramSaveList } from './instagram-save-lists.mjs';
+import { hiddenInstagramSaveIds, instagramSaveLists, setInstagramSaveList } from './instagram-save-lists.mjs';
 import { syncQueue } from './sync.mjs';
 import { HttpError, text, canonicalPost } from './domain.mjs';
 import { createLibraryMcp } from './mcp.mjs';
+import { noteAi as createNoteAi } from './note-ai.mjs';
 import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.json': 'application/json' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, imageDownload } = {}) {
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '' } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
   const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync);
-  const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, BUSY.scan.title); return sync.enqueue(...args); };
+  const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, BUSY.scan.title); if(!args[7])sync.giveWay(); return sync.enqueue(...args); };
   // Discard the generated image cache; previews are served by the platforms.
   store.db.exec('DROP TABLE IF EXISTS media_cache');
   const preview = previewServer(new URL(origin).origin);
   const websites=websitePreviews(store,{download:websiteDownload});
   const images = savedImages(store, { dir: imagesDir, download: imageDownload });
+  const meaning = meaningSearch({ dir: meaningDir, ...(meaningFiles ? { files: meaningFiles } : {}), ...(meaningRequest ? { request: meaningRequest } : {}) });
+  // Only the saves the app shows are ever handed to an AI tool.
+  const aiSearch = createAiSearch({ store, visiblePosts: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).filter(post => !hidden.has(post.id)); }, hasLocal: () => meaning.status().state === 'ready', images: { has: id => images.has(id), read: id => images.ensure(id) }, keys: keyVault && aiKeysFile ? aiKeys({ file: aiKeysFile, vault: keyVault }) : null, apiBase: aiApiBase });
   store.onPostsImported = images.schedule; store.onPostDelete = images.forget;
 
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
   const mcp = createLibraryMcp(store, { origin: appOrigin, localMode, images });
+  // The same rules as MCP: only the saves the app shows.
+  const organize = aiOrganize({ search: aiSearch, topics: new TopicLibrary(store), visibleIds: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).map(post => post.id).filter(id => !hidden.has(id)); } });
+  const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl: `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, visiblePost: id => { const post = store.post(id); return !!post && !post.archived && !hiddenInstagramSaveIds(store).includes(id); } });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -99,10 +112,12 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       const localHosts = new URL(appOrigin).hostname === 'localhost' || new URL(appOrigin).hostname === '127.0.0.1';
       const validLocalHost = localHosts && ['localhost', '127.0.0.1'].some(h => host === `${h}:${new URL(appOrigin).port || (secure ? '443' : '80')}`);
       if (host !== expectedHost && !validLocalHost) throw new HttpError(403, 'Unexpected host. Configure APP_ORIGIN for this address.');
-      if (path === '/mcp') {
+      const noteMcp = path.match(/^\/mcp\/note\/([0-9a-f-]{36})$/);
+      if (path === '/mcp' || noteMcp) {
         if (!localMode || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) throw new HttpError(403, 'MCP accepts local connections only.');
         const allowedOrigins = new Set([appOrigin, `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, `http://localhost:${new URL(appOrigin).port || '80'}`]);
         if (requestOrigin !== undefined && !allowedOrigins.has(requestOrigin)) throw new HttpError(403, 'Unsupported MCP origin.');
+        if (noteMcp) { const handler = noteAi.mcpFor(noteMcp[1]); if (!handler) throw new HttpError(404, 'This note job has finished.'); return await handler.handle(req, res); }
         return await mcp.handle(req, res);
       }
       if (req.method === 'OPTIONS' && isExtensionRoute && extensionOrigin(requestOrigin)) { res.writeHead(204); res.end(); return; }
@@ -179,7 +194,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/extension/known' && req.method === 'GET') {
           const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
           if (!['x', 'instagram', 'pinterest'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
-          return json(res, { ids: store.scanKnownPostIds(platform, account, query.get('collectionId')) });
+          return json(res, { ids: knownForScan(store, platform, account, query.get('collectionId'), store.scanKnownPostIds(platform, account, query.get('collectionId'))) });
         }
         if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
         if (path === '/api/extension/runs' && req.method === 'POST') {
@@ -214,7 +229,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (!run) throw new HttpError(404, 'Sync not found.');
           if (run.status !== 'running') throw new HttpError(409, 'This sync has already finished.');
           const input = await body(req);
-          if (match[2]) { store.finishRun(run.id, input.status, input.message); return json(res, { ok: true }); }
+          if (match[2]) { store.finishRun(run.id, input.status, input.message); listScanFinished(store, run, input.status); const listChanged = savedListGate(store, run, input); const missing = missingFromList(store, run, input); if (missing.length) store.onSavesMissing?.(missing); if (pinterestBoardChanges(store, run, input)) store.onBoardsRecheck?.(); return json(res, { ok: true, listChanged }); }
           if (!Array.isArray(input.posts) || input.posts.length > 200) throw new HttpError(400, 'Send at most 200 posts per batch.');
           const result = store.importPosts(input.posts.map(p => p && typeof p === 'object' ? ({
             platform: run.platform, url: p.url, title: p.title, text: p.text, author: p.author, authorName: p.authorName,
@@ -222,7 +237,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
             thumbnail: p.thumbnail, media: p.media, kind: p.kind, publishedAt: p.publishedAt, sourceAccount: run.account
           }) : p));
           if (input.details === true) for (const post of input.posts) { try { store.set(`detail:${canonicalPost(post.url).url}`, String(Date.now())); } catch { /* Invalid rows were rejected above. */ } }
-          if (input.details !== true) store.recordDiscoveries(run, input.posts);
+          if (input.details !== true) { store.recordDiscoveries(run, input.posts); listReadSoFar(store, run, input.posts); }
           if (input.detailFailed) {
             const canonical = canonicalPost(input.detailFailed);
             if (canonical.platform !== run.platform) throw new HttpError(400, 'Wrong detail source.');
@@ -256,6 +271,78 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if(localMode && unsaveAck && req.method==='POST'){await body(req);return json(res,unsaves.acknowledge(unsaveAck[1]));}
         const unsavePost = path.match(/^\/api\/posts\/(\d+)\/unsave(?:\/(prepare))?$/);
         if(localMode && unsavePost && req.method==='POST') {const input=await body(req);return json(res,unsavePost[2]?unsaves.prepare(Number(unsavePost[1])):unsaves.confirm(Number(unsavePost[1]),input));}
+        if (localMode && path === '/api/ai-search') {
+          if (req.method === 'GET') { const id = Number(new URL(req.url, appOrigin).searchParams.get('job')); return json(res, id ? { job: aiSearch.job(id) } : aiSearch.summary()); }
+          if (req.method === 'DELETE') { aiSearch.cancel(); return json(res, {}); }
+          if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+          const input = await body(req);
+          if (typeof input.query !== 'string' || input.query.trim().length < 3 || input.query.length > 500) throw new HttpError(400, 'Enter a search of at least 3 characters.');
+          if (input.postIds !== undefined && !(Array.isArray(input.postIds) && input.postIds.every(Number.isInteger))) throw new HttpError(400, 'Invalid posts.');
+          const list = value => (Array.isArray(value) && value.every(Number.isInteger) ? value : []);
+          try { return json(res, { job: aiSearch.start(input.query.trim(), input.postIds, list(input.nudged)) }); } catch (error) { throw new HttpError(409, error.message); }
+        }
+        if (localMode && path === '/api/organize') {
+          if (req.method === 'GET') return json(res, { job: organize.current() });
+          if (req.method === 'DELETE') return json(res, { job: organize.cancel() });
+          if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+          const input = await body(req);
+          if (typeof input.request !== 'string' || input.request.trim().length < 3 || input.request.length > 500) throw new HttpError(400, 'Say what should change, in up to 500 characters.');
+          return json(res, { job: organize.start(input.request.trim()) });
+        }
+        if (localMode && path === '/api/organize/undo' && req.method === 'POST') {
+          const input = await body(req);
+          if (typeof input.changeId !== 'string') throw new HttpError(400, 'Invalid change.');
+          return json(res, organize.undo(input.changeId));
+        }
+        if (localMode && path === '/api/note-ai' && req.method === 'GET') return json(res, { job: noteAi.current() });
+        if (localMode && path === '/api/note-ai/models' && req.method === 'GET') return json(res, { models: await aiSearch.noteModels() });
+        if (localMode && path === '/api/note-ai' && req.method === 'DELETE') return json(res, { job: noteAi.cancel() });
+        if (localMode && path === '/api/note-ai' && req.method === 'POST') {
+          const input = await body(req);
+          if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
+          // Only a model on the list, and the default when none is chosen.
+          const models = await aiSearch.noteModels(), model = input.model ? models.find(item => item.id === input.model) : null;
+          if (input.model && !model) throw new HttpError(400, 'That model isn’t available.');
+          return json(res, { job: noteAi.start(input.post, input.request, model) });
+        }
+        if (localMode && path === '/api/ai-search/scan' && req.method === 'DELETE') {
+          const input = await body(req);
+          if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
+          try { aiSearch.clearOne(input.post); return json(res, { cleared: true }); } catch (error) { throw new HttpError(409, error.message); }
+        }
+        if (localMode && path === '/api/ai-search/scan' && req.method === 'POST') {
+          const input = await body(req);
+          if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
+          try { return json(res, await aiSearch.scanOne(input.post)); } catch (error) { throw new HttpError(409, error.message); }
+        }
+        if (localMode && path === '/api/ai-search/images' && req.method === 'POST') {
+          const input = await body(req);
+          try { return json(res, { job: aiSearch.answer(Number(input.job), input.approve === true) }); } catch (error) { throw new HttpError(409, error.message); }
+        }
+        if (localMode && path === '/api/ai-search/key') {
+          const input = await body(req);
+          try { if (req.method === 'POST') await aiSearch.saveKey(String(input.tool), input.key); else if (req.method === 'DELETE') aiSearch.removeKey(String(input.tool)); else throw new HttpError(405, 'Method not allowed.'); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(409, error.message); }
+          return json(res, await aiSearch.tools());
+        }
+        if (localMode && path === '/api/ai-search/tools') {
+          if (req.method === 'POST') { const input = await body(req); try { if (input.action) aiSearch.act(String(input.tool), String(input.action)); else aiSearch.choose(typeof input.tool === 'string' ? input.tool : ''); } catch (error) { throw new HttpError(400, error.message); } }
+          else if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+          return json(res, await aiSearch.tools());
+        }
+        if (path === '/api/meaning') {
+          if (req.method === 'POST') meaning.download();
+          else if (req.method === 'DELETE') await meaning.remove();
+          else if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+          return json(res, meaning.status());
+        }
+        if (localMode && path === '/api/image-recovery') {
+          if (req.method === 'POST') {
+            const { enabled } = await body(req);
+            if (typeof enabled !== 'boolean') throw new HttpError(400, 'Choose whether to recover images.');
+            store.set('image_recovery', String(enabled));
+          }
+          return json(res, { enabled: store.get('image_recovery') !== 'false' });
+        }
         if (path === '/api/mcp' && req.method === 'GET') return json(res, mcp.status());
         if (path === '/api/mcp' && req.method === 'POST') return json(res, await mcp.setEnabled((await body(req)).enabled));
         if (path === '/api/topics' && req.method === 'GET') return json(res, { topics: topicCatalog(store.db) });
@@ -271,10 +358,10 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const input = await body(req); store.set('name', text(input.name, 50) || 'My saves');
           return json(res, { name: store.get('name') });
         }
-        if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, {...sync.status(),unsave:unsaves.status(),unsaveDiagnostics:unsaves.diagnostics()});
+        if (localMode && path === '/api/sync' && req.method === 'GET') return json(res, {...sync.presented(),unsave:unsaves.status(),unsaveDiagnostics:unsaves.diagnostics()});
         if (localMode && path === '/api/sync/setup' && req.method === 'POST') return json(res, sync.requestSetup((await body(req)).kind));
         if (localMode && path === '/api/sync/accounts' && req.method === 'POST') return json(res, sync.requestAccountScan());
-        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId, input.pinterestAccount, input.pinterestCollectionId) }); }
+        if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId, input.pinterestAccount, input.pinterestCollectionId, input.quiet === true) }); }
         if (localMode && path === '/api/sync/stop' && req.method === 'POST') { return json(res, { job: sync.cancel() }); }
         if (path === '/api/instagram-save-list' && req.method === 'POST') return json(res, { instagramSaveLists: setInstagramSaveList(store, await body(req)) });
         if (path === '/api/posts' && req.method === 'GET') {
@@ -310,6 +397,16 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed.');
       if(noteLinkAssets.has(path)){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8'});res.end(req.method==='HEAD'?undefined:noteLinkAssets.get(path));return;}
+      if (path.startsWith('/meaning-files/')) {
+        let name; try { name = decodeURIComponent(path.slice('/meaning-files/'.length)); } catch { throw new HttpError(400, 'Invalid path.'); }
+        const download = meaning.file(name);
+        if (!download) throw new HttpError(404, 'File not found.');
+        res.writeHead(200, { 'Content-Type': MIME[extname(name)] || 'application/octet-stream', 'Content-Length': download.size });
+        if (req.method === 'HEAD') return res.end();
+        return download.stream().pipe(res);
+      }
+      // Only this background worker may run the search engine's WebAssembly. The library page itself can't.
+      if (path === '/meaning-worker.js') res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; base-uri 'none'");
       let file;
       try { file = resolve(publicDir, `.${decodeURIComponent(path === '/' ? '/index.html' : path)}`); } catch { throw new HttpError(400, 'Invalid path.'); }
       if (!file.startsWith(`${publicDir}${sep}`)) throw new HttpError(403, 'Forbidden.');
@@ -323,6 +420,8 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
     }
   });
   server.on('listening', () => { preview.start(); images.schedule(); });
-  server.on('close', () => { preview.close(); images.close(); void mcp.close(); });
+  const pinGifs = checkPinterestGifs ? pinterestGifs({ store, onError: error => console.error(`Pinterest GIF check: ${error.message}`) }) : null;
+  void pinGifs?.start();
+  server.on('close', () => { preview.close(); images.close(); meaning.close(); aiSearch.close(); noteAi.close(); void pinGifs?.close(); void mcp.close(); });
   return { server, store, setupCode, mcp, sync, unsaves, images };
 }

@@ -87,10 +87,11 @@ export function dateBounds(filters, now = new Date()) {
   }
 }
 
-export function applyFilters(posts, filters = defaultFilters(), { query = '', now = new Date(), topicScope = name => [name] } = {}) {
+export function applyFilters(posts, filters = defaultFilters(), { query = '', now = new Date(), topicScope = name => [name], meaning = null } = {}) {
   const bounds = dateBounds(filters, now);
   if (bounds.error) return [];
   const term = query.trim().toLowerCase();
+  const hasWords = p => [p.text, p.title, p.bookmarkTitle, p.author, p.authorName, p.notes, p.imageDescription, p.url, ...(p.tags || []), ...(p.topics || []), ...(p.accounts || []), ...(p.folders || [])].join(' ').toLowerCase().includes(term);
   const result = posts.filter(p => {
     if (filters.sources.length && !filters.sources.includes(p.platform)) return false;
     if (filters.topics.length && !filters.topics.flatMap(topicScope).some(t => (p.topics || []).includes(t))) return false;
@@ -103,14 +104,19 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
       const timestamp = Date.parse(libraryAddedAt(p));
       if (!Number.isFinite(timestamp) || (bounds.from && timestamp < +bounds.from) || (bounds.to && timestamp >= +bounds.to)) return false;
     }
-    if (term && ![p.text, p.title, p.bookmarkTitle, p.author, p.authorName, p.notes, p.url, ...(p.tags || []), ...(p.topics || []), ...(p.accounts || []), ...(p.folders || [])].join(' ').toLowerCase().includes(term)) return false;
+    if (term && !hasWords(p) && !meaning?.has(p.id)) return false;
     return true;
   });
-  return orderLibraryPosts(result, filters, +now);
+  const ordered = orderLibraryPosts(result, filters, +now);
+  if (!term || !meaning?.size) return ordered;
+  // Most likely first: posts with the words and an AI's pick, then the rest with the words, then the AI's other picks.
+  // Posts that tie keep the list's usual order, latest first.
+  const likelihood = p => (hasWords(p) ? 1000 : 0) + (meaning.get(p.id) || 0);
+  return ordered.map(p => [likelihood(p), p]).sort((a, b) => b[0] - a[0]).map(([, p]) => p);
 }
 
 const SOURCE_NAMES = { x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', chrome: 'Chrome' };
-export function filterChips(filters, { collectionName = () => '', collectionPlatform = () => 'instagram' } = {}) {
+export function filterChips(filters, { collectionName = () => '', collectionPlatform = () => 'instagram', collectionAccount = () => '' } = {}) {
   const chips = [], folderKind = platform => platform === 'pinterest' ? 'Pinterest board' : 'Instagram collection';
   if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Date added' });
   if (filters.sources.length && !filters.accounts.length) chips.push({ key: 'sources', label: filters.sources.map(s => SOURCE_NAMES[s]).join(' + ') });
@@ -120,7 +126,15 @@ export function filterChips(filters, { collectionName = () => '', collectionPlat
     const label = handle === '*' ? source : handle || 'Unassigned';
     chips.push({ key: `account:${value}`, label, platform, title: `${source} ${label}`, removeLabel: `Remove ${source} ${label} filter` });
   }
-  for (const id of filters.collections || []) { const kind = folderKind(collectionPlatform(id)); chips.push({ key: `collection:${id}`, label: collectionName(id) || kind, platform: collectionPlatform(id), title: kind, removeLabel: `Remove ${collectionName(id) || kind} filter` }); }
+  for (const id of filters.collections || []) {
+    const kind = folderKind(collectionPlatform(id)), chip = { key: `collection:${id}`, label: collectionName(id) || kind, platform: collectionPlatform(id), title: kind, removeLabel: `Remove ${collectionName(id) || kind} filter` };
+    // A collection or board sits right after its own account's pill, joined to it.
+    const owner = `account:${collectionPlatform(id)}:${collectionAccount(id)}`.toLowerCase();
+    let place = chips.findIndex(item => item.key.toLowerCase() === owner);
+    if (place < 0) { chips.push(chip); continue; }
+    while (chips[place + 1]?.linked) place++;
+    chips.splice(place + 1, 0, { ...chip, linked: true });
+  }
   for (const topic of filters.topics) chips.push({ key: `topic:${topic}`, label: topic, icon: 'folder', title: 'Topic', removeLabel: `Remove ${topic} filter` });
   if (filters.folder) chips.push({ key: 'folder', label: filters.folder });
   if (filters.collection) { const kind = folderKind(collectionPlatform(filters.collection)); chips.push({ key: 'collection', label: filters.collectionName || kind, title: kind }); }

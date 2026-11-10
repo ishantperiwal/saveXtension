@@ -120,8 +120,9 @@ test('Settings sections are containers that open and close, and stay as you left
   await expect.poll(() => backup.evaluate(plain)).toBe(true);
   // Every bar is the same height, with its controls centred.
   const mcpBar = page.locator('.settings-panel[data-panel="mcp"] .settings-panel-header');
-  await expect.poll(() => page.locator('.mcp-switch').count()).toBe(1);
-  const bar = await mcpBar.boundingBox(), toggle = await page.locator('.mcp-switch').boundingBox();
+  const mcpSwitch = page.locator('.settings-panel[data-panel="mcp"] .mcp-switch');
+  await expect.poll(() => mcpSwitch.count()).toBe(1);
+  const bar = await mcpBar.boundingBox(), toggle = await mcpSwitch.boundingBox();
   expect(bar.height).toBe((await page.locator('.settings-panel[data-panel="backup"] .settings-panel-header').boundingBox()).height);
   expect(Math.abs(toggle.y + toggle.height / 2 - bar.y - bar.height / 2)).toBeLessThan(1);
   // Keyboard works, and choices survive reopening.

@@ -140,11 +140,11 @@ test('collection-only refresh snapshots exactly one owned collection without cha
   setInstagramSaveList(store,{account:'@me',all:true,collectionIds:[one.id,two.id]});const before=instagramSaveLists(store);
   for(const mode of ['quick','deep']){
    const job=queue.enqueue(['instagram'],'current',mode,'@me',one.id);
-   assert.deepEqual(job.instagramScope,{account:'@me',selections:{'@me':[one.id]}});assert.equal(job.mode,mode);
+   assert.deepEqual(job.instagramScope,{account:'@me',refresh:true,selections:{'@me':[one.id]}});assert.equal(job.mode,mode);
    assert.deepEqual(instagramSaveLists(store),before);assert.equal(queue.claim('old',true,{syncModes:true,instagramCollections:true}),null);queue.cancel();
   }
   for(const id of ['1',0,-1,999999,other.id])assert.throws(()=>queue.enqueue(['instagram'],'current','quick','@me',id),/collection/);
   assert.throws(()=>queue.enqueue(['x','instagram'],'current','quick','@me',one.id),/Instagram only/);
-  assert.deepEqual(queue.enqueue(['instagram'],'current','quick','current',one.id).instagramScope,{account:'@me',selections:{'@me':[one.id]}});
+  assert.deepEqual(queue.enqueue(['instagram'],'current','quick','current',one.id).instagramScope,{account:'@me',refresh:true,selections:{'@me':[one.id]}});
  }finally{store.close();}
 });

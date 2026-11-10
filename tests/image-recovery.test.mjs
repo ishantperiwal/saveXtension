@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +10,7 @@ import { savedImages } from '../server/saved-images.mjs';
 import { imageRecovery } from '../server/image-recovery.mjs';
 import { setInstagramSaveList } from '../server/instagram-save-lists.mjs';
 import { syncQueue } from '../server/sync.mjs';
+import { createApp } from '../server/app.mjs';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]), link = name => `https://scontent.cdninstagram.com/${name}.jpg`;
 const FAST = { delay: 0, gap: 1, jitter: 0, poll: 1, idle: 5, watch: 1 };
@@ -151,6 +154,31 @@ test('a post tried today waits until tomorrow, and a paused or disabled recovery
   await settle(); assert.equal(visits.length, 0);
   off.store.set('image_recovery', 'true');
   await until(() => visits.length === 1, 'turning it back on');
+});
+
+test('turning recovery off stops a visit at once without counting it', async t => {
+  const lib = await library(t, [reel('One')]);
+  let aborted = 0, entered = false;
+  run(t, lib, (save, signal) => { entered = true; return new Promise(resolve => signal.addEventListener('abort', () => { aborted++; resolve({ status: 'missing' }); })); });
+  await until(() => entered, 'the visit');
+  lib.store.set('image_recovery', 'false');
+  await until(() => aborted === 1, 'the visit to stop');
+  assert.equal(lib.store.db.prepare('SELECT recovery_attempts AS n FROM post_images').get().n, 0);
+});
+
+test('the Settings switch saves the choice, and refuses anything but on or off', async t => {
+  const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
+  const { port } = probe.address(); await new Promise(resolve => probe.close(resolve));
+  const origin = `http://localhost:${port}`, app = createApp({ origin }); app.server.listen(port, '127.0.0.1'); await once(app.server, 'listening');
+  t.after(async () => { await app.mcp.close(); app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.store.close(); });
+  const url = `http://127.0.0.1:${port}/api/image-recovery`, set = (body, headers = { Origin: origin }) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  assert.deepEqual(await (await fetch(url)).json(), { enabled: true }, 'on by default');
+  assert.deepEqual(await (await set({ enabled: false })).json(), { enabled: false });
+  assert.equal(app.store.get('image_recovery'), 'false');
+  assert.deepEqual(await (await fetch(url)).json(), { enabled: false });
+  assert.equal((await set({ enabled: 'no' })).status, 400);
+  assert.equal((await set({ enabled: true }, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal(app.store.get('image_recovery'), 'false');
 });
 
 test('a failed visit is reported and recovery carries on, and stopping ends it', async t => {

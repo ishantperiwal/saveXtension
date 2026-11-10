@@ -58,7 +58,7 @@ export function instagramSyncScope(store, account = 'current', collectionId = nu
     if (!Number.isSafeInteger(collectionId) || collectionId < 1) throw new HttpError(400, 'Choose a valid Instagram collection.');
     const collection = store.instagramCollections().find(item => item.id === collectionId && item.platform === 'instagram');
     if (!collection || account !== 'current' && collection.account.toLowerCase() !== account.toLowerCase()) throw new HttpError(400, 'Choose a collection belonging to this Instagram account.');
-    return {account:collection.account,selections:{[collection.account.toLowerCase()]:[collection.id]}};
+    return {account:collection.account,refresh:true,selections:{[collection.account.toLowerCase()]:[collection.id]}};
   }
   const selections = saveListSelections(store, 'instagram');
   return account === 'current' && !Object.keys(selections).length ? null : { account, selections };

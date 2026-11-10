@@ -2,6 +2,7 @@ import { mountCardMotion, holdEmbedMotion } from './motion.js';
 // Keep cards in chronological DOM order and move them without reparenting the
 // embedded players. ResizeObserver handles widgets, notes, and window resizing.
 let active;
+const EVEN_COLUMNS = 12;
 const GAP = 16, MIN_WIDTH = 340;
 // A view switch waits briefly for embeds to redraw at the new width, then moves.
 const MOVE = 380, SETTLE_QUIET = 48, SETTLE_MAX = 160;
@@ -210,12 +211,13 @@ function arrange(state, before, resized = false) {
   state.width = grid.clientWidth;
   // Keep the same column width for sparse archives and filtered results.
   const feed = grid.dataset.view === 'feed';
+  // Notes sit beside the post once they fit at 240px, and grow to 300px when there's room.
   const sideNotes = feed && state.width >= 796;
   const rowGap = feed ? 24 : GAP;
   grid.dataset.sideNotes = String(sideNotes);
   const columns = feed ? 1 : Math.max(1, Math.floor((state.width + GAP) / (MIN_WIDTH + GAP)));
   if (state.columnCount !== columns) { state.columns.clear(); state.columnCount = columns; }
-  const width = feed ? Math.min(state.width, sideNotes ? 796 : 540) : (state.width - (columns - 1) * GAP) / columns;
+  const width = feed ? Math.min(state.width, sideNotes ? 856 : 540) : (state.width - (columns - 1) * GAP) / columns;
   const inset = feed ? (state.width - width) / 2 : 0;
   grid.classList.add('is-masonry');
   // Write all widths before reading heights, avoiding a layout flush per card.
@@ -245,7 +247,12 @@ function arrange(state, before, resized = false) {
       continue;
     }
     let column = state.columns.get(card);
-    if (column === undefined) { column = bottoms.indexOf(Math.min(...bottoms)); state.columns.set(card, column); }
+    if (column === undefined) {
+      // Columns this close count as even, so a tiny difference doesn't send a card to the right.
+      const lowest = Math.min(...bottoms);
+      column = bottoms.findIndex(bottom => bottom - lowest <= EVEN_COLUMNS);
+      state.columns.set(card, column);
+    }
     position(card, `translate(${inset + column * (width + GAP)}px, ${bottoms[column]}px)`);
     bottoms[column] += height + rowGap;
   }

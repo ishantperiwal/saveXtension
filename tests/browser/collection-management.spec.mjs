@@ -29,9 +29,9 @@ test('right-click renames a selected collection and preserves saves, notes and o
   await row(page,names[0]).click();
   const card=page.locator(`.save-card[data-post-id="${post.id}"]`),editor=await card.getByLabel('Note',{exact:true}).elementHandle();
   await row(page,names[0]).click({button:'right'});
-  await expect(page.getByRole('menu',{name:'Collection options'}).getByRole('menuitem')).toHaveText(['Rename','Move into…','Delete']);
+  await expect(page.getByRole('menu',{name:'Topic options'}).getByRole('menuitem')).toHaveText(['Rename','Move into…','Delete']);
   await page.getByRole('menuitem',{name:'Rename',exact:true}).click();
-  const dialog=page.locator('#modal'),input=dialog.getByRole('textbox',{name:'Collection name'});
+  const dialog=page.locator('#modal'),input=dialog.getByRole('textbox',{name:'Topic name'});
   await expect(input).toHaveValue(names[0]);
   await input.fill(names[1]);await dialog.getByRole('button',{name:'Rename',exact:true}).click();
   await expect(dialog.getByRole('alert')).toContainText('already in use');
@@ -57,7 +57,7 @@ test('delete confirms, cancel leaves everything intact, and confirmation untags 
   await dialog.screenshot({path:'test-results/delete-collection-confirmation.png'});
   await dialog.getByRole('button',{name:'Delete',exact:true}).click();await expect(dialog).not.toBeVisible();
   await expect(row(page,names[0])).toHaveCount(0);await expect(page.locator('[data-filter="all"]')).toHaveAttribute('aria-pressed','true');
-  await expect(page.locator('#toast')).toHaveText('Collection deleted');
+  await expect(page.locator('#toast')).toHaveText('Topic deleted');
   const after=(await(await page.request.get('/api/posts?scope=all')).json()).posts;
   for(const original of before){
     const saved=after.find(post=>post.id===original.id);expect(saved).toBeTruthy();expect(saved.topics).toEqual([names[1]]);

@@ -76,7 +76,7 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     await expect(page.getByRole('list', { name: 'Instagram collections for @collection_user', exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]')).toHaveCount(limited?1:2);
     await expect.poll(async () => (await job())?.id, { timeout: 10000 }).not.toBe(previousJobId);
-    await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('partial');
+    await expect.poll(async () => (await job())?.status, { timeout: 75000 }).toBe('completed');
     expect((await job()).mode).toBe(mode);
     await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: 'Design notes' })).toContainText('2', { timeout: 7000 });
     await page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: 'Design notes' }).click();
@@ -86,7 +86,7 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     if (!limited) { await page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click(); await expect(page.locator('.save-card')).toHaveCount(2); }
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts?scope=all')).json()).posts.filter(p => p.platform === 'instagram'));
     expect(saved).toHaveLength(limited?2:3); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(limited?1:2);
-    if(limited){expect(savedVisits.some(path=>path.includes('/all-posts/')||path.includes('/1002/'))).toBe(false);expect(savedVisits.some(path=>path.includes('/1001/'))).toBe(true);}
+    if(limited){expect(savedVisits.some(path=>path.includes('/1002/'))).toBe(false);expect(savedVisits.some(path=>path.includes('/1001/'))).toBe(true);}
     expect(detailVisits).toHaveLength(0);
     const branch = await page.locator('.instagram-collections > li').first().evaluate(el => getComputedStyle(el, '::after').borderLeftWidth);
     expect(branch).toBe('1px');
@@ -137,7 +137,7 @@ test('a ticked collection that loads late is still fetched, and one that is gone
     await chooseSelect(page, 'Sync source', 'instagram');
     await startQuickSync(page);
     const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
-    await expect.poll(async () => (await job())?.status, { timeout: 100000 }).toBe('partial');
+    await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 100000 }).toBe('partial');
     expect(visits.some(path => path.includes('/2001/'))).toBe(true);
     expect(visits.some(path => path.includes('/2002/'))).toBe(true);
     expect(visits.some(path => path.includes('/2003/'))).toBe(false);

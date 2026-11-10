@@ -51,6 +51,9 @@ async function runPages(pages, options, batchResponse = {}) {
   let page = 0, listener, finish; const batches = [];
   const finished = new Promise(resolve => { finish = resolve; });
   dom.window.Element.prototype.scrollBy = () => { page = Math.min(page + 1, pages.length - 1); };
+  // jsdom has no layout, so say whether the list has more to scroll. Unless told otherwise, it does.
+  Object.defineProperties(dom.window.Element.prototype, { clientHeight: { get: () => 800 }, scrollHeight: { get: () => options.atEnd ? 800 : 5000 } });
+  if (options.loading) dom.window.document.querySelector('main').innerHTML = '<div role="progressbar"></div>';
   dom.window.SaveXExtractors = {
     pageInfo: () => ({ valid: true, platform, account: '@me' }),
     extract: () => pages[page].map(id => ({ url: platform === 'x' ? `https://x.com/i/status/${id}` : `https://www.instagram.com/p/${id}/` }))
@@ -100,6 +103,19 @@ test('deep scans pass known IDs and discover gaps beyond the old 500-post limit'
   assert.equal(result.status, 'partial'); assert.match(result.message, /removals are not verified/);
 });
 
+for (const platform of ['instagram', 'x']) {
+  const short = platform === 'x' ? ['101', '102'] : ['Known1', 'Known2'];
+  test(`${platform}: a list shorter than the boundary is finished once it reaches its end`, async () => {
+    const { result } = await runPages([short], { platform, mode: 'quick', knownIds: short, atEnd: true });
+    assert.equal(result.status, 'completed'); assert.equal(result.seen, 2); assert.equal(result.message, 'Reached the end of this list.');
+  });
+  test(`${platform}: a list that can still scroll, or is still loading at its end, stays unfinished`, async () => {
+    for (const layout of [{}, { atEnd: true, loading: true }]) {
+      const { result } = await runPages([short], { platform, mode: 'quick', knownIds: short, ...layout });
+      assert.equal(result.status, 'partial', JSON.stringify(layout)); assert.match(result.message, /without more posts loading/);
+    }
+  });
+}
 test('repeated viewport content never becomes a false quick-sync boundary', async () => {
   const { result, batches } = await runPages([['Known', 'New']], { mode: 'quick', knownIds: ['Known'] });
   assert.equal(result.status, 'partial'); assert.equal(result.seen, 2); assert.equal(batches.length, 1);

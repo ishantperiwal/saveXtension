@@ -21,6 +21,29 @@ test('sync defaults to quick; deep scans require an explicit request and a capab
   } finally { store.close(); }
 });
 
+test('a background check stays out of sight unless it finds new saves, and gives way to anything a person starts', () => {
+  const store = new Store(':memory:');
+  try {
+    const queue = syncQueue(store);
+    const finish = (job, status, results) => store.db.prepare('UPDATE sync_jobs SET status=?,results=? WHERE id=?').run(status, JSON.stringify(results), job.id);
+    const mine = queue.enqueue(['x', 'instagram']); finish(mine, 'partial', []);
+    const check = queue.enqueue(['x'], 'all', 'quick', 'current', null, 'current', null, true);
+    assert.equal(check.quiet, true); assert.equal(queue.status().job.id, check.id);
+    assert.equal(queue.presented().job.id, mine.id, 'hidden while it runs');
+    assert.equal(queue.chosenJob().id, mine.id, 'and it never becomes the scan to repeat');
+    finish(check, 'partial', [{ platform: 'x', imported: 0, status: 'partial', message: 'stalled' }]);
+    assert.equal(queue.presented().job.id, mine.id, 'hidden when it found nothing, even with a problem');
+    finish(check, 'partial', [{ platform: 'x', imported: 2, status: 'partial' }, { platform: 'instagram', imported: 0, status: 'completed' }]);
+    const shown = queue.presented().job;
+    assert.equal(shown.id, check.id); assert.equal(shown.status, 'completed'); assert.deepEqual(shown.targets, ['x']); assert.deepEqual(shown.results.map(result => result.platform), ['x']);
+    const again = queue.enqueue(['x'], 'all', 'quick', 'current', null, 'current', null, true);
+    queue.giveWay();
+    assert.equal(queue.status().job.id, again.id); assert.equal(queue.status().job.status, 'cancelled');
+    const person = queue.enqueue(['x']); queue.giveWay();
+    assert.equal(queue.status().job.id, person.id); assert.equal(queue.status().job.status, 'queued', 'a scan someone asked for is left alone');
+  } finally { store.close(); }
+});
+
 test('discovery markers are scoped by source account and survive archive, but not deletion', () => {
   const store = new Store(':memory:');
   try {

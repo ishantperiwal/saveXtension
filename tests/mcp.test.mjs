@@ -224,6 +224,54 @@ test('advertised tool schemas leave out generated regexes, while the server stil
   }
   assert.equal((await client.callTool({name:'update_topic',arguments:{topicId:'not-a-uuid'}})).isError,true);
 });
+test('MCP clears image descriptions, only for saves it can see, and can undo it',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([
+      {url:'https://www.instagram.com/reel/Shown/',text:'visible reel',sourceAccount:'@one',collections:[{account:'@one',name:'Ideas',url:'https://www.instagram.com/one/saved/ideas/1/'}]},
+      {url:'https://www.instagram.com/reel/Unseen/',text:'hidden reel',sourceAccount:'@one',collections:[{account:'@one',name:'Private',url:'https://www.instagram.com/one/saved/private/2/'}]},
+      {url:'https://x.com/alice/status/123456',text:'bookmark',sourceAccount:'@one'},
+      {url:'https://x.com/alice/status/654321',text:'never described',sourceAccount:'@one'}
+    ]);
+    const posts=store.posts({scope:'all'}),find=part=>posts.find(p=>p.url.includes(part)),shown=find('Shown'),unseen=find('Unseen'),tweet=find('123456'),plain=find('654321');
+    for(const post of [shown,unseen,tweet])store.setImageDescription(post.id,`seen ${post.id}`,'Haiku 5.5');
+    setInstagramSaveList(store,{account:'@one',collectionIds:[store.instagramCollections().find(c=>c.name==='Ideas').id]});
+    const api=mcpLibrary(store),edited=store.post(tweet.id).updatedAt;
+    assert.throws(()=>api.topics.clearDescriptions({}),/either/);
+    assert.throws(()=>api.topics.clearDescriptions({postIds:[tweet.id],all:true}),/either/);
+    assert.throws(()=>api.topics.clearDescriptions({postIds:[unseen.id]}),/unavailable/);
+    assert.deepEqual(api.topics.clearDescriptions({postIds:[plain.id]}),{cleared:0,changeId:null});
+    const one=api.topics.clearDescriptions({postIds:[tweet.id]});
+    assert.equal(one.cleared,1);assert.equal(store.post(tweet.id).imageDescription,'');assert.equal(store.post(shown.id).imageDescription,`seen ${shown.id}`);
+    assert.equal(store.post(tweet.id).updatedAt,edited);
+    api.topics.undo(one.changeId);
+    assert.equal(store.post(tweet.id).imageDescription,`seen ${tweet.id}`);assert.equal(store.post(tweet.id).imageDescriptionModel,'Haiku 5.5');
+    const every=api.topics.clearDescriptions({all:true});
+    assert.equal(every.cleared,2);assert.equal(store.post(shown.id).imageDescription,'');assert.equal(store.post(unseen.id).imageDescription,`seen ${unseen.id}`);
+    // A newer description isn't overwritten by undo, and a later topic edit doesn't block it.
+    store.setImageDescription(shown.id,'read again','Haiku 5.5');
+    assert.throws(()=>api.topics.undo(every.changeId),/changed again/);
+    store.setImageDescription(shown.id,'','');
+    const {topic}=api.topics.create({name:'Later'});api.topics.assign({postIds:[tweet.id],topicIds:[topic.id]});
+    api.topics.undo(every.changeId);
+    assert.equal(store.post(tweet.id).imageDescription,`seen ${tweet.id}`);assert.equal(store.post(shown.id).imageDescription,`seen ${shown.id}`);
+    assert.deepEqual(store.post(tweet.id).topics,['Later']);
+  } finally { store.close(); }
+});
+test('the app lists every topic that exists, and MCP leaves out only one whose saves it can\'t see',()=>{
+  const store=new Store(':memory:');
+  try {
+    store.importPosts([{url:'https://x.com/alice/status/1',text:'hidden from MCP',sourceAccount:'@one'}]);
+    const [post]=store.posts({scope:'all'}),app=new TopicLibrary(store),limited=new TopicLibrary(store,{hidden:()=>[post.id]});
+    const {topic:withHidden}=app.create({name:'Only hidden saves'}),{topic:empty}=app.create({name:'No saves'});
+    app.assign({postIds:[post.id],topicIds:[withHidden.id],mode:'add'});
+    store.db.prepare('UPDATE topics SET managed=0').run();
+    const names=library=>library.catalog().map(item=>item.name).sort();
+    assert.deepEqual(names(app),['No saves','Only hidden saves']);
+    assert.deepEqual(names(limited),['No saves']);
+    assert.equal(limited.catalog().find(item=>item.id===empty.id).count,0);
+  } finally { store.close(); }
+});
 test('get_save_by_url resolves creator-first Instagram links without reaching deselected saves',async t=>{
   const app=await serve(t);
   app.store.importPosts([
