@@ -56,7 +56,8 @@ test('Instagram, X and Pinterest posts slide in as a panel that must be dismisse
       if (site === 'Instagram') await page.screenshot({ path: 'test-results/post-panel.png' });
       if (site === 'Instagram') await panel.locator('.post-panel-close').click();
       else if (site === 'X') await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }));
-      else await page.mouse.click(40, 300);
+      // The top corner, because on a small screen the note box can reach the left side of the window.
+      else await page.mouse.click(4, 4);
       await expect(panel, `${site} is dismissed`).toBeHidden();
       await expect.poll(posts, { message: 'dismissing closes the post' }).toEqual([]);
     }
