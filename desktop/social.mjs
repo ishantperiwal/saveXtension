@@ -694,7 +694,8 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
   }
   const recovery = imageRecovery({
     store: library.store, images: library.images, visit: recoverPost, onError, labels: true,
-    blocked: () => closed || powerMonitor.getSystemIdleTime() >= 5 * 60 || logins.size > 0 || ['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy(),
+    // Test runs set their own timing, and a build machine's keyboard is always idle, so they don't wait for someone to be at the computer.
+    blocked: () => closed || !process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS && powerMonitor.getSystemIdleTime() >= 5 * 60 || logins.size > 0 || ['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy(),
     ...(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS ? { delay: Number(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS), gap: 200, jitter: 0, poll: 200, idle: 200 } : {})
   });
   async function connect({ platform, id, expectedHandle } = {}) {

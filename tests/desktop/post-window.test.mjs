@@ -47,7 +47,9 @@ test('Instagram, X and Pinterest posts slide in as a panel that must be dismisse
       const { content } = await open();
       // The panel leaves room on its left for the note box, so on a small screen it's narrower than it would choose.
       const room = content.width - (content.width <= 860 ? 232 : 372) - 16;
-      assert.equal(body.width, Math.min(site === 'Pinterest' ? 860 : 640, room), 'reels and X get a wide column, and Pinterest a wider one');
+      // A scrollbar that takes up room, as on Windows, can make it a little narrower still.
+      const wanted = Math.min(site === 'Pinterest' ? 860 : 640, room);
+      assert(body.width <= wanted && body.width >= wanted - 24, `reels and X get a wide column, and Pinterest a wider one: ${body.width} for ${wanted}`);
       assert(body.x + body.width <= content.width && body.x + body.width >= content.width - 40, `sits against the right edge: ${JSON.stringify({ body, content })}`);
       // Everything behind the panel is unreachable until it is dismissed.
       assert.equal(await page.evaluate(() => { const sidebar = document.querySelector('[data-action="settings"]'); const { x, y, width, height } = sidebar.getBoundingClientRect(); return document.elementFromPoint(x + width / 2, y + height / 2)?.id; }), 'post-panel');
@@ -70,7 +72,7 @@ test('Instagram, X and Pinterest posts slide in as a panel that must be dismisse
     const drag = async (edge, by) => { const box = await panel.locator(`.post-panel-edge[data-edge="${edge}"]`).boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2; await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + by, y, { steps: 4 }); await page.mouse.up(); };
     await drag('left', -100);
     await expect(panel).toBeVisible();
-    assert.equal((await viewBox()).width, narrow.width + 100, 'dragging the left edge outward widens it');
+    { const wider = (await viewBox()).width; assert.equal(wider, narrow.width + 100, `dragging the left edge outward widens it: ${JSON.stringify({ narrow: narrow.width, wider })}`); }
     await expect.poll(async () => (await open()).bounds, { message: 'the post follows the edge' }).toEqual(await viewBox());
     await drag('right', -40);
     assert.equal((await viewBox()).width, narrow.width + 60, 'dragging the right edge inward narrows it');
