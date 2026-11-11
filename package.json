@@ -25,7 +25,7 @@
     "desktop:mac": "electron-builder --config electron-builder.config.cjs --mac dmg --arm64",
     "predesktop:win": "node scripts/prepare-desktop.mjs",
     "desktop:win": "electron-builder --config electron-builder.config.cjs --win nsis --x64",
-    "test:desktop": "node --test tests/desktop/*.test.mjs",
+    "test:desktop": "node --test --test-concurrency=1 tests/desktop/*.test.mjs",
     "desktop:verify": "node scripts/verify-packaged.mjs"
   },
   "devDependencies": {

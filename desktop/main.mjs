@@ -46,7 +46,8 @@ async function log(error) {
 
 async function start() {
   library = await startDesktopLibrary({
-    keyVault: safeStorage.isEncryptionAvailable() ? { encrypt: text => safeStorage.encryptString(text), decrypt: bytes => safeStorage.decryptString(bytes) } : null,
+    // The keychain is only touched when a key is saved or used, never at launch, because on a Mac asking it can wait on a prompt.
+    keyVault: { encrypt: text => { if (!safeStorage.isEncryptionAvailable()) throw new Error('This computer can\'t keep an API key safely.'); return safeStorage.encryptString(text); }, decrypt: bytes => safeStorage.decryptString(bytes) },
     dataDir: userData, helperSource: app.isPackaged ? join(process.resourcesPath, 'extension') : join(root, 'extension'),
     legacyOrigin: process.env.SAVEX_DESKTOP_LEGACY_ORIGIN || 'http://localhost:3210',
     legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
