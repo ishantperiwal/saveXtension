@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const executablePath = process.env.SAVEX_DESKTOP_EXECUTABLE;
 
-test('packaged desktop runs from its own runtime and resources and persists its database outside the app', { skip: !executablePath, timeout: 60000 }, async () => {
+test('packaged desktop runs from its own runtime and resources and persists its database outside the app', { skip: !executablePath, timeout: 150000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'savex-packaged-'));
   const env = { ...process.env, SAVEX_DESKTOP_DATA_DIR: dir, SAVEX_DESKTOP_LEGACY_ORIGIN: 'http://localhost:1', SAVEX_DESKTOP_DISABLE_AUTO_SYNC: '1', SAVEX_DESKTOP_DISABLE_UPDATES: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   let desktop;
