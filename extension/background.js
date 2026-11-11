@@ -405,7 +405,8 @@ async function enrich() {
   let run = await get('syncState'), job = await get('job');
   if (!run || !job) return;
   // Collection passes record membership and list metadata; don't multiply detail visits by folder count.
-  if ((run.collectionId || run.gate) && !job.detailPosts) { job.detailPosts = []; job.detailsRemaining = 0; await chrome.storage.local.set({ job }); }
+  // The All posts or All pins check still visits its new saves, because the collections after it never do.
+  if (run.collectionId && !job.detailPosts) { job.detailPosts = []; job.detailsRemaining = 0; await chrome.storage.local.set({ job }); }
   if (!job.detailPosts) { const data = await request(`/details?platform=${run.platform}&account=${encodeURIComponent(run.account || '')}&runId=${run.runId}`); job.detailPosts = data.posts; job.detailsRemaining = data.remaining; await chrome.storage.local.set({ job }); }
   const posts = job.detailPosts; let missed = 0;
   await setRun({ ...run, stage: 'enriching' });
