@@ -65,7 +65,7 @@ test('a signed-out tool says how to fix it, and one bad batch doesn\'t lose the 
 
 test('install and sign-in run only for listed tools, one at a time, and report failure', async () => {
   const calls = []; let finish, fail, installed = false;
-  const search = aiSearch({ store: settings(), visiblePosts: () => [], find: file => (file === 'claude' && installed ? '/fake/claude' : ''), isSignedIn: async () => false, act: (tool, kind) => { calls.push([tool.id, kind]); return new Promise((resolve, reject) => { finish = resolve; fail = reject; }); } });
+  const search = aiSearch({ store: settings(), visiblePosts: () => [], find: file => (/^claude(\.exe)?$/.test(file) && installed ? '/fake/claude' : ''), isSignedIn: async () => false, act: (tool, kind) => { calls.push([tool.id, kind]); return new Promise((resolve, reject) => { finish = resolve; fail = reject; }); } });
   let listing = await search.tools();
   assert.equal(listing.tools.find(tool => tool.id === 'claude').installed, false);
   assert.throws(() => search.act('something-else', 'install')); assert.throws(() => search.act('claude', 'rm -rf')); assert.throws(() => search.act('claude', 'login'));
