@@ -18,7 +18,8 @@ function fakeCdn(entries = {}) {
   const live = new Map(Object.entries(entries)), calls = [];
   return { live, calls, download: async url => { calls.push(url); if (!live.has(url)) throw new Error('Website did not provide a preview.'); return { url, type: 'image/jpeg', bytes: JPEG, ...live.get(url) }; } };
 }
-async function folder(t) { const dir = await mkdtemp(join(tmpdir(), 'savex-images-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
+// Windows keeps a database file locked until it's closed, and this can run first, so a leftover temp folder there is fine.
+async function folder(t) { const dir = await mkdtemp(join(tmpdir(), 'savex-images-')); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})); return dir; }
 async function library(t, cdn) {
   const store = new Store(':memory:'), dir = await folder(t), images = savedImages(store, { dir, download: cdn.download });
   store.onPostsImported = images.schedule; store.onPostDelete = images.forget;

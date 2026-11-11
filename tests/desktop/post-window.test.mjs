@@ -44,8 +44,10 @@ test('Instagram, X and Pinterest posts slide in as a panel that must be dismisse
       assert.equal((await open()).windows, 1, 'no separate pop-up window');
       const body = await panel.locator('.post-panel-view').evaluate(el => { const { x, y, width, height } = el.getBoundingClientRect(); return { x, y, width, height }; });
       await expect.poll(async () => (await open()).bounds, { message: 'the view follows the panel into place' }).toEqual({ x: Math.round(body.x), y: Math.round(body.y), width: Math.round(body.width), height: Math.round(body.height) });
-      assert.equal(body.width, site === 'Pinterest' ? 860 : 640, 'reels and X get a wide column, and Pinterest a wider one');
       const { content } = await open();
+      // The panel leaves room on its left for the note box, so on a small screen it's narrower than it would choose.
+      const room = content.width - (content.width <= 860 ? 232 : 372) - 16;
+      assert.equal(body.width, Math.min(site === 'Pinterest' ? 860 : 640, room), 'reels and X get a wide column, and Pinterest a wider one');
       assert(body.x + body.width <= content.width && body.x + body.width >= content.width - 40, `sits against the right edge: ${JSON.stringify({ body, content })}`);
       // Everything behind the panel is unreachable until it is dismissed.
       assert.equal(await page.evaluate(() => { const sidebar = document.querySelector('[data-action="settings"]'); const { x, y, width, height } = sidebar.getBoundingClientRect(); return document.elementFromPoint(x + width / 2, y + height / 2)?.id; }), 'post-panel');

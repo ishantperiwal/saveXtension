@@ -70,7 +70,8 @@ test('install and sign-in run only for listed tools, one at a time, and report f
   assert.equal(listing.tools.find(tool => tool.id === 'claude').installed, false);
   assert.throws(() => search.act('something-else', 'install')); assert.throws(() => search.act('claude', 'rm -rf')); assert.throws(() => search.act('claude', 'login'));
   search.act('claude', 'install');
-  assert.throws(() => search.act('codex', 'install'), /Still working/);
+  // Codex has no Windows install, so a second Claude install stands in for any other action.
+  assert.throws(() => search.act('claude', 'install'), /Still working/);
   await new Promise(resolve => setTimeout(resolve, 2));
   assert.deepEqual(calls, [['claude', 'install']]);
   assert.equal((await search.tools()).tools.find(tool => tool.id === 'claude').busy, 'install');
