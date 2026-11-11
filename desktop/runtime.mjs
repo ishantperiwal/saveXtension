@@ -191,7 +191,8 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
   let instance, origin;
   for (let offset = 0; offset < 20; offset++) {
     origin = `http://localhost:${initialPort + offset}`;
-    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), meaningDir: join(dataDir, 'meaning-search'), origin, localMode: true, nativeTransport, checkPinterestGifs: true, keyVault, aiKeysFile: join(dataDir, 'ai-keys.json') });
+    // Test runs start from an empty folder each time, so they leave out search by meaning instead of downloading it every launch.
+    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), meaningDir: process.env.SAVEX_DESKTOP_NO_SEARCH_MODEL ? undefined : join(dataDir, 'meaning-search'), origin, localMode: true, nativeTransport, checkPinterestGifs: true, keyVault, aiKeysFile: join(dataDir, 'ai-keys.json') });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(initialPort + offset, '127.0.0.1', resolve); });
       break;

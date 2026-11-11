@@ -12,6 +12,9 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The desktop tests each start a new library, and shouldn't download the 51 MB search model every time.
+    env:
+      SAVEX_DESKTOP_NO_SEARCH_MODEL: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
