@@ -4,7 +4,8 @@ export function closeAccountMenu(restoreFocus = false) {
   const { menu, trigger } = current; current = null; menu.remove();
   if (restoreFocus && trigger.isConnected) trigger.focus({ preventScroll: true });
 }
-export function openAccountMenu(trigger, items, point, label = 'Account options') {
+// host is where the menu goes: inside a modal dialog, so it shows above the page rather than behind it.
+export function openAccountMenu(trigger, items, point, label = 'Account options', host = document.body) {
   closeAccountMenu();
   const menu = document.createElement('div'); menu.className = 'select-menu account-menu';
   menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', label);
@@ -15,7 +16,7 @@ export function openAccountMenu(trigger, items, point, label = 'Account options'
     button.onclick = () => { closeAccountMenu(); item.run(); };
     menu.append(button);
   }
-  document.body.append(menu); current = { menu, trigger };
+  host.append(menu); current = { menu, trigger };
   const rect = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(8, Math.min(point?.x ?? rect.left, innerWidth - box.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(point?.y ?? rect.bottom, innerHeight - box.height - 8))}px`;

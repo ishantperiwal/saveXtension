@@ -76,9 +76,11 @@ export function importTopicCatalog(db, inputs) {
   } catch(e) { db.exec('ROLLBACK'); throw e; }
 }
 // Snapshot only organization fields and AI-written image descriptions. Source content, sessions and sync credentials never enter the journal.
-function snapshot(db, noteIds, descriptionIds = []) {
+// A document's entry holds its name and text, and is missing when the document doesn't exist.
+function snapshot(db, noteIds, descriptionIds = [], documentIds = []) {
   const described = new Set(descriptionIds);
   const map = new Map();
+  for (const id of documentIds) { const d = db.prepare('SELECT id,title,description,body,created_at FROM documents WHERE id=?').get(id); if (d) map.set(`document:${id}`, { ...d }); }
   for (const t of db.prepare('SELECT * FROM topics ORDER BY id').all()) map.set(`topic:${t.id}`, t);
   for (const a of db.prepare('SELECT * FROM topic_aliases ORDER BY name_key').all()) map.set(`alias:${a.name_key}`, a);
   const memberships = new Map();
@@ -121,11 +123,12 @@ export class TopicLibrary {
   batch(action, apply) {
     return this.change(action, () => { this.batching = true; try { return apply(); } finally { this.batching = false; } });
   }
-  change(action, apply, noteIds = [], descriptionIds = []) {
+  // documentIds can name a document that apply creates, as long as the id is known beforehand.
+  change(action, apply, noteIds = [], descriptionIds = [], documentIds = []) {
     if (this.batching) return { ...apply(), changeId: null };
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const before = snapshot(this.db, noteIds, descriptionIds), result = apply(), after = snapshot(this.db, noteIds, descriptionIds);
+      const before = snapshot(this.db, noteIds, descriptionIds, documentIds), result = apply(), after = snapshot(this.db, noteIds, descriptionIds, documentIds);
       const changes = [...new Set([...before.keys(), ...after.keys()])].filter(k => !equal(before.get(k), after.get(k))).map(key => ({ key, before: before.get(key) ?? null, after: after.get(key) ?? null }));
       const changeId = changes.length ? randomUUID() : null;
       if (changeId) {
@@ -286,7 +289,8 @@ export class TopicLibrary {
     const noteOnly = c => c.after?.notes !== undefined && equal({ ...c.before, notes: 0 }, { ...c.after, notes: 0 });
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const current = snapshot(this.db, noteIds, descriptionIds);
+      const documentIds = changes.filter(c => c.key.startsWith('document:')).map(c => c.key.slice(9));
+      const current = snapshot(this.db, noteIds, descriptionIds, documentIds);
       if (changes.some(c => noteOnly(c) ? current.get(c.key)?.notes !== c.after.notes : descriptionOnly(c) ? current.get(c.key)?.imageDescription !== c.after.imageDescription : !equal(current.get(c.key) ?? null, c.after))) throw new HttpError(409, 'These fields changed again. Undo newer changes first.');
       // Restore catalog before memberships; delete newly-created topics last.
       const restored = changes.filter(c => c.key.startsWith('topic:') && c.before);
@@ -311,6 +315,11 @@ export class TopicLibrary {
       for (const c of changes.filter(c => c.key.startsWith('topic:') && !c.before)) {
         if (this.db.prepare('SELECT 1 FROM post_topics WHERE topic_id=? LIMIT 1').get(c.after.id)) throw new HttpError(409, 'This topic has newer memberships. Remove those before undoing its creation.');
         this.db.prepare('DELETE FROM topics WHERE id=?').run(c.after.id);
+      }
+      for (const c of changes.filter(c => c.key.startsWith('document:'))) {
+        if (!c.before) { this.db.prepare('DELETE FROM documents WHERE id=?').run(c.after.id); continue; }
+        const d = c.before, was = this.db.prepare('SELECT updated_at FROM documents WHERE id=?').get(d.id);
+        this.db.prepare('INSERT INTO documents(id,title,description,body,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,body=excluded.body,updated_at=excluded.updated_at').run(d.id, d.title, d.description ?? '', d.body, d.created_at, updatedTime(was?.updated_at));
       }
       const topicChanges = changes.filter(c => c.key.startsWith('topic:'));
       for (const c of topicChanges) this.touchPosts(this.db.prepare('SELECT post_id FROM post_topics WHERE topic_id=?').all(c.before?.id || c.after.id).map(p => p.post_id));

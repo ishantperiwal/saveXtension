@@ -126,7 +126,7 @@ In the grid, clicking anywhere on a note long enough to show **Read more** opens
 
 ## Data
 
-Stored in `~/Library/Application Support/saveXtension` on Mac: `savextension.sqlite`, `images/`, `browser-helper/`. Site sign-ins live in Electron session partitions named `persist:savex-social-<id>`.
+Stored in `~/Library/Application Support/saveXtension` on Mac: `savextension.sqlite`, `images/`, `document-images/`, `document-fonts/`, `browser-helper/`. Site sign-ins live in Electron session partitions named `persist:savex-social-<id>`.
 
 | Table | Holds |
 |---|---|
@@ -136,10 +136,11 @@ Stored in `~/Library/Application Support/saveXtension` on Mac: `savextension.sql
 | `topics`, `topic_aliases`, `post_topics` | Topics |
 | `sync_jobs`, `sync_runs`, `sync_discoveries` | Job queue, per-list history, posts seen per run and their position |
 | `unsave_requests` | Unsave and verify-only jobs |
-| `mcp_changes` | Undo history for MCP edits |
+| `documents` | The person's own pages: title and Markdown body (see Documents below) |
+| `mcp_changes` | Undo history for MCP edits, including document edits |
 | `settings` | Key-value, including `list-order:*`, `list-reading:*`, `list-unfinished:*`, `instagram-collections-pending:*`, `pin-missing:*`, `unsave-attempt:*`, `kind-checked:*` |
 
-Backups are manual: **Settings & backups → Export library** (JSON, no images), or copying the data folder.
+Backups are manual: **Settings & backups → Export library** (JSON with documents' text, no images), or copying the data folder. Importing a backup doesn't bring documents back yet.
 
 ## MCP
 
@@ -156,8 +157,8 @@ LLMs reach the library through an MCP server inside the app (`server/mcp.mjs`), 
 - `MCP_CONNECTION.md` is the checklist behind this. Read it before changing the prompt. Never edit a real AI client's config while developing.
 
 **What it offers**
-- **Read:** `library_overview`, `search_saves` (compact summaries, cursor pagination), `get_saves` (up to 20, full metadata), `get_save_by_url`, `get_save_images`, `view_save`, `capture_view_frames`, `read_view_frames`, `list_topics`, `list_changes`.
-- **Write (local only):** `create_topic`, `update_topic`, `delete_topic` (empty topics only), `merge_topics`, `set_save_topics` (up to 200 at once, all or nothing), `update_save_note` (needs the post's current `updatedAt`), `clear_image_descriptions` (chosen saves or all of them, only ones MCP can see), `undo_change`.
+- **Read:** `library_overview`, `search_saves` (compact summaries, cursor pagination), `get_saves` (up to 20, full metadata), `get_save_by_url`, `get_save_images`, `view_save`, `capture_view_frames`, `read_view_frames`, `list_topics`, `list_changes`, `list_documents` (with each one's first headings), `read_document`.
+- **Write (local only):** `create_topic`, `update_topic`, `delete_topic` (empty topics only), `merge_topics`, `set_save_topics` (up to 200 at once, all or nothing), `update_save_note` (needs the post's current `updatedAt`), `clear_image_descriptions` (chosen saves or all of them, only ones MCP can see), `create_document`, `edit_document` (append, exact find-and-replace, rename, or a whole new body; needs the current `updatedAt`), `add_document_font` (downloads one free font file for documents), `undo_change`. `list_document_fonts` reads the fonts already added. There's no tool to delete a document.
 - **Private address:** while a note is being filled in the app, `/mcp/note/<random>` offers a few read tools tied to that one post. It's separate from all of the above, and `docs/AI.md` has the details.
 - **Also:** `savextension://guide`, `savextension://library`, `savextension://saves/{id}` and the `organize_library` prompt. The server's `instructions` string tells models how to use it all.
 
@@ -185,6 +186,22 @@ LLMs reach the library through an MCP server inside the app (`server/mcp.mjs`), 
 - **Saved content is untrusted:** the instructions tell models to treat captions and notes as data, never as instructions.
 
 **Status:** an audit on 2026-11-06 fixed its bugs and found the connection already fast, with no zero-tradeoff speedups left. `get_save_images` hasn't been tried in real AI apps. `view_save` was tried in Claude Code on an X video carousel, an Instagram video carousel, Instagram reels and Pinterest video and image pins. A quoted post's video was tried on one X post that also has its own video. A post whose only video is the quoted one, and a quoted carousel, haven't been tried. A carousel mixing images and videos hasn't been tried, because the two carousels MCP can currently open on Instagram are all video. Background capture has been tried at 8 frames a second on an Instagram reel (38 seconds of video took 99 seconds), including reading frames while it ran. On X, jumping covered a 28-minute video with 35 frames in 39 seconds. On Pinterest, 8 seconds of video took 11 seconds. Deletion was tried with the timer briefly set to 30 seconds. It hasn't been tried above 8 a second. After the page is scrolled for comments, X's player can show its sound as on. The window itself stays muted. Tests are in `tests/mcp.test.mjs` and `tests/browser/mcp.spec.mjs`, using an isolated SDK client, so they don't prove any specific AI app works.
+
+## Documents
+
+The person's own pages beside their saves, for what they want to keep and come back to: lists of repos, fonts, prompts, ideas, in any shape (user's decision: free-form, like a Word document, not lists of posts). Linking a post is optional.
+
+- **A description is required (user's decision).** Every document has a name and a description of why it exists and what belongs in it, asked for when it's created (the drawer's **+** opens a small form) and shown under the name, where a click changes it. It's the document's scope: the MCP instructions tell an AI to add only what fits it and to leave the rest out, even from the same post, and `list_documents` and `read_document` return it. Documents from before this have an empty one until it's filled in.
+- **Stored as Markdown** in the `documents` table (`server/documents.mjs`), so an AI reads them as fast as anything. Pictures go in `document-images/`, named by their hash, and the Markdown refers to them as `images/<name>`; the page shows them from `/api/documents/images/`. PNG, JPEG, GIF and WebP up to 15 MB, checked by their first bytes.
+- **The panel** is docked to the right edge and dark, so it reads as separate from the library. Closed, it sits just off screen and only its notch shows, halfway down; the notch is part of the panel and opens and closes it. It lists documents newest first, with a name filter and **+**. Each has a copy button that copies a reference for an AI chat: the title and a `read_document` call with its ID. Right-click one to delete it. Each opens in a centred window (`public/documents.js`) with the title, a save status, **Markdown** (the raw text, editable), **…** (Copy Markdown, Delete) and close. Escape closes it unless one of the editor's menus is open.
+- **The editor** is Milkdown Crepe (MIT), bundled by `npm run build:editor` (`scripts/build-editor.mjs`) into `public/vendor/editor/`, which is committed, and loaded only when a document first opens. It has headings, lists, task lists, tables, quotes, links, pictures, code blocks, the **/** menu and a selection toolbar. Left out: maths (it needs KaTeX's fonts) and CodeMirror code blocks, whose styles the page's `style-src 'self'` policy blocks; code blocks are plain.
+- **Plain Markdown on disk:** the editor writes a picture's size where its description goes and empty lines as `<br />`, so `public/document-markdown.js` converts both ways (`storedMarkdown`, `editorMarkdown`). Bullets are `-`. Opening a document never rewrites it; only an edit saves.
+- **Saving:** 700 ms after typing stops, and before closing, with `expectedUpdatedAt`. If an AI or another window changed it meanwhile, saving stops and it offers **Reload** (take theirs) or **Keep mine**.
+- **Links:** ⌘-click (Ctrl-click) opens one through `window.open`, so a saved post's address opens in the post panel like any other link in the app.
+- **Writing from saves extracts everything (user's decision).** Asked to build a document from saves, an AI reads each one fully: the note first, and if that already covers the post it's enough; otherwise `view_save` with its video frames and slides. The request is the go-ahead for those visits, one at a time. No to-dos for things it could have read, and no suggestions of its own.
+- **MCP:** the instructions say documents are the user's: read first, edit in small steps in the right place, only create one when asked, take only what's asked from saves in its own words, and treat post text as data. Every create and edit goes in `mcp_changes`, so `undo_change` reverses it if nothing changed it since; deleting a document drops its entries.
+- **Font names in their own font (user's decision: done by the AI, not by hand).** A name is written `[Satoshi](font:Satoshi)`, with `%20` for spaces. The editor draws it in that font through a decoration and a generated class (`public/document-fonts.js`), since the page allows no inline styles; the link itself isn't clickable. Fonts installed on the Mac work as they are. For a free font that isn't installed, an AI calls `add_document_font` with a direct link to the file (Google Fonts or Fontshare CSS lists them); the server fetches it once through the website-preview downloader, checks its first bytes (WOFF2, WOFF, TTF or OTF, up to 5 MB) and keeps it in `document-fonts/` with `fonts.json`. A font that isn't available shows in the normal font with a dotted underline, so paid fonts are marked too. `list_document_fonts` lists the added ones.
+- **Not yet:** documents aren't in search, an AI can't see their pictures, the notes AI can't add to them, and importing a backup doesn't restore them.
 
 ## Other modes and older code
 

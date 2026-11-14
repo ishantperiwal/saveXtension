@@ -1,0 +1,128 @@
+/* Documents: a dark panel docked to the right edge, set apart from the library. Closed, it sits just off screen and only its notch shows. */
+.documents-edge {
+  --doc-bg: #1f221e; --doc-ink: #eef1ea; --doc-muted: #a3ab9b; --doc-line: #ffffff17; --doc-hover: #ffffff12; --doc-field: #ffffff0d;
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 8; width: min(320px, calc(100vw - 48px));
+  background: var(--doc-bg); color: var(--doc-ink); border-left: 1px solid var(--doc-line);
+  translate: 100% 0; transition: translate 320ms cubic-bezier(.22,.68,.2,1), box-shadow 320ms ease;
+}
+.documents-edge[data-open="true"] { translate: 0 0; box-shadow: -16px 0 48px #1b201b33; }
+:root[data-theme="dark"] .documents-edge { --doc-bg: #0f110f; --doc-line: #ffffff1f; }
+/* The notch belongs to the panel: a rounded bump in the same colour that eases out of its left edge, so it travels with it. */
+.documents-notch { position: absolute; top: 50%; right: calc(100% - 1px); display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 120px; padding: 0 0 0 9px; translate: 0 -50%; border: 0; background: none; color: var(--doc-muted); cursor: pointer; transition: width 260ms cubic-bezier(.22,.68,.2,1), color 180ms ease; }
+.documents-notch-shape { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--doc-bg); filter: drop-shadow(-4px 0 8px #1b201b2e); }
+.documents-notch .icon { position: relative; width: 18px; height: 18px; }
+/* An invisible margin around the bump, so it's easy to hit without looking bigger. */
+.documents-notch::before { content: ''; position: absolute; inset: -12px 0 -12px -20px; }
+.documents-notch:hover, .documents-notch:focus-visible { width: 39px; color: var(--doc-ink); }
+.documents-notch:focus-visible { outline: none; }
+.documents-notch:focus-visible .documents-notch-shape { stroke: var(--selected-border); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+/* Open, the bump flattens into the panel's edge; ✕, Escape or a click outside closes it. */
+.documents-edge[data-open="true"] .documents-notch { width: 0; padding: 0; pointer-events: none; }
+.documents-edge[data-open="true"] .documents-notch .icon { opacity: 0; }
+.documents-edge[data-open="true"] .documents-notch-shape { filter: none; }
+.documents-notch .icon { transition: opacity 140ms ease; }
+.documents-drawer { display: flex; flex-direction: column; gap: 12px; height: 100%; padding: 20px 14px 14px; }
+/* Closed, the list is hidden once the panel has slid away, so nothing in it can be reached or found while it's off screen. */
+.documents-edge[data-open="false"] .documents-drawer { visibility: hidden; transition: visibility 0s 320ms; }
+.documents-drawer-head { display: flex; align-items: center; gap: 2px; padding-left: 6px; }
+.documents-drawer-head h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; }
+.documents-drawer-head .icon-button { color: var(--doc-muted); }
+.documents-drawer-head .icon-button:hover, .documents-drawer-head .icon-button:focus-visible { background: var(--doc-hover); color: var(--doc-ink); }
+.documents-filter { width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--doc-line); border-radius: 12px; background: var(--doc-field); color: var(--doc-ink); font: inherit; }
+.documents-filter::placeholder { color: var(--doc-muted); }
+.documents-edge .documents-filter:focus-visible { outline: 2px solid #ffffff40; outline-offset: 0; background-color: #ffffff17; }
+.documents-list { flex: 1; min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.documents-row { display: flex; align-items: center; gap: 4px; padding-left: 6px; border-radius: 12px; }
+.documents-row:hover, .documents-row:focus-within { background: var(--doc-hover); }
+.documents-copy { display: grid; flex: none; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--doc-line); border-radius: 10px; background: var(--doc-field); color: var(--doc-muted); cursor: pointer; transition: color 140ms ease, background 140ms ease; }
+.documents-copy .icon { width: 15px; height: 15px; }
+.documents-copy:hover, .documents-copy:focus-visible, .documents-copy.is-copied { color: var(--doc-ink); background: #ffffff1f; }
+.documents-copy:focus-visible { outline: 2px solid #ffffff40; outline-offset: 1px; }
+.documents-item { display: flex; flex: 1; min-width: 0; align-items: center; padding: 9px 10px 9px 8px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.documents-item:focus-visible { outline: none; }
+.documents-item-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.documents-item-title { max-width: 100%; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.documents-item-time { color: var(--doc-muted); font-size: 12px; }
+.documents-empty { padding: 10px; color: var(--doc-muted); font-size: 13px; line-height: 1.5; }
+
+#document-view { width: min(880px, calc(100vw - 48px)); max-width: none; height: calc(100dvh - 48px); max-height: none; padding: 0; overflow: hidden; }
+#document-view[open] { display: flex; flex-direction: column; animation: dialog-in 280ms cubic-bezier(.22,.68,.2,1); }
+#document-view[open]::backdrop { animation: dialog-backdrop-in 240ms ease-out; }
+#document-view::backdrop { background: #10130e59; }
+@media (prefers-reduced-motion: reduce) { .documents-edge { transition: none; } #document-view[open], #document-view[open]::backdrop { animation: none; } }
+.document-head { display: flex; align-items: center; gap: 6px; padding: 14px 14px 10px 28px; border-bottom: 1px solid var(--line); }
+.document-name { display: flex; flex: 1; min-width: 0; align-items: center; gap: 4px; }
+.document-name-text { min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font: 600 20px/1.2 var(--sans); text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.document-name [hidden] { display: none; }
+.document-rename { width: 24px; height: 24px; padding: 5px; border-radius: 8px; }
+.document-rename .icon { width: 14px; height: 14px; }
+.document-title { field-sizing: content; min-width: 12ch; max-width: 100%; height: 36px; padding: 0 8px; margin-left: -9px; border: 1px solid var(--selected-border); border-radius: 10px; background: var(--paper); color: var(--ink); font: 600 20px/1.2 var(--sans); outline: none; }
+#document-view .document-title:focus-visible { background-color: var(--paper); }
+.document-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.document-status.error { color: var(--danger); }
+.document-head .secondary { height: 30px; min-height: 0; padding: 0 12px; font-size: 12px; }
+.document-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; }
+.document-loading { padding: 24px 28px; color: var(--muted); }
+.document-raw { display: block; width: 100%; height: 100%; padding: 24px 28px; border: 0; resize: none; background: var(--paper); color: var(--ink); font: 13px/1.65 var(--mono); outline: none; }
+.document-foot { padding: 8px 28px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+/* The editor in the app's own colours and type, in both themes. */
+.document-body .milkdown {
+  --crepe-color-background: var(--paper); --crepe-color-on-background: var(--ink);
+  --crepe-color-surface: var(--surface-soft); --crepe-color-surface-low: var(--chip-bg);
+  --crepe-color-on-surface: var(--ink); --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--rule); --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--badge-bg); --crepe-color-on-secondary: var(--ink);
+  --crepe-color-inverse: var(--ink); --crepe-color-on-inverse: var(--paper);
+  --crepe-color-inline-code: var(--danger); --crepe-color-error: var(--danger);
+  --crepe-color-hover: var(--hover); --crepe-color-selected: var(--selected-bg); --crepe-color-inline-area: var(--chip-bg);
+  --crepe-base-font-size: 15px;
+  --crepe-font-title: var(--sans); --crepe-font-default: var(--sans); --crepe-font-code: var(--mono);
+  --crepe-shadow-1: 0 1px 3px #2830231f, 0 1px 2px #2830230f; --crepe-shadow-2: 0 8px 24px #2830231f, 0 1px 3px #28302314;
+  min-height: 100%;
+  background: var(--paper);
+}
+.document-body .milkdown .ProseMirror { padding: 28px 72px 64px; }
+/* Headings closer to the text size, so a document reads like notes rather than a poster. */
+.document-body .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; letter-spacing: -.01em; }
+.document-body .milkdown .ProseMirror h1 { font-size: 1.75em; line-height: 1.25; margin-top: 24px; }
+.document-body .milkdown .ProseMirror h2 { font-size: 1.4em; line-height: 1.3; margin-top: 22px; }
+.document-body .milkdown .ProseMirror h3 { font-size: 1.2em; line-height: 1.35; margin-top: 18px; }
+.document-body .milkdown .ProseMirror h4 { font-size: 1.05em; line-height: 1.4; margin-top: 14px; }
+.document-body .milkdown .ProseMirror :is(h5, h6) { font-size: 1em; line-height: 1.45; margin-top: 14px; }
+/* A font name shown in its own font ([Satoshi](font:Satoshi)): plain text, a little larger, not a link. */
+.document-body .milkdown .ProseMirror a:has(> .doc-font) { color: inherit; text-decoration: none; cursor: text; }
+.document-body .milkdown .ProseMirror .doc-font { font-size: 1.2em; line-height: 1.2; }
+.document-body .milkdown .ProseMirror .doc-font-missing { font-size: 1em; text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent); text-underline-offset: 3px; }
+.document-body .milkdown .ProseMirror a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.document-body .milkdown .ProseMirror img { max-width: 100%; }
+@media (max-width: 720px) { .document-body .milkdown .ProseMirror { padding: 20px 28px 48px; } .document-head { padding-left: 18px; } }
+.document-body .milkdown .ProseMirror pre { margin: 12px 0; padding: 14px 16px; border-radius: 12px; background: var(--surface-soft); color: var(--ink); font: 13px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.document-body .milkdown .ProseMirror pre code { font: inherit; background: none; padding: 0; color: inherit; }
+
+/* Starting a document: its name and what belongs in it, both required. */
+.documents-new[hidden] { display: none; }
+.documents-new { display: flex; flex-direction: column; gap: 12px; padding: 2px 4px; }
+.documents-new label { display: flex; flex-direction: column; gap: 6px; color: var(--doc-muted); font-size: 12px; font-weight: 500; }
+.documents-edge .documents-new :is(input, textarea) { width: 100%; padding: 9px 11px; border: 1px solid var(--doc-line); border-radius: 12px; background: var(--doc-field); color: var(--doc-ink); font: 14px/1.45 var(--sans); resize: vertical; }
+.documents-edge .documents-new :is(input, textarea)::placeholder { color: color-mix(in srgb, var(--doc-muted) 70%, transparent); }
+.documents-edge .documents-new :is(input, textarea):focus-visible { outline: 2px solid #ffffff40; outline-offset: 0; background-color: #ffffff17; }
+.documents-new-hint { margin: -4px 0 0; color: var(--doc-muted); font-size: 12px; line-height: 1.45; }
+.documents-new-error { margin: 0; color: #f0a49a; font-size: 12px; }
+.documents-new-error[hidden] { display: none; }
+.documents-new-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.documents-new-actions button { height: 32px; padding: 0 14px; border: 1px solid var(--doc-line); border-radius: 10px; background: transparent; color: var(--doc-ink); font: 500 13px var(--sans); cursor: pointer; }
+.documents-new-actions .documents-new-create { border-color: transparent; background: var(--doc-ink); color: var(--doc-bg); }
+.documents-new-actions button:hover { background: var(--doc-hover); }
+.documents-new-actions .documents-new-create:hover { background: color-mix(in srgb, var(--doc-ink) 88%, var(--doc-bg)); }
+.documents-filter[hidden], .documents-list[hidden] { display: none; }
+
+/* What belongs in the document, under its name. */
+.document-about { padding: 0 28px 12px; border-bottom: 1px solid var(--line); }
+.document-head { border-bottom: 0; padding-bottom: 4px; }
+.document-description { max-width: 72ch; margin: 0; padding: 4px 8px; margin-left: -8px; border-radius: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; cursor: text; }
+.document-description:hover, .document-description:focus-visible { background: var(--surface-soft); outline: none; }
+.document-description-empty { font-style: italic; }
+.document-description[hidden], .document-description-field[hidden] { display: none; }
+/* The box grows to fit the whole description, so no line is ever scrolled out of view while editing. */
+#document-view .document-description-field { display: block; field-sizing: content; width: min(72ch, 100%); min-height: calc(1.5em + 10px); margin-left: -9px; padding: 4px 8px; border: 1px solid var(--selected-border); border-radius: 8px; background: var(--paper); color: var(--ink); font: 13px/1.5 var(--sans); resize: none; overflow: hidden; outline: none; }

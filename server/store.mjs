@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cleanPost, cleanCollection, imageUrl, instagramCaption, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
 import { initializeTopics, topicNames, writeTopicNames } from './topics.mjs';
+import { initializeDocuments } from './documents.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
 export const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -88,7 +89,7 @@ export class Store {
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'mode')) this.db.exec("ALTER TABLE sync_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'quick'");
     if (!this.db.prepare('PRAGMA table_info(sync_runs)').all().some(c => c.name === 'collection_id')) this.db.exec('ALTER TABLE sync_runs ADD COLUMN collection_id INTEGER');
     if (!this.db.prepare('PRAGMA table_info(sync_discoveries)').all().some(c => c.name === 'seen_position')) this.db.exec('ALTER TABLE sync_discoveries ADD COLUMN seen_position INTEGER');
-    initializeTopics(this.db);
+    initializeTopics(this.db); initializeDocuments(this.db);
   }
   get(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value; }
   set(key, value) { this.db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)').run(key, value); }

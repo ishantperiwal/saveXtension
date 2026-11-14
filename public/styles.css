@@ -89,7 +89,11 @@
   --backdrop: #000000c2;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background-color: var(--bg); background-image: radial-gradient(circle, var(--dot) 1px, transparent 1px); background-size: 14px 14px; }
+/* The dots cover the whole window. The page scrolls with no visible scroll bar: on a Mac it sat over the right edge,
+   catching clicks meant for the documents notch and showing a track on hover. */
+:root { background-color: var(--bg); background-image: radial-gradient(circle, var(--dot) 1px, transparent 1px); background-size: 14px 14px; scrollbar-width: none; }
+:root::-webkit-scrollbar { display: none; }
+body { margin: 0; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button { cursor: pointer; }
@@ -335,7 +339,13 @@ button svg, a svg { pointer-events: none; }
 #modal.is-behind { overflow: hidden; scale: .94; filter: brightness(.86); }
 @keyframes sheet-up { from { translate: 0 100vh; } }
 @keyframes sheet-dim { from { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { #sheet, #sheet::backdrop { animation: none; transition: none; } #modal { transition: none; } }
+/* Dialogs fade in and grow slightly into place, and the page behind them dims in, rather than appearing at once.
+   The sheet slides up and the post panel slides in, so they keep their own entrances. */
+@keyframes dialog-in { from { opacity: 0; scale: .95; transform-origin: 50% 50%; } to { transform-origin: 50% 50%; } }
+@keyframes dialog-backdrop-in { from { opacity: 0; } }
+#modal[open] { animation: dialog-in 280ms cubic-bezier(.22,.68,.2,1); }
+#modal[open]::backdrop { animation: dialog-backdrop-in 240ms ease-out; }
+@media (prefers-reduced-motion: reduce) { #sheet, #sheet::backdrop, #modal[open], #modal[open]::backdrop { animation: none; transition: none; } #modal { transition: none; } }
 #sheet .chrome-setup-steps { margin-top: 0; }
 /* Chrome and the app, joined by dots that travel while waiting and a solid line once linked. */
 .chrome-link { display: flex; align-items: center; gap: 14px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface-soft); }

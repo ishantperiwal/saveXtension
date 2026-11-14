@@ -31,7 +31,8 @@ test('native X and Instagram grid players retain library metadata and survive ba
   await expect(page.locator('.save-card[data-post-id="901"]').getByLabel('Note',{exact:true})).toHaveValue(model.posts[0].notes, { timeout: 8000 });
   expect(await frame.evaluate(el => el.isConnected)).toBe(true);
   await expect(page.locator('[data-post-id="901"] .card-footer .tag')).toHaveText(['Design','Tools','Research','Learning']);
-  await expect(page.locator('[data-post-id="901"] .card-header .card-actions button')).toHaveCount(4);
+  await expect(page.locator('[data-post-id="901"] .card-header .card-actions button')).toHaveCount(5);
+  await expect(page.locator('[data-post-id="901"]').getByRole('button', { name: 'Copy post link', exact: true })).toBeVisible();
   await expect(page.locator('.card-footer .card-actions')).toHaveCount(0);
   expect(await page.locator('script[src*="platform.twitter.com"],script[src*="instagram.com"]').count()).toBe(0);
   await page.screenshot({ path: 'test-results/native-post-grid.png', fullPage: true });

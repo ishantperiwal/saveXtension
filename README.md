@@ -85,7 +85,10 @@ The server advertises its tools, resource guide and an **organize_library** prom
 | `merge_topics`, `delete_topic` | Merge duplicate topics; delete an empty topic without deleting saves. |
 | `update_save_note` | Store analysis or edit a note, using `expectedUpdatedAt` from a fresh read to avoid overwriting newer edits. |
 | `clear_image_descriptions` | Deletes the AI-written image descriptions of chosen saves, or all of them, so the next AI search reads those images again. Can be undone. |
-| `list_changes`, `undo_change` | Inspect and undo recent MCP edits; the journal keeps 100 changes. |
+| `list_documents`, `read_document` | List your documents with their first headings, and read one in full as Markdown. |
+| `create_document`, `edit_document` | Start a document when you ask, with a name and a description of what belongs in it, or edit one in small steps, adding only what fits that description: add to the end, swap an exact piece of text, rename, or replace it all. Needs `expectedUpdatedAt` from a fresh read. |
+| `list_document_fonts`, `add_document_font` | Show font names in their own font: the AI writes `[Satoshi](font:Satoshi)` and adds free fonts by downloading their file once. Fonts installed on your Mac need nothing added. |
+| `list_changes`, `undo_change` | Inspect and undo recent MCP edits, including document edits; the journal keeps 100 changes. |
 
 **MCP shows the same saves as the app.** Instagram and Pinterest saves outside the collections and boards you ticked are excluded from every MCP read and write, and from overview and topic counts, until you tick them again.
 
@@ -200,6 +203,8 @@ npm run test:e2e
 
 If needed, install the test browser with `npx playwright install chromium`. Browser tests use isolated profiles and intercepted fixture pages, without signing into real social accounts. Tests cover no-password local access, name/annotation preservation, queue claims/cancellation, live-only embeds, automatic X account switching, source-account deduplication and inactive-tab sync without moving the active tab.
 
+The document editor is Milkdown Crepe, bundled into `public/vendor/editor/` by `npm run build:editor`. Run it after changing `scripts/editor/` or the Crepe version, and commit the output.
+
 `npm start` packages the extension automatically. `npm run package:extension` also creates `dist/extension.zip` and `public/extension.zip`. Reload the extension after source changes.
 
 ## Reading interface
@@ -213,6 +218,12 @@ Interface refinement used [unslop](https://heydamir.design/unslop) by Damir Soko
 Each card’s **Copy post reference** icon copies its save ID, original URL and an MCP read hint. Paste this into a connected LLM chat to request that exact save with its metadata and note. Archived references indicate that the save must be restored before MCP can access it. The **Copy post link** icon beside it copies just the post's URL. The post panel has both as **Copy reference** and **Copy link**.
 
 Each save has one editable note. In the feed, its yellow editor is always visible with “No notes added yet.” for an empty note; click anywhere in it to write. The placeholder is never saved as note content. Collection pills and the add button sit below it. In the grid, the pencil opens the sticky note below the toolbar and above the post, without a modal or a second player. Existing notes show at most six lines, with Read more and Show less to expand or collapse them. Editing always reveals the complete note; no text is removed. Notes can be edited in place. In the grid, the pencil slides an empty note open; clicking it again closes the empty section. Notes containing text remain visible. Note motion respects reduced-motion preferences and retains the existing post player. Notes are exposed through MCP as additional context in the existing notes field. The Delete control is removed; Archive remains the reversible exclusion. Open original appears in the embed failure fallback, while working social posts use their native links. Changes save after a short typing pause and on blur; there is no Save Changes action. Writes to the same save are serialized so a slower earlier request cannot replace newer typing. Pending drafts stay in browser storage and are restored after reload, then retried automatically after a failed request or reconnection. A quiet status shows saving or retrying; successful saves clear that status. Notes retain whitespace and support clearing to an empty value. While reading a note, HTTP/HTTPS URLs and bare domains become clickable links; desktop clicks open the system default browser. Click ordinary note text or blank note space to edit. The saved note and MCP context remain plain text. Titles and manual tags are not editable in the interface; existing legacy metadata stays in backups. The top-level add button is removed in favor of source sync.
+
+## Documents
+
+Documents are your own pages beside your saves: the repos worth using, fonts to try, prompts that worked, ideas, in whatever shape you like. Click the dark notch on the right edge of the window to slide out the documents panel, and **+** to start one: give it a name and say what belongs in it. A connected AI adding to the document keeps to that description and leaves out anything else. The copy button beside each document copies a reference you can paste into a connected AI chat. Each opens in a window that works like a word processor: type **/** for headings, lists, checklists, tables, quotes, code and pictures, select text for bold, italics and links, and paste or drop pictures straight in. It saves as you type.
+
+Documents are kept as Markdown, which you can see and edit with **Markdown**, and which an AI reads quickly. To point at a saved post, paste its link: ⌘-click it to open it in the post panel. A connected AI can read and add to your documents through MCP, and its edits can be undone.
 
 ## Search and navigation
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { Store, passwordHash, passwordMatches, token, hash } from './store.mjs';
 import { previewServer } from './embeds.mjs';
-import { websitePreviews } from './website-previews.mjs';
+import { websitePreviews, downloadWebsite } from './website-previews.mjs';
 import { savedImages } from './saved-images.mjs';
 import { knownForScan, listReadSoFar, listScanFinished, missingFromList, pinterestBoardChanges, savedListGate } from './list-changes.mjs';
 import { BUSY } from '../public/busy-messages.js';
@@ -22,12 +22,13 @@ import { HttpError, text, canonicalPost } from './domain.mjs';
 import { createLibraryMcp } from './mcp.mjs';
 import { noteAi as createNoteAi } from './note-ai.mjs';
 import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
+import { Documents, documentImages, documentFonts } from './documents.mjs';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.json': 'application/json' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '' } = {}) {
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, documentImagesDir = imagesDir && resolve(imagesDir, '..', 'document-images'), documentFontsDir = imagesDir && resolve(imagesDir, '..', 'document-fonts'), imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '' } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
   const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync);
@@ -37,6 +38,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   const preview = previewServer(new URL(origin).origin);
   const websites=websitePreviews(store,{download:websiteDownload});
   const images = savedImages(store, { dir: imagesDir, download: imageDownload });
+  const documents = new Documents(store.db), pictures = documentImages(documentImagesDir), fonts = documentFonts(documentFontsDir, { download: websiteDownload || downloadWebsite });
   const meaning = meaningSearch({ dir: meaningDir, ...(meaningFiles ? { files: meaningFiles } : {}), ...(meaningRequest ? { request: meaningRequest } : {}) });
   // Only the saves the app shows are ever handed to an AI tool.
   const aiSearch = createAiSearch({ store, visiblePosts: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).filter(post => !hidden.has(post.id)); }, hasLocal: () => meaning.status().state === 'ready', images: { has: id => images.has(id), read: id => images.ensure(id) }, keys: keyVault && aiKeysFile ? aiKeys({ file: aiKeysFile, vault: keyVault }) : null, apiBase: aiApiBase });
@@ -44,7 +46,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
 
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
-  const mcp = createLibraryMcp(store, { origin: appOrigin, localMode, images });
+  const mcp = createLibraryMcp(store, { origin: appOrigin, localMode, images, fonts });
   // The same rules as MCP: only the saves the app shows.
   const organize = aiOrganize({ search: aiSearch, topics: new TopicLibrary(store), visibleIds: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).map(post => post.id).filter(id => !hidden.has(id)); } });
   const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl: `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, visiblePost: id => { const post = store.post(id); return !!post && !post.archived && !hiddenInstagramSaveIds(store).includes(id); } });
@@ -374,6 +376,18 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (input.topics !== undefined) importTopicCatalog(store.db, input.topics);
           return json(res, store.importPosts(input.posts));
         }
+        if (path === '/api/documents' && req.method === 'GET') return json(res, { documents: documents.list() });
+        if (path === '/api/documents' && req.method === 'POST') return json(res, documents.create(await body(req)));
+        if (path === '/api/documents/images' && req.method === 'POST') return json(res, await pictures.add((await body(req, 21 * 1024 * 1024)).data));
+        const picture = path.match(/^\/api\/documents\/images\/([a-f0-9]{32}\.(?:png|jpg|gif|webp))$/);
+        if (picture && req.method === 'GET') { const { bytes, type } = await pictures.read(picture[1]); res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' }); return res.end(bytes); }
+        if (path === '/api/documents/fonts' && req.method === 'GET') return json(res, { fonts: await fonts.list() });
+        const fontFile = path.match(/^\/api\/documents\/fonts\/([a-f0-9]{32}\.(?:woff2|woff|otf|ttf))$/);
+        if (fontFile && req.method === 'GET') { const { bytes, type } = await fonts.read(fontFile[1]); res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' }); return res.end(bytes); }
+        const doc = path.match(/^\/api\/documents\/([a-f0-9-]{36})$/);
+        if (doc && req.method === 'GET') return json(res, documents.get(doc[1]));
+        if (doc && req.method === 'PATCH') return json(res, documents.save(doc[1], await body(req)));
+        if (doc && req.method === 'DELETE') { documents.delete(doc[1]); return json(res, { ok: true }); }
         const collectionPost = path.match(/^\/api\/posts\/(\d+)\/collections$/);
         if (collectionPost && req.method === 'POST') {
           const input = await body(req);
@@ -391,7 +405,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (dev && req.method === 'DELETE') { store.revoke(dev[1]); return json(res, { ok: true }); }
         if (path === '/api/export' && req.method === 'GET') {
           res.setHeader('Content-Disposition', 'attachment; filename="savextension-backup.json"');
-          return json(res, { version: 2, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db, { all: true }) });
+          return json(res, { version: 2, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db, { all: true }), documents: documents.list().map(d => documents.get(d.id)) });
         }
         throw new HttpError(404, 'Endpoint not found.');
       }

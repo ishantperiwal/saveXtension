@@ -6,7 +6,7 @@ For how things work and why, read only the section you need in `docs/ARCHITECTUR
 
 ## What this is
 
-A local Electron app (Node 24+, SQLite via `node:sqlite`, no framework) that keeps Instagram saves, X bookmarks, Pinterest pins and Chrome bookmarks in one library, with MCP for LLMs. It uses **no platform APIs**: hidden windows, signed in as you, read the sites' own pages.
+A local Electron app (Node 24+, SQLite via `node:sqlite`, no framework) that keeps Instagram saves, X bookmarks, Pinterest pins and Chrome bookmarks in one library, with MCP for LLMs. Beside them, documents: the person's own Markdown pages. It uses **no platform APIs**: hidden windows, signed in as you, read the sites' own pages.
 
 Four folders:
 - `public/`: the UI
@@ -153,6 +153,9 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | MCP endpoint and access checks | `server/app.mjs` | `path === '/mcp'` |
 | Copied connection prompt | `public/mcp-settings.js` | `function connectionPrompt` |
 | What's hidden from app and MCP | `server/instagram-save-lists.mjs` | `function hiddenInstagramSaveIds` |
+| Documents: storage, AI edits, pictures | `server/documents.mjs` | `export class Documents` |
+| MCP document tools | `server/mcp.mjs` | `register('edit_document'` |
+| Fonts for documents: download and storage | `server/documents.mjs` | `export function documentFonts` |
 
 ### UI
 
@@ -185,6 +188,10 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Panel styles | `public/styles.css` | `#post-panel` |
 | Glass notification styles | `public/styles.css` | `.sync-platform-card` |
 | Note styles | `public/styles.css` | `.card-note` |
+| Documents notch, drawer and editor window | `public/documents.js` | `export function mountDocuments` |
+| Plain Markdown in, editor Markdown out | `public/document-markdown.js` | `export function storedMarkdown` |
+| Font names drawn in their own font | `public/document-fonts.js` | `export function fontDecorations` |
+| Bundling the editor | `scripts/build-editor.mjs` | `public/vendor/editor` |
 
 ## Open items (as of 2026-11-06)
 
@@ -199,8 +206,10 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 
 **Cleanup:**
 - `SAVEX_DEBUG_POST_PANEL` in `desktop/social.mjs` is a temporary request log and open-time measure. Remove it once those requests and timings are confirmed.
-- The browser suite passed in full on 2026-11-12. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
+- The browser suite passed in full on 2026-11-14 for v1.5.2, apart from one flaky run of `search.spec.mjs` "search, layout controls and Filters stick together", which passed alone three times. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
+
+**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, adding from the notes AI or a post, restoring from a backup.
 
 **Offered, not built:**
 - A Chrome bookmark delete button (extension only), and noticing bookmarks deleted in Chrome

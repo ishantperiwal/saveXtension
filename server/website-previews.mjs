@@ -30,17 +30,17 @@ export async function publicAddress(host, resolve=lookup) {
   return values.find(value=>value.family===4)||values[0];
 }
 
-// Pin the checked address to the socket, rechecking every redirect. No browser
+// Pin the checked address to the socket, rechecking every redirect. kind 'font' is a document font file, which the caller checks byte by byte. No browser
 // cookies, scripts, local-network URLs or arbitrary ports are used for previews.
 export async function downloadWebsite(value, kind='html', {resolve=lookup,open,timeout=8000}={}) {
-  let url=(kind==='html'?publicPageUrl:publicWebsiteUrl)(value);const deadline=Date.now()+timeout,limit=kind==='image'?5*1024*1024:768*1024;
+  let url=(kind==='html'?publicPageUrl:publicWebsiteUrl)(value);const deadline=Date.now()+timeout,limit=kind==='image'||kind==='font'?5*1024*1024:768*1024;
   for(let hop=0;hop<4;hop++) {
     const remaining=deadline-Date.now();if(remaining<=0)throw new Error('Preview timed out.');
     let timer;
     const address=await Promise.race([publicAddress(url.hostname.replace(/^\[|\]$/g,''),resolve),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Preview timed out.')),remaining);timer.unref();})]).finally(()=>clearTimeout(timer));
     const signal=AbortSignal.timeout(Math.max(1,deadline-Date.now()));
     const response=await new Promise((resolve,reject)=>{
-      const request=(open||(url.protocol==='https:'?httpsGet:httpGet))(url,{agent:false,autoSelectFamily:false,signal,lookup:(_host,options,done)=>options.all?done(null,[address]):done(null,address.address,address.family),headers:{Accept:kind==='image'?'image/avif,image/webp,image/png,image/jpeg,image/gif':'text/html,application/xhtml+xml','Accept-Encoding':'gzip, deflate, br','User-Agent':'saveXtension/1.2 (+website previews)'}},resolve);
+      const request=(open||(url.protocol==='https:'?httpsGet:httpGet))(url,{agent:false,autoSelectFamily:false,signal,lookup:(_host,options,done)=>options.all?done(null,[address]):done(null,address.address,address.family),headers:{Accept:kind==='image'?'image/avif,image/webp,image/png,image/jpeg,image/gif':kind==='font'?'font/woff2,font/woff,font/ttf,font/otf,*/*;q=0.5':'text/html,application/xhtml+xml','Accept-Encoding':'gzip, deflate, br','User-Agent':'saveXtension/1.2 (+website previews)'}},resolve);
       request.on('error',reject);
     });
     if([301,302,303,307,308].includes(response.statusCode)) {
@@ -49,7 +49,7 @@ export async function downloadWebsite(value, kind='html', {resolve=lookup,open,t
     }
     if(response.statusCode!==200){response.destroy();throw new Error('Website did not provide a preview.');}
     const type=(response.headers['content-type']||'').split(';')[0].trim().toLowerCase();
-    if(kind==='html'?!['text/html','application/xhtml+xml'].includes(type):!['image/png','image/jpeg','image/webp','image/gif','image/avif'].includes(type)){response.destroy();throw new Error('Unsupported preview content.');}
+    if(kind==='html'?!['text/html','application/xhtml+xml'].includes(type):kind==='font'?/^(text|image)\//.test(type):!['image/png','image/jpeg','image/webp','image/gif','image/avif'].includes(type)){response.destroy();throw new Error('Unsupported preview content.');}
     const encoding=response.headers['content-encoding'],decoder=encoding==='gzip'?createGunzip():encoding==='deflate'?createInflate():encoding==='br'?createBrotliDecompress():null;
     if(encoding&&encoding!=='identity'&&!decoder){response.destroy();throw new Error('Unsupported encoding.');}
     const stream=decoder?response.pipe(decoder):response,parts=[];let size=0;
