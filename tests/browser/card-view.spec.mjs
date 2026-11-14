@@ -127,7 +127,8 @@ test('feed is the default; animated grid switches preserve native players, notes
   const iframe=await first.locator('.embed-stage>iframe').elementHandle();
   const note=await first.getByLabel('Note',{exact:true}).elementHandle();
   await grid.click();
-  expect(await page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).some(a=>a.effect?.getKeyframes().some(k=>String(k.transform).includes('scale('))))).toBe(true);
+  // The cards start moving a frame after the click, once the browser has pictured the old layout.
+  await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).some(a=>a.effect?.getKeyframes().some(k=>String(k.transform).includes('scale(')))),{intervals:[16],timeout:1000}).toBe(true);
   await settled(page);
   const compact=await first.boundingBox();expect(compact.width).toBeLessThan(400);expect(compact.width).toBeGreaterThan(280);
   expect(new Set(await cards.evaluateAll(items=>items.slice(0,3).map(el=>el.getBoundingClientRect().x))).size).toBe(3);
