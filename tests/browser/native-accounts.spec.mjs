@@ -89,7 +89,8 @@ test('Pinterest appears in the desktop sidebar with boards as sub-rows that filt
   await expect(page.locator('#pinterest-navigation .source-icon-pinterest')).toBeVisible();
   await account.click();
   await expect(page.locator('.save-card')).toHaveCount(2);
-  await expect(page.locator('.save-card.pinterest .unsave-button')).toHaveCount(0);
+  // Only a pin known to be on one of the account's boards can be unsaved, since that's where the check reads it.
+  await expect(page.locator('.save-card.pinterest .unsave-button')).toHaveCount(1);
   // Like Instagram, clicking the account row also folds its list; unfold it to reach a board.
   await page.getByRole('button', { name: 'Toggle Pinterest boards for @maker', exact: true }).click();
   const board = page.locator('[data-instagram-collection="40"]');

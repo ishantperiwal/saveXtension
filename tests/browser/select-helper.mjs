@@ -14,9 +14,10 @@ export async function closeSyncOptions(page) {
 export async function chooseSelect(page,label,value) {
   if (label==='Sync source'||label==='X accounts') {
     await closeSyncOptions(page);
-    const scope=label==='Sync source'?{platform:value,account:null}:{platform:'x',account:value};
+    // "instagram:@name" picks that account's row, for when other tests left more than one.
+    const [platform,account=null]=value.split(':'),scope=label==='Sync source'?{platform,account}:{platform:'x',account:value};
     scanScopes.set(page,scope);
-    const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="x:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
+    const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="${scope.platform}:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
     await row.click();
     if(scope.platform==='instagram'&&await row.getAttribute('aria-expanded')==='false') await row.locator('..').locator('.collection-toggle').click();
     return;
@@ -33,9 +34,15 @@ export async function startScan(page,mode='quick') {
   await page.waitForFunction(()=>![...document.querySelectorAll('.sidebar-account-refresh')].some(button=>button.disabled),null,{timeout:10000});
   const scope=scanScopes.get(page)||{platform:'x',account:null};
   if(scope.platform==='all') {await openSyncOptions(page);await page.getByRole('button',{name:mode==='deep'?'Deep scan':'Quick scan',exact:true}).click();return;}
-  const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="x:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
-  await row.click({button:'right'});
-  await page.getByRole('menuitem',{name:mode==='deep'?'Deep scan and refresh':'Quick scan and refresh',exact:true}).click();
+  const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="${scope.platform}:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
+  // The menu is drawn once, greyed out if the app still thinks the last scan is running, so reopen it until the item is live.
+  const item=page.getByRole('menuitem',{name:mode==='deep'?'Deep scan and refresh':'Quick scan and refresh',exact:true});
+  for(const end=Date.now()+15000;;){
+    await row.click({button:'right'});
+    if(await item.isEnabled()||Date.now()>end) break;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(500);
+  }
+  await item.click();
 }
 export const startQuickSync=page=>startScan(page,'quick');
 export const startDeepSync=page=>startScan(page,'deep');

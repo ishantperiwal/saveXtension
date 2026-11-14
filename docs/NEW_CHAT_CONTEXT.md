@@ -199,7 +199,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 
 **Cleanup:**
 - `SAVEX_DEBUG_POST_PANEL` in `desktop/social.mjs` is a temporary request log and open-time measure. Remove it once those requests and timings are confirmed.
-- Some tests may be stale, and `tests/browser/library.spec.mjs:56` failed before this work. Run the full suite before a release.
+- The browser suite passed in full on 2026-11-12. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
 
 **Offered, not built:**

@@ -66,7 +66,7 @@ test('local Settings separates sections and provides a manual release check with
   await expect(page.getByRole('link',{name:'Export library',exact:true})).toBeHidden();
   await page.getByRole('button',{name:'Backup',exact:true}).click();
   await expect(page.getByRole('link',{name:'Export library',exact:true})).toBeVisible();
-  const panels=page.locator('.settings-dialog .settings-panel');await expect(panels).toHaveCount(3);
+  const panels=page.locator('.settings-dialog .settings-panel');await expect(panels).toHaveCount(4);
   for(const panel of await panels.all()) await expect(panel).toHaveCSS('border-top-style','solid');
   await page.getByRole('button',{name:'Check for updates',exact:true}).click();
   await expect(page.locator('#app-update-status')).toHaveText('Version 1.2.0 available');

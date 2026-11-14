@@ -165,7 +165,7 @@ test('feed card edges stay aligned across platforms while Instagram preview cont
   await expect(instagram.locator('.native-embed')).toHaveAttribute('data-embed-state','ready');
   expect((await preview.boundingBox()).width).toBe(loadedBounds.width);
   const note=await instagram.locator('.card-note').boundingBox(),feed=await preview.boundingBox();
-  expect(note.x-feed.x-feed.width).toBe(16);expect(note.width).toBe(240);
+  expect(note.x-feed.x-feed.width).toBe(16);expect(note.width).toBe(270);
   const player=await instagram.locator('.embed-stage>iframe').elementHandle();
   await page.getByRole('button',{name:'Grid view',exact:true}).click();await settled(page);
   const colors=await instagram.evaluate(el=>Object.fromEntries(['.card-header','.card-footer','.card-preview'].map(selector=>[selector,getComputedStyle(el.querySelector(selector)).backgroundColor])));
@@ -192,7 +192,7 @@ test('feed notes sit beside the post without increasing its height, stack in gri
     const preview=el.querySelector('.card-preview').getBoundingClientRect(),note=el.querySelector('.card-note').getBoundingClientRect(),header=el.querySelector('.card-header').getBoundingClientRect();
     return {postWidth:preview.width,postRight:preview.right,noteLeft:note.left,noteWidth:note.width,noteTop:note.top,previewTop:preview.top,previewLeft:preview.left,headerTop:header.top,headerRight:header.right};
   });
-  expect(bounds.postWidth).toBe(500);expect(bounds.noteWidth).toBe(240);expect(bounds.noteLeft-bounds.postRight).toBe(16);expect(bounds.noteTop-bounds.previewTop).toBe(8);expect(bounds.headerTop).toBeGreaterThanOrEqual(bounds.previewTop);expect(bounds.headerRight).toBeLessThan(bounds.previewLeft);
+  expect(bounds.postWidth).toBe(500);expect(bounds.noteWidth).toBe(270);expect(bounds.noteLeft-bounds.postRight).toBe(16);expect(bounds.noteTop-bounds.previewTop).toBe(8);expect(bounds.headerTop).toBeGreaterThanOrEqual(bounds.previewTop);expect(bounds.headerRight).toBeLessThan(bounds.previewLeft);
   await expect(card.locator('.feed-source-pill')).toBeHidden();
   const actions=await card.locator('.card-actions button:visible').evaluateAll(buttons=>buttons.map(button=>{const r=button.getBoundingClientRect();return {x:r.x,y:r.y};}));
   expect(actions.length).toBeGreaterThanOrEqual(2);expect(new Set(actions.map(r=>r.x)).size).toBe(1);expect(actions.every((r,i)=>!i||r.y>actions[i-1].y)).toBe(true);

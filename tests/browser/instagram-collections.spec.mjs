@@ -85,9 +85,12 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
     if (!limited) await expect(page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: '❤️' })).toBeVisible({ timeout: 7000 });
     if (!limited) { await page.getByRole('list',{name:'Instagram collections for @collection_user',exact:true}).locator('[data-instagram-collection]').filter({ hasText: '❤️' }).click(); await expect(page.locator('.save-card')).toHaveCount(2); }
     const saved = await page.evaluate(async () => (await (await fetch('/api/posts?scope=all')).json()).posts.filter(p => p.platform === 'instagram'));
-    expect(saved).toHaveLength(limited?2:3); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(limited?1:2);
+    // A quick scan reads All posts first and stores every save it finds, so it can compare next time. Ones outside the ticked collections stay hidden.
+    const fromAllPosts = limited && mode === 'quick';
+    expect(saved).toHaveLength(limited && !fromAllPosts ? 2 : 3); if (fromAllPosts) expect(saved.find(p => p.externalId === 'HeartOnly').collections).toHaveLength(0); expect(saved.find(p => p.externalId === 'Shared').collections).toHaveLength(limited?1:2);
     if(limited){expect(savedVisits.some(path=>path.includes('/1002/'))).toBe(false);expect(savedVisits.some(path=>path.includes('/1001/'))).toBe(true);}
-    expect(detailVisits).toHaveLength(0);
+    // That read also visits its new saves for their caption, since the collections read after it never do.
+    expect(detailVisits).toHaveLength(fromAllPosts ? 2 : 0);
     const branch = await page.locator('.instagram-collections > li').first().evaluate(el => getComputedStyle(el, '::after').borderLeftWidth);
     expect(branch).toBe('1px');
     await page.screenshot({ path: testInfo.outputPath('instagram-collections-desktop.png') });
@@ -104,7 +107,7 @@ for (const [mode, limited] of [['quick',false], ['deep',false], ['quick',true], 
 });
 
 test('a ticked collection that loads late is still fetched, and one that is gone is skipped by name', async ({ baseURL }) => {
-  test.setTimeout(120000);
+  test.setTimeout(200000); // A quick scan reads All posts first, then waits for late collections.
   const profile = await mkdtemp(resolve(tmpdir(), 'savex-ig-late-'));
   const extension = resolve(profile, 'extension'); await cp(resolve('extension'), extension, { recursive: true });
   const backgroundPath = resolve(extension, 'background.js');
@@ -134,10 +137,10 @@ test('a ticked collection that loads late is still fetched, and one that is gone
       await fetch('/api/instagram-save-list', { method: 'POST', headers, body: JSON.stringify({ account: '@late_user', collectionIds: collections.filter(c => c.account === '@late_user').map(c => c.id) }) });
     });
     await page.reload();
-    await chooseSelect(page, 'Sync source', 'instagram');
+    await chooseSelect(page, 'Sync source', 'instagram:@late_user');
     await startQuickSync(page);
     const job = () => page.evaluate(async () => (await (await fetch('/api/sync')).json()).job);
-    await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 100000 }).toBe('partial');
+    await expect.poll(async () => { const current = await job(); if (current?.status === 'failed') throw new Error(current.message); return current?.status; }, { timeout: 180000 }).toBe('partial');
     expect(visits.some(path => path.includes('/2001/'))).toBe(true);
     expect(visits.some(path => path.includes('/2002/'))).toBe(true);
     expect(visits.some(path => path.includes('/2003/'))).toBe(false);

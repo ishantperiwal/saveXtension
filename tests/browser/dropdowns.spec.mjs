@@ -17,7 +17,7 @@ test('folder menus in Filters keep Escape local and cancelling discards their se
   expect(menu.y).toBeGreaterThanOrEqual(dialog.y);
   expect(menu.y + menu.height).toBeLessThanOrEqual(dialog.y + dialog.height);
   await folder.press('Escape'); await expect(page.locator('#modal')).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click(); await expect(page.locator('#modal')).toBeHidden();
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click(); await expect(page.locator('#modal')).toBeHidden();
   await page.getByRole('button', { name: 'Filters', exact: true }).click();
   await expect(folder).toBeHidden();
   await page.getByRole('button', { name: 'Show 0 saves', exact: true }).click();

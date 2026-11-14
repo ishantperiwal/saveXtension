@@ -102,6 +102,7 @@ test('long handles truncate and collection chevrons sit after the handle and bef
   const toggle = page.getByRole('button', { name: `Toggle Instagram collections for ${handle}`, exact: true });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
+    await expect(label).toBeVisible(); await expect(toggle).toBeVisible(); await expect(account.locator('.nav-count')).toBeVisible();
     const l = await label.boundingBox(), t = await toggle.boundingBox(), c = await account.locator('.nav-count').boundingBox();
     expect(t.x).toBeGreaterThanOrEqual(l.x + l.width - 1); expect(t.x - l.x - l.width).toBeLessThan(8);
     expect(t.x + t.width).toBeLessThanOrEqual(c.x);

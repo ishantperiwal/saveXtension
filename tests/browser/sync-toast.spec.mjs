@@ -81,8 +81,9 @@ test('finished sync reports group account and collection results into readable p
   await page.screenshot({ path: 'test-results/sync-report-platforms.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await expect.poll(async () => (await toast.boundingBox()).x, { message: 'fits once the resize settles' }).toBeGreaterThanOrEqual(12);
-  const box = await toast.boundingBox(); expect(box.y).toBeGreaterThanOrEqual(12); expect(box.x + box.width).toBeLessThanOrEqual(378);
+  // The stack's own box reaches past the cards, to leave room for their shadows, so the cards are what must fit.
+  await expect.poll(async () => (await instagram.boundingBox()).x, { message: 'fits once the resize settles' }).toBeGreaterThanOrEqual(12);
+  const box = await instagram.boundingBox(); expect(box.y).toBeGreaterThanOrEqual(12); expect(box.x + box.width).toBeLessThanOrEqual(378);
   await page.screenshot({ path: 'test-results/sync-report-mobile.png' });
   await page.getByRole('button', { name: 'Dismiss X sync report', exact: true }).click();
   await expect(toast.locator('.sync-platform-card')).toHaveCount(2);

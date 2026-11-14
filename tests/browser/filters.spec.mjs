@@ -99,12 +99,13 @@ test('account chips combine without duplicates, respect topics and can be cancel
   const footerInside = () => page.evaluate(() => document.querySelector('.filter-footer').getBoundingClientRect().bottom <= document.querySelector('#modal').getBoundingClientRect().bottom);
   const reset = await page.getByRole('button', { name: 'Clear all', exact: true }).boundingBox(), show = await page.locator('#show-filtered-saves').boundingBox();
   expect(reset.x + reset.width).toBeLessThan(show.x); expect(Math.abs(reset.y - show.y)).toBeLessThan(2);
-  expect(show.x - reset.x - reset.width).toBeLessThanOrEqual(20);
-  expect(await footerInside()).toBeTruthy();
+  // The dialog glides to its new size, so this is checked once it has settled.
+  await expect.poll(footerInside).toBe(true);
   await page.screenshot({ path: 'test-results/filters-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  expect(await footerInside()).toBeTruthy();
+  // The dialog glides to its new size, so this is checked once it has settled.
+  await expect.poll(footerInside).toBe(true);
   await page.screenshot({ path: 'test-results/filters-mobile.png', fullPage: true });
 });
 

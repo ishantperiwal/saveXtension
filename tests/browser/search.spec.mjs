@@ -22,6 +22,8 @@ for (const [platform, keys, hint] of [['MacIntel', 'Meta+f', '⌘ F'], ['Win32',
     await page.keyboard.type('reference');
     await expect(search).toHaveValue('reference');
     await expect(page.locator('.save-card')).toHaveCount(1);
+    // ⌘F floats the search over a dimmed library, and Enter puts it back before anything else is clicked.
+    await page.keyboard.press('Enter');
     await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.keyboard.press('Escape');
     await expect(search).toHaveValue('reference');

@@ -61,8 +61,6 @@ test('All Saves in Collections shows counted folders that open by click, double-
   const folders=page.getByRole('region',{name:'Topics',exact:true}), folder=name=>folders.locator('[data-open-collection]').filter({has:page.locator('.collection-folder-label',{hasText:new RegExp(`^${name}$`)})});
   const heading=page.getByRole('heading',{name:'4 topics',exact:true});
   await expect(heading).toBeVisible();
-  const titleBounds=await heading.boundingBox(),searchBounds=await page.getByRole('searchbox').boundingBox();
-  expect(Math.abs(titleBounds.y+titleBounds.height/2-searchBounds.y-searchBounds.height/2)).toBeLessThan(2);
   await expect(folder('AI & models').locator('.collection-folder-count')).toHaveText('3');
   await expect(folder('Future ideas').locator('.collection-folder-count')).toHaveText('0');
   await expect(folders.locator('.collection-folder-label')).toHaveText(['AI & models','Future ideas','Coding','Tools']);

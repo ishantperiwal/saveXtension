@@ -54,6 +54,7 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
 });
 
 test('one click in library collects and enriches in an inactive tab, then closes only its own tab', async () => {
+  test.setTimeout(120000); // Three scans, and Instagram's quick scan reads All posts and then the saved page.
   // Specs share the fixture library; end any sync an earlier spec left queued.
   await fetch('http://localhost:3211/api/sync/stop', { method: 'POST', headers: { Origin: 'http://localhost:3211', 'Content-Type': 'application/json' }, body: '{}' });
   const profile = await mkdtemp(resolve(tmpdir(), 'savex-local-extension-'));
@@ -92,15 +93,18 @@ test('one click in library collects and enriches in an inactive tab, then closes
     await expect(library.locator('#sync-status')).toContainText('background', { timeout: 10000 });
     await expect.poll(async () => (await worker.evaluate(async () => (await chrome.storage.local.get('syncState')).syncState))?.imported, { timeout: 25000 }).toBe(2);
     expect(await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id)).toBe(libraryId);
-    await expect.poll(async () => (await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job))?.status, { timeout: 45000 }).toBe('partial');
+    // The fixture list ends, so a quick scan reads all of it and finishes complete.
+    await expect.poll(async () => (await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job))?.status, { timeout: 45000 }).toBe('completed');
     const tabs = await worker.evaluate(async () => (await chrome.tabs.query({})).map(t => t.id)); expect(tabs).toEqual(initialTabs);
     // The X list fixture already has text and authors, so detail visits are skipped.
     const xRun = await worker.evaluate(async () => (await chrome.storage.local.get('syncState')).syncState); expect(xRun.enriched).toBe(0);
     await chooseSelect(library, 'Sync source', 'instagram');
     await startQuickSync(library);
     await expect.poll(async () => (await worker.evaluate(async () => (await chrome.storage.local.get('syncState')).syncState))?.platform, { timeout: 15000 }).toBe('instagram');
-    await expect.poll(async () => (await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job))?.status, { timeout: 45000 }).toBe('partial');
-    const igRun = await worker.evaluate(async () => (await chrome.storage.local.get('syncState')).syncState); expect(igRun.imported).toBe(2); expect(igRun.enriched).toBe(2);
+    await expect.poll(async () => (await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job))?.status, { timeout: 45000 }).toBe('completed');
+    // A quick scan reads All posts first, then the saved page, so add up both runs.
+    const igResults = (await library.evaluate(async () => (await (await fetch('/api/sync')).json()).job)).results.filter(r => r.platform === 'instagram');
+    expect(igResults.reduce((sum, r) => sum + r.imported, 0)).toBe(2); expect(igResults.reduce((sum, r) => sum + (r.enriched || 0), 0)).toBe(2);
     expect(await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id)).toBe(libraryId);
     const stored = await library.evaluate(async () => (await (await fetch('/api/posts')).json()).posts);
     expect(stored.find(p => p.externalId === 'AbC123_-').text).toContain('full Instagram caption');

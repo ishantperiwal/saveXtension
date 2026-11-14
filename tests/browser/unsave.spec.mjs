@@ -24,7 +24,8 @@ test('a compact unsave confirmation requires an account but no checkbox; cancell
  await expect(page.locator('.unsave-browser-note')).toContainText('Chrome will open briefly');
  await page.getByRole('button',{name:'Cancel',exact:true}).click();expect(model.confirmed).toEqual([]);await expect(page.locator('.save-card')).toHaveCount(1);
  await action.click();await page.getByRole('radio',{name:'@two',exact:true}).check();await confirm.click();
- expect(model.confirmed).toEqual([{nonce:'nonce-2',confirmed:true,account:'@two'}]);await expect(page.locator('.save-card')).toHaveCount(1);
+ // The unsave queue asks for a fresh confirmation code just before it sends, so the third one is used.
+ await expect.poll(()=>model.confirmed).toEqual([{nonce:'nonce-3',confirmed:true,account:'@two'}]);await expect(page.locator('.save-card')).toHaveCount(1);
  model.posts=[];model.job={...model.job,status:'succeeded',deleted:1};
  await expect(page.locator('.save-card')).toHaveCount(0,{timeout:8000});await expect(page.locator('.archive-nav .nav-count')).toHaveText('0');await expect.poll(()=>model.ack).toBe(1);
  await expect(page.locator('#toast')).toHaveText('Unsaved on X.');
@@ -35,7 +36,8 @@ test('an unverified result keeps the local save and reports failure instead of c
  await expect(page.locator('#unsave-form')).toContainText('This post will be unsaved from X and deleted from saveXtension.');
  await expect(page.locator('#unsave-form').getByRole('radio')).toHaveCount(0);await expect(page.locator('#unsave-form').getByRole('checkbox')).toHaveCount(0);
  await expect(page.locator('#unsave-confirm')).toBeEnabled();await page.locator('#modal').screenshot({path:'test-results/unsave-simple-confirmation.png'});await page.locator('#unsave-confirm').click();
- model.job={...model.job,status:'uncertain',message:'Couldn’t verify the unsave. Check the original post.'};
+ // The queue sends the unsave a moment after the click, so the result is only set once it has.
+ await expect.poll(()=>model.confirmed.length).toBe(1);model.job={...model.job,status:'uncertain',message:'Couldn’t verify the unsave. Check the original post.'};
  await expect(page.locator('#toast')).toHaveText(model.job.message,{timeout:8000});await expect(page.locator('.save-card')).toHaveCount(1);await expect(page.locator('.archive-nav .nav-count')).toHaveText('0');
 });
 

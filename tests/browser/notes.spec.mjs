@@ -66,6 +66,8 @@ test('sticky notes autosave inline, retain concurrent edits and flush between sa
     const mac=await page.evaluate(()=>/Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform||navigator.platform||''));
     await page.keyboard.press(mac?'Meta+f':'Control+f');await expect(page.getByRole('searchbox')).toBeFocused();
     await expect.poll(async()=>(await saved(page,first.id)).notes).toBe('Save before searching');
+    // ⌘F floats the search over a dimmed library, and Enter puts it back.
+    await page.keyboard.press('Enter');
     await open(page,first.id);await field(page,first.id).fill('');await page.getByRole('searchbox').focus();
     await expect.poll(async()=>(await saved(page,first.id)).notes).toBe('');
     await expect(card(page,first.id).locator('.card-note')).toBeHidden();
@@ -104,7 +106,7 @@ test('typing stays focused through autosave, grows the note and keeps an edited 
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
-test('long notes show six lines, expand on demand and reveal the full editor without changing saved text',async({page})=>{
+test('long notes show six lines, open the full note view on demand without changing saved text',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});
   const first=(await seed(page)).find(p=>p.bookmarkTitle==='First reference');
   const text=Array.from({length:12},(_,i)=>`Reference line ${i+1}: context worth keeping.`).join('\n');
@@ -120,24 +122,16 @@ test('long notes show six lines, expand on demand and reveal the full editor wit
   expect(placement.noteTop).toBeGreaterThanOrEqual(placement.headerBottom);expect(placement.previewTop).toBeGreaterThanOrEqual(placement.noteBottom);
   expect(await note.evaluate(el=>el.clientHeight)).toBeLessThanOrEqual(132);
   expect(await note.evaluate(el=>el.scrollHeight)).toBeGreaterThan(132);
+  // In the grid a cut-off note opens the centred note view, with the whole note editable beside the post.
   await more.click();
-  const less=card(page,first.id).getByRole('button',{name:'Show less',exact:true});
-  await expect(less).toHaveAttribute('aria-expanded','true');
-  expect(await note.evaluate(el=>el.clientHeight)).toBeGreaterThan(132);
-  await less.click();await expect(more).toBeVisible();
-  expect(await note.evaluate(el=>el.clientHeight)).toBeLessThanOrEqual(132);
-  await open(page,first.id);await expect(note).toBeFocused();
-  expect(await note.evaluate(el=>el.clientHeight)).toBeGreaterThan(132);
-  await expect(more).toBeHidden();
-  await page.getByRole('searchbox').focus();await expect(more).toBeVisible();
-  expect(await note.evaluate(el=>el.clientHeight)).toBeLessThanOrEqual(132);
+  const view=page.locator('#post-panel[data-view="note"]'),full=view.locator('#post-note-input');
+  await expect(view).toBeVisible();await expect(full).toHaveValue(text);
+  expect(await full.evaluate(el=>el.scrollHeight<=el.clientHeight+2)).toBe(true);
+  await view.getByRole('button',{name:'Close post',exact:true}).click();await expect(view).toBeHidden();
+  await expect(more).toBeVisible();expect(await note.evaluate(el=>el.clientHeight)).toBeLessThanOrEqual(132);
   expect(writes).toBe(0);expect((await saved(page,first.id)).notes).toBe(text);
   await page.setViewportSize({width:390,height:844});
   await expect(more).toBeVisible();expect(await note.evaluate(el=>el.clientHeight)).toBeLessThanOrEqual(132);
-  await expect(card(page,first.id).locator('.card-content')).toHaveCSS('opacity','1');
-  await card(page,first.id).screenshot({path:'test-results/note-six-lines.png'});
-  await more.click();await expect(less).toBeVisible();
-  expect(await note.evaluate(el=>el.scrollHeight<=el.clientHeight+2)).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.request.patch('/api/posts/'+first.id,{headers:{Origin:'http://localhost:3211'},data:{notes:'Exactly\nsix\nshort\nlines\nof\ncontext'}});
   await page.reload();await expect(card(page,first.id).getByRole('button',{name:'Read more',exact:true})).toBeHidden();
