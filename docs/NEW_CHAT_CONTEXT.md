@@ -206,7 +206,8 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 
 **Cleanup:**
 - `SAVEX_DEBUG_POST_PANEL` in `desktop/social.mjs` is a temporary request log and open-time measure. Remove it once those requests and timings are confirmed.
-- The browser suite passed in full on 2026-11-14 for v1.5.2, apart from one flaky run of `search.spec.mjs` "search, layout controls and Filters stick together", which passed alone three times. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
+- The browser suite passes in full, locally and in the GitHub Test workflow (green again on 2026-11-15, after failing in CI since v1.5.0). CI is slower, so tests there must wait for real states, never a fixed time or frame count. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
+- `card-view.spec.mjs` "feed holds the reading position" failed once in CI: a wheel scroll during a preview's growth moved 280px, not the 300 it wants. Not reproduced locally.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
 
 **Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, adding from the notes AI or a post, restoring from a backup.
