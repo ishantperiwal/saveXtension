@@ -20,7 +20,15 @@ test('sidebar shows per-account counts and global refresh offers both modes with
 });
 test('account context menu offers a deep scan for only that account without changing browsing',async({page})=>{
  const state=await setup(page),account=page.locator('[data-nav-account="x:@two"]');
- await account.click();await account.click({button:'right'});
+ await account.click();
+ // A scroll that ended just before the right-click sends its event a frame later; that mustn't close the menu, but a real scroll does.
+ const frames=()=>page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+ await page.evaluate(()=>{document.body.style.minHeight='3000px';scrollTo(0,200);});await frames();
+ await page.evaluate(()=>{scrollTo(0,0);const row=document.querySelector('[data-nav-account="x:@two"]'),box=row.getBoundingClientRect();row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:box.x+20,clientY:box.y+10}));});
+ await frames();await expect(page.getByRole('menu')).toBeVisible();
+ await page.evaluate(()=>scrollTo(0,100));await expect(page.getByRole('menu')).toHaveCount(0);
+ await page.evaluate(()=>{document.body.style.minHeight='';scrollTo(0,0);});
+ await account.click({button:'right'});
  await expect(page.getByRole('menuitem',{name:'Quick scan and refresh',exact:true})).toBeVisible();
  await page.getByRole('menuitem',{name:'Deep scan and refresh',exact:true}).click();
  await expect.poll(()=>state.queued).toEqual([{targets:['x'],xAccount:'@two',mode:'deep'}]);

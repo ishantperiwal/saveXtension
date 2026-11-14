@@ -202,7 +202,7 @@ export function enableTopicDrag({ topics, move, arrange, describe, selection = (
   document.addEventListener('pointerdown', event => {
     // A sidebar topic reorders from the left end of its row, up to its icon. From anywhere else it only tags posts,
     // so reaching for a post can't reshuffle the list. A click that barely moves still opens it.
-    const source = event.button === 0 && event.target.closest('[data-drag-topic], #topic-navigation [data-topic-row]');
+    const source = event.button !== 0 ? null : event.target.closest('[data-drag-topic], #topic-navigation [data-topic-row]');
     const row = source && source.closest('#topic-navigation [data-topic-row]'), icon = row?.querySelector('svg[data-drag-topic]');
     const tagOnly = !!row && !!icon && event.clientX > icon.getBoundingClientRect().right + 2;
     pending = source ? { source, tagOnly, id: source.dataset.dragTopic || source.dataset.topicRow, x: event.clientX, y: event.clientY } : null;

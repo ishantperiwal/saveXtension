@@ -52,6 +52,12 @@ test('an unorganized card creates and adds a collection inline, retries failure 
   await expect(picker).toHaveCount(0);await expect(item.locator('.tag')).toHaveText(['Personal <ideas>']);await expect(item.locator('.card-footer img')).toHaveCount(0);
   await page.getByRole('tab',{name:'Topics',exact:true}).click();await expect(page.locator('[data-nav-topic="Personal <ideas>"]')).toContainText('1');
   await page.locator('[data-open-collection="Personal <ideas>"]').click();
+  // A scroll that ended before + was pressed sends its event a frame later; that mustn't close the picker, but a real scroll does.
+  await page.evaluate(()=>{scrollTo(0,60);return new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));});
+  await page.evaluate(id=>{scrollTo(0,0);document.querySelector(`.save-card[data-post-id="${id}"] .collection-add`).click();},post.id);
+  await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+  await expect(picker).toBeVisible();await page.evaluate(()=>scrollTo(0,40));await expect(picker).toHaveCount(0);
+  await page.evaluate(()=>scrollTo(0,0));
   await plus.click();await expect(picker.getByRole('button',{name:'Add to Personal <ideas>',exact:true})).toHaveCount(0);
   await picker.getByRole('searchbox',{name:'Topic name',exact:true}).fill('Available collection');await page.keyboard.press('ArrowDown');
   await expect(picker.getByRole('button',{name:'Add to Available collection',exact:true})).toBeFocused();await page.keyboard.press('Enter');

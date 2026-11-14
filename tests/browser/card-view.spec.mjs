@@ -41,17 +41,19 @@ for (const [width, motion, platform] of [[1440, 'no-preference','x'], [1440, 're
     for (const height of [1400,260]) {
       await page.evaluate(()=>{
         window.readingSamples=[];
-        const until=performance.now()+1100, preview=document.querySelector('[data-post-id="8811"] .card-preview');
+        // About 1.1s at 60 frames a second. Counting frames rather than time keeps the whole
+        // movement sampled when a slower machine draws fewer frames.
+        let frames=66; const preview=document.querySelector('[data-post-id="8811"] .card-preview');
         // Sample after the frame's layout/scroll compensation callbacks, rather
         // than observing an intermediate position earlier in the same frame.
-        const sample=()=>{setTimeout(()=>window.readingSamples.push(preview.getBoundingClientRect().top),0);if(performance.now()<until)requestAnimationFrame(sample);};
+        const sample=()=>{setTimeout(()=>window.readingSamples.push(preview.getBoundingClientRect().top),0);if(--frames>0)requestAnimationFrame(sample);};
         requestAnimationFrame(sample);
       });
       const reported=await resizeWidget(upperPlayer,height);
       // X previews carry a 2px allowance so the card's bottom border survives scaling.
       await expect.poll(()=>above.locator('.embed-stage').evaluate((el,reported)=>Math.abs(Math.round(el.getBoundingClientRect().height)-reported)<=3,reported)).toBe(true);
       await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).filter(a=>a.effect?.getTiming().iterations!==Infinity).length)).toBe(0);
-      await expect.poll(()=>page.evaluate(()=>window.readingSamples.length)).toBeGreaterThan(50);
+      await expect.poll(()=>page.evaluate(()=>window.readingSamples.length)).toBe(66);
       expect(await page.evaluate(before=>Math.max(...window.readingSamples.map(y=>Math.abs(y-before))),before)).toBeLessThan(5);
       expect(Math.abs((await focused.locator('.card-preview').boundingBox()).y-before)).toBeLessThan(2);
     }
@@ -125,7 +127,8 @@ test('feed is the default; animated grid switches preserve native players, notes
   const iframe=await first.locator('.embed-stage>iframe').elementHandle();
   const note=await first.getByLabel('Note',{exact:true}).elementHandle();
   await grid.click();
-  expect(await page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).some(a=>a.effect?.getKeyframes().some(k=>String(k.transform).includes('scale('))))).toBe(true);
+  // The cards start moving a frame after the click, once the browser has pictured the old layout.
+  await expect.poll(()=>page.locator('.cards').evaluate(el=>el.getAnimations({subtree:true}).some(a=>a.effect?.getKeyframes().some(k=>String(k.transform).includes('scale(')))),{intervals:[16],timeout:1000}).toBe(true);
   await settled(page);
   const compact=await first.boundingBox();expect(compact.width).toBeLessThan(400);expect(compact.width).toBeGreaterThan(280);
   expect(new Set(await cards.evaluateAll(items=>items.slice(0,3).map(el=>el.getBoundingClientRect().x))).size).toBe(3);
