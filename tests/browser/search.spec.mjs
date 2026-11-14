@@ -73,6 +73,9 @@ test('search, layout controls and Filters stick together while posts scroll',asy
     await page.getByRole('button',{name:`${view} view`,exact:true}).click();
     await expect(page.locator('.cards')).toHaveAttribute('data-view',view.toLowerCase());
     expect(Math.round((await controls.boundingBox()).y)).toBe(16);
+    // The page takes no clicks while a layout switch animates, so a click then would scroll the page
+    // looking for the button and move the post the next switch keeps in place.
+    await expect(page.locator('.cards')).not.toHaveClass(/switching-view/);
   }
   await findShortcut(page);
   await expect(page.getByRole('searchbox',{name:'Search saves'})).toBeFocused();

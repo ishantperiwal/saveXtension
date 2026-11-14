@@ -16,7 +16,8 @@ export function openAccountMenu(trigger, items, point, label = 'Account options'
     button.onclick = () => { closeAccountMenu(); item.run(); };
     menu.append(button);
   }
-  host.append(menu); current = { menu, trigger };
+  host.append(menu); const opened = current = { menu, trigger, settled: false };
+  requestAnimationFrame(() => { opened.settled = true; });
   const rect = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(8, Math.min(point?.x ?? rect.left, innerWidth - box.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(point?.y ?? rect.bottom, innerHeight - box.height - 8))}px`;
@@ -32,6 +33,8 @@ export function openAccountMenu(trigger, items, point, label = 'Account options'
   };
 }
 document.addEventListener('pointerdown', event => { if (current && !current.menu.contains(event.target)) closeAccountMenu(); }, true);
-window.addEventListener('scroll', () => closeAccountMenu(), true);
-window.addEventListener('resize', () => closeAccountMenu());
+// The browser sends scroll and resize events in the frame after the change, so one that comes before the menu's
+// first frame is from a change that ended before it opened, like the page shortening as a click redraws the library.
+window.addEventListener('scroll', () => { if (current?.settled) closeAccountMenu(); }, true);
+window.addEventListener('resize', () => { if (current?.settled) closeAccountMenu(); });
 window.addEventListener('blur', () => closeAccountMenu());

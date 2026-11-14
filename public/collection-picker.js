@@ -20,7 +20,7 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
   const error = document.createElement('p'); error.className = 'form-error collection-picker-error'; error.setAttribute('role','alert');
   form.append(input,list,hint,create,error); root.append(form); document.body.append(root);
   const assigned = new Set((post.topics || []).map(key)), catalog = [...topics.filter(topic=>assigned.has(key(topic.name))), ...topics.filter(topic=>!assigned.has(key(topic.name)))];
-  const picker = { root, trigger, restoreFocus, busy:false, frame:0 }; current = picker; trigger.setAttribute('aria-expanded','true');
+  const picker = { root, trigger, restoreFocus, busy:false, frame:0, settled:false }; current = picker; trigger.setAttribute('aria-expanded','true');
   function position() {
     if (!trigger.isConnected) { closeCollectionPicker(); return; }
     // Sizes without the opening animation, which starts it slightly smaller. It grows out of the + button, whichever side it opens on.
@@ -81,6 +81,7 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
   let last = '';
   const follow = () => {
     if (current !== picker) return;
+    picker.settled = true;
     const rect = trigger.getBoundingClientRect(), spot = `${Math.round(rect.left)},${Math.round(rect.top)}`;
     if (spot !== last) { last = spot; position(); }
     picker.frame = requestAnimationFrame(follow);
@@ -88,8 +89,10 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
   render(); input.focus({preventScroll:true}); picker.frame = requestAnimationFrame(follow);
 }
 document.addEventListener('pointerdown',event=>{if(current&&!current.root.contains(event.target)&&!current.trigger.contains(event.target))closeCollectionPicker();},true);
-window.addEventListener('scroll',event=>{if(current&&!(event.target instanceof Node&&current.root.contains(event.target)))closeCollectionPicker();},true);
-window.addEventListener('resize',()=>closeCollectionPicker());
+// Scroll and resize events arrive in the frame after the change, so one before the picker's first frame is from a
+// change that ended before it opened, like opening a topic jumping to the top. Later ones close it.
+window.addEventListener('scroll',event=>{if(current?.settled&&!(event.target instanceof Node&&current.root.contains(event.target)))closeCollectionPicker();},true);
+window.addEventListener('resize',()=>{if(current?.settled)closeCollectionPicker();});
 window.addEventListener('blur',()=>closeCollectionPicker());
 
 document.addEventListener('keydown',event=>{if(current&&event.key==='Escape'&&!event.defaultPrevented){event.preventDefault();closeCollectionPicker(true);}});
