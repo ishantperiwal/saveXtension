@@ -3,6 +3,25 @@ import { HttpError } from './domain.mjs';
 import { readNote, runNoteTool, signedOutMessage } from './ai-search.mjs';
 
 const REQUEST_LIMIT = 2000, NOTE_LIMIT = 10000;
+// What the AI adds keeps only lines the note doesn't already have, and says nothing twice itself.
+// Unless the request asks for a copy, it also leaves out lines taken straight from the post's own text, which sits beside the note,
+// including a line that's only a link the post already shows. Lines are compared ignoring case, spacing, list markers and end punctuation.
+// Very short lines, like a "Links:" heading, always stay.
+const lineKey = line => line.toLowerCase().replace(/\s+/g, ' ').replace(/^[\s\-–—•*·>]+|^\d+[.)]\s*/g, '').replace(/[\s.,;:!?]+$/, '').trim();
+const linkKey = link => link.toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[\/.,;:!?)]+$/, '');
+export const asksForCopy = request => /\b(links?|urls?|list|extract|copy|repos?|keep|save|verbatim|full text)\b/i.test(request);
+export function withoutRepeats(before, note, postText = '') {
+  const seen = new Set(`${before}\n${postText}`.split('\n').map(lineKey).filter(key => key.length >= 12));
+  const links = new Set((postText.match(/https?:\/\/\S+|\b[\w-]+(\.[\w-]+)+\/\S+/gi) || []).map(linkKey));
+  const kept = note.split('\n').filter(line => {
+    const key = lineKey(line);
+    if (/^\S+$/.test(key) && /[./]/.test(key) && links.has(linkKey(key))) return false;
+    if (key.length < 12) return true;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 // Someone asks for something on one post's note, and the AI inspects that post through tools tied to it.
 // One at a time. The AI only returns text: this adds it below the note, or replaces the note if the person asked for a rewrite. Undo in the app puts it back.
 export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTool }) {
@@ -17,7 +36,10 @@ export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTo
       // An empty reply only clears the note if that's what the person asked for. Otherwise it means the AI came back with nothing.
       if (!note && (!replaces || problem || !/\b(delete|remove|clear|erase|wipe|empty)\b/i.test(current.request))) throw new HttpError(422, problem || 'The AI didn’t find anything to add.');
       if (!visiblePost(current.post)) throw new HttpError(404, 'That save isn’t in your library any more.');
-      const before = store.post(current.post).notes || '', notes = replaces || !before ? note : `${before}\n\n${note}`;
+      const post = store.post(current.post), before = post.notes || '';
+      const added = withoutRepeats(replaces ? '' : before, note, replaces || asksForCopy(current.request) ? '' : [post.title, post.bookmarkTitle, post.text].filter(Boolean).join('\n'));
+      if (!replaces && !added) throw new HttpError(422, 'That’s already in the post or its note.');
+      const notes = replaces || !before ? added : `${before}\n\n${added}`;
       if (notes.length > NOTE_LIMIT) throw new HttpError(422, 'That’s more than a note can hold.');
       const saved = store.updatePost(current.post, { notes });
       Object.assign(current, { state: 'done', before, notes, updatedAt: saved.updatedAt });

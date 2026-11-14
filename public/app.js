@@ -636,11 +636,15 @@ function localCollectionMenu(trigger, point) {
   if (!topic || state.demo) return;
   const hasChildren = state.topicCatalog.some(t => t.parentId === topic.id);
   const parents = state.topicCatalog.filter(t => canNest(state.topicCatalog, topic.id, t.id));
+  // Right-clicking one of several shift-clicked topics acts on all of them.
+  const selected = state.filters.topics.includes(topic.name) ? state.topicCatalog.filter(t => t.id && state.filters.topics.includes(t.name)) : [];
   openAccountMenu(trigger, [
     { label: 'Rename', run: () => collectionDialog(topic, 'rename') },
     ...(!hasChildren && parents.length ? [{ label: 'Move into…', run: () => moveTopicDialog(topic, parents) }] : []),
     ...(topic.parentId ? [{ label: 'Move to top level', run: () => moveTopic(topic.id, null) }] : []),
-    { label: 'Delete', danger: true, run: () => collectionDialog(topic, 'delete') }
+    selected.length > 1
+      ? { label: `Delete all ${selected.length}`, danger: true, run: () => collectionDialog(selected, 'delete') }
+      : { label: 'Delete', danger: true, run: () => collectionDialog(topic, 'delete') }
   ], point, 'Topic options');
 }
 function moveTopicDialog(topic, parents) {
@@ -648,9 +652,10 @@ function moveTopicDialog(topic, parents) {
   for (const button of modal.querySelectorAll('[data-move-parent]')) button.onclick = () => { modal.close(); void moveTopic(topic.id, button.dataset.moveParent); };
   modal.querySelector('[data-move-parent]')?.focus({ preventScroll: true });
 }
-function collectionDialog(topic, action) {
-  const deleting = action === 'delete';
-  showModal(`<h2>${deleting ? 'Delete topic?' : 'Rename topic'}</h2>${deleting ? `<p>Are you sure you want to delete “${esc(topic.name)}”? Its saves will stay in your library and be removed from this topic.${state.topicCatalog.some(t => t.parentId === topic.id) ? ' Its subfolders move to the top level.' : ''}</p>` : ''}<form id="collection-edit-form">${deleting ? '' : `<label>Topic name<input name="name" value="${esc(topic.name)}" maxlength="80" required autocomplete="off"></label>`}<p class="form-error" role="alert"></p><div class="collection-dialog-actions"><button class="secondary" type="button" id="cancel-collection-edit">Cancel</button><button class="primary ${deleting ? 'collection-delete' : ''}" type="submit">${deleting ? 'Delete' : 'Rename'}</button></div></form>`);
+function collectionDialog(chosen, action) {
+  const deleting = action === 'delete', topics = [chosen].flat(), topic = topics[0], many = topics.length > 1;
+  const nested = topics.some(item => state.topicCatalog.some(t => t.parentId === item.id && !topics.includes(t)));
+  showModal(`<h2>${deleting ? many ? `Delete ${topics.length} topics?` : 'Delete topic?' : 'Rename topic'}</h2>${deleting ? many ? `<p>Are you sure you want to delete ${topics.map(item => `“${esc(item.name)}”`).join(', ')}? Their saves will stay in your library and be removed from these topics.${nested ? ' Their subfolders move to the top level.' : ''}</p>` : `<p>Are you sure you want to delete “${esc(topic.name)}”? Its saves will stay in your library and be removed from this topic.${nested ? ' Its subfolders move to the top level.' : ''}</p>` : ''}<form id="collection-edit-form">${deleting ? '' : `<label>Topic name<input name="name" value="${esc(topic.name)}" maxlength="80" required autocomplete="off"></label>`}<p class="form-error" role="alert"></p><div class="collection-dialog-actions"><button class="secondary" type="button" id="cancel-collection-edit">Cancel</button><button class="primary ${deleting ? 'collection-delete' : ''}" type="submit">${deleting ? many ? `Delete ${topics.length}` : 'Delete' : 'Rename'}</button></div></form>`);
   const form = $('#collection-edit-form'), cancel = $('#cancel-collection-edit');
   const restoreFocus = () => ([...document.querySelectorAll('[data-collection-id]')].find(button => button.dataset.collectionId === topic.id) || $('#sidebar-collections-tab'))?.focus({ preventScroll: true });
   modal.addEventListener('close', restoreFocus, { once: true });
@@ -661,16 +666,26 @@ function collectionDialog(topic, action) {
     const controls = [...form.querySelectorAll('button,input')], error = $('.form-error', form);
     controls.forEach(control => control.disabled = true); error.textContent = '';
     collectionVersion++;
-    try {
-      const data = await api(`/topics/${topic.id}`, { method: deleting ? 'DELETE' : 'PATCH', ...(deleting ? {} : { body: { name: $('input', form).value.trim() } }) });
+    // Several topics are deleted one by one. If one fails, the ones already gone stay gone and the dialog lists what's left.
+    const show = (data, done) => {
       collectionVersion++;
       state.posts = notes.overlay(data.posts); state.topicCatalog = data.topics;
-      state.filters.topics = state.filters.topics.flatMap(name => name === topic.name ? deleting ? [] : [data.topic.name] : [name]);
+      state.filters.topics = state.filters.topics.flatMap(name => { const item = done.find(t => t.name === name); return !item ? [name] : deleting ? [] : [data.topic.name]; });
       updateCollection();
+    };
+    const done = []; let data = null;
+    try {
+      for (const item of topics) {
+        data = await api(`/topics/${item.id}`, { method: deleting ? 'DELETE' : 'PATCH', ...(deleting ? {} : { body: { name: $('input', form).value.trim() } }) });
+        done.push(item);
+      }
+      show(data, done);
       if (form.isConnected) modal.close();
-      toast(deleting ? 'Topic deleted' : 'Topic renamed', false, 'bottom-center');
+      toast(deleting ? many ? `${topics.length} topics deleted` : 'Topic deleted' : 'Topic renamed', false, 'bottom-center');
     } catch (failure) {
-      error.textContent = failure.message; controls.forEach(control => control.disabled = false);
+      if (done.length) { show(data, done); topics.splice(0, done.length); }
+      error.textContent = done.length ? `${failure.message} ${done.length} deleted; ${topics.length} left.` : failure.message;
+      controls.forEach(control => control.disabled = false);
     }
   };
 }
@@ -1517,6 +1532,8 @@ function observeNotePreviews(root) {
 }
 // Filling a note with AI, one post at a time, only when someone asks. The server does the work and adds to the note.
 let noteAiJob = null, noteAiFollowing = false;
+// The usual question. Tab in an empty prompt box fills it in, ready to run with Enter.
+const NOTE_AI_PRESET = 'What is the post about?';
 const noteAiOpen = new Set(), noteAiDrafts = new Map(), noteAiErrors = new Map(), noteAiUndo = new Map(), noteAiChoice = new Map();
 let noteAiModels = [];
 const noteAiRunning = id => noteAiJob?.state === 'running' && noteAiJob.post === id;
@@ -1524,7 +1541,7 @@ function noteAiBoxInner(id) {
   if (noteAiRunning(id)) return `<div class="note-ai-working" role="status">${dotLoader('write')}<span class="note-ai-step">${esc(noteAiJob.step)}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(noteAiJob.request)}</p>`;
   if (!aiTool) return `<div class="note-ai-off"><span>Turn on Claude Code, Codex or DeepSeek to use this.</span><button type="button" class="note-ai-cancel" data-action="settings">Open Settings</button></div>`;
   const error = noteAiErrors.get(id);
-  return `<label class="sr-only" for="note-ai-input-${id}">What should go in this note?</label><textarea class="note-ai-input" id="note-ai-input-${id}" rows="1" maxlength="2000" placeholder="What should go in this note?">${esc(noteAiDrafts.get(id) || '')}</textarea>${error ? `<p class="note-ai-error">${esc(error)}</p>` : ''}<p class="note-ai-hint">Enter to run with ${noteAiModels.length ? `<select class="note-ai-model" aria-label="Model for this note">${noteAiModels.map(model => `<option value="${esc(model.id)}" ${model.id === noteAiChoice.get(id) ? 'selected' : ''}>${esc(model.name)}</option>`).join('')}</select>` : esc(aiToolModel)}</p>`;
+  return `<label class="sr-only" for="note-ai-input-${id}">What should go in this note?</label><textarea class="note-ai-input" id="note-ai-input-${id}" rows="1" maxlength="2000" placeholder="${NOTE_AI_PRESET} · Tab to use it">${esc(noteAiDrafts.get(id) || '')}</textarea>${error ? `<p class="note-ai-error">${esc(error)}</p>` : ''}<p class="note-ai-hint">Enter to run with ${noteAiModels.length ? `<select class="note-ai-model" aria-label="Model for this note">${noteAiModels.map(model => `<option value="${esc(model.id)}" ${model.id === noteAiChoice.get(id) ? 'selected' : ''}>${esc(model.name)}</option>`).join('')}</select>` : esc(aiToolModel)}</p>`;
 }
 function noteFoot(p) {
   const undo = noteAiUndo.get(p.id), canAsk = state.localMode && !state.demo, open = noteAiOpen.has(p.id) || noteAiRunning(p.id);
@@ -1653,6 +1670,7 @@ document.addEventListener('input', event => { if (event.target.matches?.('.note-
 document.addEventListener('keydown', event => {
   if (!event.target.matches?.('.note-ai-input')) return;
   const id = Number(event.target.closest('[data-note-ai-box]').dataset.noteAiBox);
+  if (event.key === 'Tab' && !event.shiftKey && !event.target.value.trim()) { event.preventDefault(); event.target.value = NOTE_AI_PRESET; noteAiDrafts.set(id, NOTE_AI_PRESET); event.target.setSelectionRange(NOTE_AI_PRESET.length, NOTE_AI_PRESET.length); return; }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void startNoteAi(id, event.target.value); }
   else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); noteAiOpen.delete(id); paintNoteAi(id); document.querySelector(`[data-note-ai="${id}"]`)?.focus({ preventScroll: true }); }
 });
@@ -1669,7 +1687,6 @@ function syncCardNote(card, post, immediate = false, preview = true) {
   if (noteAiUndo.has(post.id) && noteAiUndo.get(post.id).after !== notes.value(post)) { noteAiUndo.delete(post.id); $('.note-ai-undo', section)?.remove(); }
   if (immediate) { finishNoteAnimation(section); section.hidden = !shown; section.dataset.noteOpen = String(shown); }
   else setNoteVisibility(section, shown);
-  section.onclick = event => { if (state.cardView === 'feed' && event.target !== field && !event.target.closest('button,a')) field.focus({preventScroll:true}); };
   $('.note-button',card)?.setAttribute('aria-expanded',String(shown));
   label.textContent = status === 'error' ? 'Not saved yet · retrying' : status === 'pending' || status === 'saving' ? 'Saving…' : '';
   label.dataset.state = status || '';
@@ -1680,7 +1697,11 @@ function syncCardNote(card, post, immediate = false, preview = true) {
   // Once it has grown in place, clicking it edits it.
   const opensInView = event => !event.button && !$('.note-more', section).hidden && field.dataset.expanded !== 'true' && !event.target.closest('a,.note-more,.note-ai-button,.note-ai-box,.note-ai-undo');
   section.onmousedown = event => { if (opensInView(event)) event.preventDefault(); };
-  section.onclick = event => { if (!opensInView(event)) return; if (state.cardView === 'feed') setNoteExpanded(field, true); else showNoteView(allPosts().find(item => item.id === post.id) || post); };
+  // One handler: a cut-off note opens in full, and otherwise a click anywhere on a one-column note puts the cursor in it.
+  section.onclick = event => {
+    if (opensInView(event)) { if (state.cardView === 'feed') setNoteExpanded(field, true); else showNoteView(allPosts().find(item => item.id === post.id) || post); return; }
+    if (state.cardView === 'feed' && event.target !== field && !event.target.closest('button,a,.note-ai-box')) field.focus({ preventScroll: true });
+  };
   // The layer that makes links in the note clickable has to scroll with it.
   field.onscroll = () => { const links = field.parentElement.querySelector('.note-link-preview'); if (links) links.scrollTop = field.scrollTop; };
   field.oninput = () => {
@@ -1952,7 +1973,7 @@ async function dismissPost() {
   postPanel.classList.remove('is-closing');
   postClosing = false;
 }
-window.saveXDesktop?.onPost(showPost, dismissPost, postMoved);
+window.saveXDesktop?.onPost?.(showPost, dismissPost, postMoved);
 postPanel.addEventListener('cancel', event => { event.preventDefault(); void dismissPost(); });
 postPanel.addEventListener('click', event => {
   const copy = event.target.closest('.post-panel-copy');
