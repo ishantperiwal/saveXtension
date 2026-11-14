@@ -1409,7 +1409,7 @@ function card(p) {
   const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.platform !== 'pinterest' || (p.collections || []).some(item => item.platform === 'pinterest')) && (p.accounts || []).some(account => /^@[\w.]+$/.test(account));
   return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}"><div class="card-content">
     <div class="card-body">
-    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button>${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
+    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button" data-action="copy-post-link" aria-label="Copy post link" title="Copy post link">${icon('link')}</button>${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
     <div class="card-layout">${feedCardSource(p)}<section class="card-note" id="note-section-${p.id}" ${showNote ? '' : 'hidden'}><label class="sr-only" for="note-${p.id}">Note</label><div class="note-editor"><textarea class="note-input" id="note-${p.id}" name="notes" rows="3" maxlength="10000" placeholder="${state.cardView === 'feed' ? 'No notes added yet.' : 'Add a note…'}" ${state.demo || noteAiRunning(p.id) ? 'readonly' : ''}>${esc(notes.value(p))}</textarea><div class="note-link-preview" hidden></div></div><button type="button" class="note-more" data-action="toggle-note-preview" hidden>Read more</button>${noteFoot(p)}</section>
     <div class="card-preview">${nativePreview(p)}</div>
     <footer class="card-footer"><button type="button" class="collection-add" data-action="add-collection" aria-label="Add to topic" title="Add to topic" aria-haspopup="dialog" aria-controls="collection-picker" aria-expanded="false" ${state.demo ? 'disabled' : ''}>${icon('plus')}</button><div class="card-tags">${[...new Set(p.topics)].map(t => `<span class="tag-pill"><button type="button" class="tag-icon" data-action="remove-topic" data-topic-name="${esc(t)}" aria-label="Remove from “${esc(t)}”" title="Remove from this topic"${state.demo ? ' disabled' : ''}>${icon('folder', 'tag-folder')}${icon('close', 'tag-close')}</button><button class="tag" data-topic="${esc(t)}">${esc(t)}</button></span>`).join('')}</div></footer></div>
@@ -1473,11 +1473,12 @@ function postReference(post) {
     : `Read its metadata and my note with saveXtension MCP get_saves: ${JSON.stringify({postIds:[post.id]})}`;
   return `${heading}\n${post.url}\n${context}`;
 }
-// A notice can't show over the post panel, because the post is a native view on top of the page, so the panel's button answers for itself.
-async function copyPostReference(button, quiet = false) {
+// A notice can't show over the post panel, because the post is a native view on top of the page, so the panel's buttons answer for themselves.
+// "link" copies only the post's address; otherwise it's the reference for an AI client.
+async function copyPostReference(button, quiet = false, kind = 'reference') {
   const id = Number(button.closest('[data-post-id]')?.dataset.postId), post = allPosts().find(post => post.id === id);
   if (!post) return false;
-  const reference = postReference(post);
+  const reference = kind === 'link' ? post.url : postReference(post);
   try {
     if (window.saveXDesktop?.copyText) await window.saveXDesktop.copyText(reference);
     else {
@@ -1490,9 +1491,9 @@ async function copyPostReference(button, quiet = false) {
         finally { field.remove(); focused?.focus({preventScroll:true}); }
       }
     }
-    if (!quiet) toast('Reference copied', false, 'bottom-center');
+    if (!quiet) toast(kind === 'link' ? 'Link copied' : 'Reference copied', false, 'bottom-center');
     return true;
-  } catch { if (!quiet) toast('Couldn’t copy reference. Try again.', true, 'bottom-center'); return false; }
+  } catch { if (!quiet) toast(`Couldn’t copy ${kind}. Try again.`, true, 'bottom-center'); return false; }
 }
 function sizeNote(field) {
   if (CSS.supports('field-sizing','content') || !field.getClientRects().length) return;
@@ -1927,7 +1928,7 @@ function showPost({ layout, url, notePost = pendingNotePost }) {
   const width = notePost ? 0 : postWidths()[layout];
   postPanel.style.width = width ? `${width}px` : '';
   const browser = layout === 'saved' ? '' : '<button class="primary post-panel-browser" type="button">Open in browser</button>';
-  const copy = saved ? `<button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" title="Copy post reference">${icon('copy')}<span>Copy reference</span></button>` : '';
+  const copy = saved ? `<button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" title="Copy post reference">${icon('copy')}<span>Copy reference</span></button><button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" data-copy="link" title="Copy post link">${icon('link')}<span>Copy link</span></button>` : '';
   const header = `<header class="post-panel-header"><div class="post-panel-actions">${browser}${copy}</div><button class="icon-button post-panel-close" type="button" aria-label="Close post">${icon('close')}</button></header>`;
   const view = layout === 'saved' ? `<div class="post-panel-saved"><section class="saved-preview">${embedMetadata(saved, true)}</section></div>` : POST_VIEW;
   postPanel.innerHTML = notePost
@@ -1948,7 +1949,7 @@ function postMoved(url) {
   noteViewPost = next;
   section.outerHTML = panelNoteMarkup(next);
   if (next) mountNoteView(next);
-  const copy = $('.post-panel-copy', postPanel); if (copy) { copy.hidden = !next; if (next) copy.dataset.postId = next.id; }
+  for (const copy of postPanel.querySelectorAll('.post-panel-copy')) { copy.hidden = !next; if (next) copy.dataset.postId = next.id; }
 }
 // The post is a native view, which can't fade and would stay solid until the end. A picture of it goes in its place first, so it all leaves as one.
 async function freezePost() {
@@ -1977,9 +1978,9 @@ window.saveXDesktop?.onPost?.(showPost, dismissPost, postMoved);
 postPanel.addEventListener('cancel', event => { event.preventDefault(); void dismissPost(); });
 postPanel.addEventListener('click', event => {
   const copy = event.target.closest('.post-panel-copy');
-  if (copy) void copyPostReference(copy, true).then(copied => {
-    const label = $('span', copy); label.textContent = copied ? 'Copied' : 'Couldn’t copy';
-    clearTimeout(copy.resetLabel); copy.resetLabel = setTimeout(() => { label.textContent = 'Copy reference'; }, 1500);
+  if (copy) void copyPostReference(copy, true, copy.dataset.copy || 'reference').then(copied => {
+    const label = $('span', copy), idle = copy.dataset.copy === 'link' ? 'Copy link' : 'Copy reference'; label.textContent = copied ? 'Copied' : 'Couldn’t copy';
+    clearTimeout(copy.resetLabel); copy.resetLabel = setTimeout(() => { label.textContent = idle; }, 1500);
   });
   if (event.target.closest('.post-panel-browser')) void window.saveXDesktop.openPostInBrowser().catch(error => toast(error.message, true)).finally(dismissPost);
   if (event.target === postPanel || event.target.closest('.post-panel-close')) void dismissPost();
@@ -2718,6 +2719,7 @@ document.addEventListener('click', async e => {
       case 'open-chrome-extensions': try { await window.saveXDesktop.openExtensions(); } catch (failure) { toast(failure.message, true); } break;
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
+      case 'copy-post-link': await copyPostReference(button, false, 'link'); break;
       case 'remove-topic': removeTopicDialog(Number(button.closest('[data-post-id]').dataset.postId), button.dataset.topicName); break;
       case 'retry-preview': retryEmbed(button.closest('.save-card')?.querySelector('.native-embed')); break;
       case 'toggle-note-preview': {
