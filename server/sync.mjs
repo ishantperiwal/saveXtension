@@ -121,8 +121,9 @@ export function syncQueue(store, { native = false } = {}) {
     },
     enqueue(targets, xAccount = 'current', mode = 'quick', instagramAccount = 'current', instagramCollectionId = null, pinterestAccount = 'current', pinterestCollectionId = null, quiet = false) {
       if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
-      if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'pinterest', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Pinterest, Chrome bookmarks, or all sources.');
+      if (!Array.isArray(targets) || !targets.length || targets.some(t => !['x', 'instagram', 'pinterest', 'threads', 'chrome'].includes(t))) throw new HttpError(400, 'Choose X, Instagram, Pinterest, Threads, Chrome bookmarks, or all sources.');
       if (targets.includes('pinterest') && !native) throw new HttpError(400, 'Pinterest syncs from the saveXtension desktop app.');
+      if (targets.includes('threads') && !native) throw new HttpError(400, 'Threads syncs from the saveXtension desktop app.');
       if (Array.isArray(xAccount)) {
         if (!xAccount.length || xAccount.length > 30 || xAccount.some(handle => typeof handle !== 'string' || !/^@[A-Za-z0-9_]{1,30}$/.test(handle))) throw new HttpError(400, 'Choose valid X accounts.');
         xAccount = [...new Set(xAccount.map(handle => handle.toLowerCase()))];

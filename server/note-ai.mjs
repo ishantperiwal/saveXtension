@@ -23,10 +23,13 @@ export function withoutRepeats(before, note, postText = '') {
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 // Someone asks for something on one post's note, and the AI inspects that post through tools tied to it.
-// One at a time. The AI only returns text: this adds it below the note, or replaces the note if the person asked for a rewrite. Undo in the app puts it back.
+// One runs at a time, so the site only ever sees one visit. A note asked for meanwhile waits its turn and starts by itself
+// (user's decision): each one was still asked for on its own post. The AI only returns text: this adds it below the note, or replaces the note if the person asked for a rewrite. Undo in the app puts it back.
 export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTool }) {
-  let job = null, lastId = 0;
-  const view = current => current && { id: current.id, post: current.post, request: current.request, state: current.state, step: current.step, error: current.error, notes: current.notes, before: current.before, updatedAt: current.updatedAt, model: current.model };
+  let job = null, lastId = 0, drained = null;
+  // Every post's latest job, running, waiting or finished, so the app can follow them all. Oldest first.
+  const jobs = new Map();
+  const view = current => current && { id: current.id, post: current.post, request: current.request, state: current.state, position: current.state === 'waiting' ? [...jobs.values()].filter(item => item.state === 'waiting').indexOf(current) + 1 : 0, step: current.step, error: current.error, notes: current.notes, before: current.before, updatedAt: current.updatedAt, model: current.model };
   async function work(current, chosen) {
     const url = `${baseUrl}/mcp/note/${current.token}`;
     try {
@@ -53,25 +56,52 @@ export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTo
       await handler?.close().catch(() => {});
     }
   }
+  function begin(current) {
+    const chosen = tool();
+    if (!chosen) { Object.assign(current, { state: 'failed', error: 'Turn on Claude Code, Codex or DeepSeek in Settings first.' }); return Promise.resolve(); }
+    if (!visiblePost(current.post)) { Object.assign(current, { state: 'failed', error: 'That save isn’t in your library any more.' }); return Promise.resolve(); }
+    Object.assign(current, { state: 'running', step: 'Starting', model: current.model || chosen.model, token: randomUUID(), controller: new AbortController() });
+    current.handler = mcp.forNote(current.post, step => { current.step = step; }, { imagesAsFiles: !!chosen.noteImagesAsFiles });
+    job = current;
+    return work(current, chosen);
+  }
+  // Runs the waiting notes one after another until none are left.
+  function drain() {
+    if (drained) return drained;
+    drained = (async () => {
+      for (let next; (next = [...jobs.values()].find(item => item.state === 'waiting'));) await begin(next);
+    })().finally(() => { drained = null; });
+    return drained;
+  }
   return {
     current: () => view(job),
+    all: () => [...jobs.values()].map(view),
     job: id => (job?.id === id ? view(job) : null),
     mcpFor: token => (job?.handler && job.token === token ? job.handler : null),
     start(post, request, model = null) {
-      if (job?.state === 'running') throw new HttpError(409, 'Another note is still being filled. Wait for it, or cancel it.');
+      const earlier = jobs.get(post);
+      if (earlier?.state === 'running') throw new HttpError(409, 'This note is still being filled. Wait for it, or cancel it.');
+      if (earlier?.state === 'waiting') throw new HttpError(409, 'This note is already waiting its turn.');
       request = typeof request === 'string' ? request.trim() : '';
       if (!request || request.length > REQUEST_LIMIT) throw new HttpError(400, 'Say what you want in this note.');
       if (!visiblePost(post)) throw new HttpError(404, 'That save isn’t in your library.');
       const chosen = tool();
       if (!chosen) throw new HttpError(409, 'Turn on Claude Code, Codex or DeepSeek in Settings first.');
-      const current = { id: ++lastId, post, request, state: 'running', step: 'Starting', error: '', notes: '', before: '', model: model?.name || chosen.model, modelId: model?.id, token: randomUUID(), controller: new AbortController() };
-      current.handler = mcp.forNote(post, step => { current.step = step; }, { imagesAsFiles: !!chosen.noteImagesAsFiles });
-      job = current;
-      current.finished = work(current, chosen);
+      const current = { id: ++lastId, post, request, state: 'waiting', step: '', error: '', notes: '', before: '', model: model?.name || '', modelId: model?.id, token: '', handler: null };
+      jobs.delete(post); jobs.set(post, current);
+      // Finished jobs are only kept so the app can pick up their result; the oldest go once there are many.
+      for (const [key, item] of jobs) if (jobs.size > 50 && !['running', 'waiting'].includes(item.state)) jobs.delete(key);
+      void drain();
       return view(current);
     },
-    cancel() { if (job?.state === 'running') { job.state = 'cancelled'; job.controller.abort(); } return view(job); },
-    close() { if (job?.state === 'running') job.controller.abort(); },
-    idle: () => job?.finished,
+    // Cancels one post's note, waiting or running, or the running one when no post is named.
+    cancel(post) {
+      const current = post === undefined ? job : jobs.get(post);
+      if (current?.state === 'waiting') current.state = 'cancelled';
+      if (current?.state === 'running') { current.state = 'cancelled'; current.controller.abort(); }
+      return view(current || job);
+    },
+    close() { for (const item of jobs.values()) if (item.state === 'waiting') item.state = 'cancelled'; if (job?.state === 'running') job.controller.abort(); },
+    idle: () => drained || Promise.resolve(),
   };
 }

@@ -1,6 +1,7 @@
 import { openAccountMenu } from './account-menu.js';
 import { storedMarkdown, editorMarkdown } from './document-markdown.js';
 import { fontDecorations, loadStoredFonts } from './document-fonts.js';
+import { dotLoader } from './dot-loader.js';
 
 // Documents: the person's own pages beside their saves, for what they want to keep and come back to.
 // A dark panel docked to the right edge lists them. Closed, only its notch shows; the notch opens and closes it.
@@ -9,14 +10,16 @@ import { fontDecorations, loadStoredFonts } from './document-fonts.js';
 const EDITOR = '/vendor/editor/editor.js', EDITOR_STYLE = '/vendor/editor/editor-style.css', IMAGE_LIMIT = 15 * 1024 * 1024;
 // A filled document, for the notch and the list: the page with its lines cut out and a lighter folded corner.
 const DOC_ICON = '<svg class="icon doc-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M6.5 2H13v5a2.5 2.5 0 0 0 2.5 2.5H20v10A2.5 2.5 0 0 1 17.5 22h-11A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2ZM8 12.2v1.6h8v-1.6H8Zm0 3.8v1.6h5.5V16H8Z"/><path fill="currentColor" opacity=".5" d="M14.5 2.4 19.6 7.5h-4.1a1 1 0 0 1-1-1V2.4Z"/></svg>';
+const REFINE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 13.9 9l5.6 2-5.6 2-1.9 5.5-1.9-5.5-5.6-2 5.6-2zM19 3v3.5M17.2 4.8h3.6"/></svg>';
+const UP_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>';
 const macKeyboard = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 let editorModule;
 function loadEditor() {
   if (!document.querySelector(`link[href="${EDITOR_STYLE}"]`)) document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: EDITOR_STYLE }));
   return editorModule ||= import(EDITOR).catch(error => { editorModule = null; throw error; });
 }
-async function request(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`/api${path}`, { method, credentials: 'same-origin', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+async function request(path, { method = 'GET', body, signal } = {}) {
+  const res = await fetch(`/api${path}`, { method, signal, credentials: 'same-origin', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const result = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(result.error || 'That didn’t work. Try again.'), { status: res.status });
   return result;
@@ -24,8 +27,14 @@ async function request(path, { method = 'GET', body } = {}) {
 const asBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] || ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
 // The Markdown keeps images/<name>, the same way an exported folder would. Only the page shows it from the server.
 const shownImage = src => (/^images\/[a-f0-9]{32}\.(png|jpg|gif|webp)$/.test(src) ? `/api/documents/${src}` : src);
-const aboutText = description => description ? escapeText(description) : '<span class="document-description-empty">Add what belongs in this document, so anyone adding to it keeps to that.</span>';
+const aboutText = description => description ? escapeText(description) : '<span class="document-description-empty">Add what belongs in this document, how entries should be formatted, and what to leave out.</span>';
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const graphemeSegmenter = typeof Intl?.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const firstGrapheme = value => {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return '';
+  return (graphemeSegmenter ? graphemeSegmenter.segment(trimmed)[Symbol.iterator]().next().value?.segment : Array.from(trimmed)[0]) || '';
+};
 const when = iso => {
   const then = Date.parse(iso), minutes = Math.round((Date.now() - then) / 60000);
   if (minutes < 1) return 'Just now';
@@ -36,6 +45,7 @@ const when = iso => {
 
 export function mountDocuments({ icon, esc, toast }) {
   if (document.querySelector('.documents-notch')) return;
+  const docIcon = doc => doc?.icon ? `<span class="documents-emoji" aria-hidden="true">${esc(doc.icon)}</span>` : DOC_ICON;
   const edge = document.createElement('aside');
   edge.className = 'documents-edge'; edge.dataset.open = 'false'; edge.setAttribute('aria-label', 'Documents');
   const notch = Object.assign(document.createElement('button'), { type: 'button', className: 'documents-notch', title: 'Documents' });
@@ -44,36 +54,115 @@ export function mountDocuments({ icon, esc, toast }) {
   notch.innerHTML = `<svg class="documents-notch-shape" viewBox="0 0 26 92" preserveAspectRatio="none" aria-hidden="true"><path d="M26 0C26 24 1 26 1 46C1 66 26 68 26 92Z"/></svg>${DOC_ICON}`;
   const drawer = document.createElement('div');
   drawer.className = 'documents-drawer'; drawer.inert = true;
-  drawer.innerHTML = `<header class="documents-drawer-head"><h2>Documents</h2><button class="icon-button" type="button" data-doc-action="new" aria-label="New document" title="New document">${icon('plus')}</button><button class="icon-button" type="button" data-doc-action="hide" aria-label="Close documents" title="Close">${icon('close')}</button></header>
-    <form class="documents-new" hidden novalidate>
-      <label>Name<input name="title" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Fonts"></label>
-      <label>What belongs in it<textarea name="description" rows="4" maxlength="600" placeholder="Fonts worth trying: their names, where to get them and their licences. Nothing else."></textarea></label>
-      <p class="documents-new-hint">An AI adding to this document keeps to what you write here.</p>
-      <p class="documents-new-error" role="alert" hidden></p>
-      <div class="documents-new-actions"><button class="documents-new-cancel" type="button" data-doc-action="cancel-new">Cancel</button><button class="documents-new-create" type="submit">Create</button></div>
-    </form>
+  drawer.innerHTML = `<header class="documents-drawer-head"><h2>Documents</h2><button class="documents-new-button" type="button" data-doc-action="new" aria-label="New document" title="New document">${icon('plus')}<span>New</span></button></header>
     <input class="documents-filter" type="search" placeholder="Find a document" aria-label="Find a document" autocomplete="off" spellcheck="false">
     <ul class="documents-list" role="list"></ul>`;
+  const newModal = document.createElement('dialog');
+  newModal.id = 'document-new'; newModal.setAttribute('aria-labelledby', 'document-new-title');
+  newModal.innerHTML = `<button class="icon-button modal-close" type="button" data-doc-action="cancel-new" aria-label="Close dialog">${icon('close')}</button>
+    <form class="documents-new" novalidate>
+      <h2 id="document-new-title">New document</h2>
+      <label>Name<input name="title" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Fonts"></label>
+      <div class="documents-new-scope">
+        <label for="document-new-description">What belongs in it</label>
+        <div class="document-scope-box">
+          <textarea id="document-new-description" name="description" rows="3" maxlength="600" placeholder="e.g. Fonts worth trying: font name, foundry or creator, link and licence. Leave out general design posts that don’t name a typeface."></textarea>
+          <div class="document-scope-foot">
+            <button class="document-scope-ai" type="button" data-doc-action="ai-describe-new">${icon('sparkle')}<span>Draft from name</span></button>
+          </div>
+        </div>
+      </div>
+      <p class="documents-new-error" role="alert" hidden></p>
+      <div class="documents-new-actions"><button class="secondary" type="button" data-doc-action="cancel-new">Cancel</button><button class="primary" type="submit">Create document</button></div>
+    </form>`;
   const view = document.createElement('dialog');
   view.id = 'document-view'; view.setAttribute('aria-label', 'Document');
   edge.append(notch, drawer);
-  document.body.append(edge, view);
-  const list = drawer.querySelector('.documents-list'), filter = drawer.querySelector('.documents-filter'), form = drawer.querySelector('.documents-new');
-  let docs = [], open = null;
+  document.body.append(edge, newModal, view);
+  const list = drawer.querySelector('.documents-list'), filter = drawer.querySelector('.documents-filter'), form = newModal.querySelector('.documents-new'), newAiButton = form.querySelector('[data-doc-action="ai-describe-new"]');
+  let docs = [], open = null, afterCreate = null;
 
+  function syncNewAiLabel(generated = false) {
+    if (!newAiButton || newAiButton.disabled) return;
+    const hasText = !!form.elements.description.value.trim();
+    newAiButton.dataset.generated = String(generated);
+    newAiButton.innerHTML = `${icon('sparkle')}<span>${generated ? 'Redraft' : hasText ? 'Refine' : 'Draft from name'}</span>`;
+  }
   function renderList() {
     const query = filter.value.trim().toLowerCase(), shown = docs.filter(d => d.title.toLowerCase().includes(query));
     list.innerHTML = shown.length
-      ? shown.map(d => `<li class="documents-row"><button class="documents-copy" type="button" data-doc-copy="${d.id}" aria-label="Copy reference to ${esc(d.title)}" title="Copy reference for an AI">${icon('copy')}</button><button class="documents-item" type="button" data-doc-id="${d.id}"><span class="documents-item-text"><span class="documents-item-title">${esc(d.title)}</span><span class="documents-item-time">${when(d.updatedAt)}</span></span></button></li>`).join('')
+      ? shown.map(d => `<li class="documents-row"><button class="documents-icon" type="button" data-doc-icon="${d.id}" aria-label="Change icon for ${esc(d.title)}" title="Choose an emoji">${docIcon(d)}</button><button class="documents-item" type="button" data-doc-id="${d.id}"><span class="documents-item-text"><span class="documents-item-title">${esc(d.title)}</span><span class="documents-item-time">${when(d.updatedAt)}</span></span></button><button class="documents-copy" type="button" data-doc-copy="${d.id}" aria-label="Copy reference to ${esc(d.title)}" title="Copy reference for an AI">${icon('copy')}</button></li>`).join('')
       : `<li class="documents-empty">${docs.length ? 'No document has that name.' : 'Keep what you find worth coming back to: repos, fonts, prompts, ideas. Start one with +.'}</li>`;
+  }
+  async function setDocumentIcon(docId, nextIcon) {
+    const listed = docs.find(d => d.id === docId), prevIcon = listed?.icon ?? (open?.id === docId ? open.icon : '') ?? '';
+    if (nextIcon === prevIcon) return;
+    if (listed) listed.icon = nextIcon;
+    if (open?.id === docId) {
+      open.icon = nextIcon;
+      const headBtn = view.querySelector('.document-head-icon');
+      if (headBtn) headBtn.innerHTML = docIcon(open);
+    }
+    const rowBtn = list.querySelector(`[data-doc-icon="${docId}"]`);
+    if (rowBtn) rowBtn.innerHTML = docIcon({ icon: nextIcon });
+    try {
+      const saved = await request(`/documents/${docId}`, { method: 'PATCH', body: { icon: nextIcon } });
+      if (listed) listed.icon = saved.icon || '';
+      if (open?.id === docId) open.icon = saved.icon || '';
+    } catch (error) {
+      if (listed) listed.icon = prevIcon;
+      if (open?.id === docId) {
+        open.icon = prevIcon;
+        const headBtn = view.querySelector('.document-head-icon');
+        if (headBtn) headBtn.innerHTML = docIcon(open);
+      }
+      if (rowBtn) rowBtn.innerHTML = docIcon({ icon: prevIcon });
+      toast(error.message, true, 'bottom-center');
+    }
+  }
+  // An invisible text input inside the clicked icon button receives the emoji picked from the native OS emoji panel.
+  function pickEmoji(button, docId) {
+    let input = button.querySelector('.documents-emoji-input');
+    if (!input) {
+      input = Object.assign(document.createElement('input'), { type: 'text', className: 'documents-emoji-input', tabIndex: -1 });
+      input.setAttribute('aria-hidden', 'true');
+      let done = false;
+      const closeInput = () => {
+        if (done) return;
+        done = true;
+        input.remove();
+      };
+      input.addEventListener('input', () => {
+        const chosen = firstGrapheme(input.value);
+        closeInput();
+        if (chosen) void setDocumentIcon(docId, chosen);
+      });
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+          event.preventDefault(); event.stopPropagation();
+          closeInput();
+          void setDocumentIcon(docId, '');
+        } else if (event.key === 'Escape') {
+          event.preventDefault(); event.stopPropagation();
+          closeInput();
+          button.focus({ preventScroll: true });
+        }
+      });
+      input.addEventListener('blur', () => closeInput());
+      button.append(input);
+    }
+    input.value = '';
+    input.focus({ preventScroll: true });
+    void window.saveXDesktop?.showEmojiPanel?.();
   }
   async function refresh() {
     try { docs = (await request('/documents')).documents; renderList(); } catch (error) { list.innerHTML = `<li class="documents-empty">${esc(error.message)}</li>`; }
   }
   const isShown = () => edge.dataset.open === 'true';
   function showDrawer(show = !isShown()) {
+    if (!show && drawer.contains(document.activeElement)) document.activeElement.blur();
     edge.dataset.open = String(show); drawer.inert = !show; notch.setAttribute('aria-expanded', String(show)); notch.tabIndex = show ? -1 : 0;
-    if (show) { void refresh(); filter.focus({ preventScroll: true }); }
+    if (show) void refresh();
   }
   // What to paste into an AI chat so it can find this document through MCP, like a post's Copy reference.
   async function copyReference(button) {
@@ -85,17 +174,74 @@ export function mountDocuments({ icon, esc, toast }) {
       clearTimeout(button.reset); button.reset = setTimeout(() => { button.innerHTML = icon('copy'); button.classList.remove('is-copied'); }, 1500);
     } catch { toast('Couldn’t copy the reference. Try again.', true, 'bottom-center'); }
   }
+  function dismissDialog(dialog) {
+    if (!dialog.open) return Promise.resolve();
+    if (dialog.dataset.closing) return dialog._closingPromise || Promise.resolve();
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      dialog.close();
+      return Promise.resolve();
+    }
+    dialog.dataset.closing = 'true';
+    dialog.classList.add('is-closing');
+    return (dialog._closingPromise = new Promise(resolve => {
+      const finish = () => {
+        delete dialog.dataset.closing;
+        delete dialog._closingPromise;
+        dialog.classList.remove('is-closing');
+        if (dialog.open) dialog.close();
+        resolve();
+      };
+      const timer = setTimeout(finish, 200);
+      dialog.addEventListener('animationend', event => {
+        if (event.target !== dialog) return;
+        clearTimeout(timer);
+        finish();
+      }, { once: true });
+    }));
+  }
   // A document starts with a name and what belongs in it (user's decision), so anyone adding to it, person or AI, knows its scope.
-  function showNewForm(show = true) {
-    form.hidden = !show; filter.hidden = show; list.hidden = show;
+  function showNewModal(show = true, onCreated = null) {
+    afterCreate = show ? onCreated : null;
     form.querySelector('.documents-new-error').hidden = true;
-    if (show) { form.reset(); form.elements.title.focus(); } else filter.focus({ preventScroll: true });
+    if (!show) return dismissDialog(newModal);
+    if (newModal.dataset.closing) {
+      delete newModal.dataset.closing;
+      delete newModal._closingPromise;
+      newModal.classList.remove('is-closing');
+    }
+    if (isShown()) showDrawer(false);
+    form.reset(); syncNewAiLabel(false);
+    if (!newModal.open) newModal.showModal();
+    form.elements.title.focus({ preventScroll: true });
+  }
+  async function describeNewModal() {
+    const title = form.elements.title.value.trim(), description = form.elements.description.value.trim(), error = form.querySelector('.documents-new-error');
+    error.hidden = true;
+    if (!title && !description) { error.textContent = 'Give it a name or jot down a few words first.'; error.hidden = false; form.elements.title.focus(); return; }
+    const wasGenerated = newAiButton.dataset.generated === 'true';
+    newAiButton.disabled = true; newAiButton.innerHTML = `${dotLoader('write')}<span>${description && !wasGenerated ? 'Refining…' : 'Drafting…'}</span>`;
+    try {
+      const result = await request('/documents/describe', { method: 'POST', body: { title, description } });
+      form.elements.description.value = result.description;
+      form.elements.description.focus();
+      newAiButton.disabled = false; syncNewAiLabel(true);
+    } catch (failure) {
+      error.textContent = failure.message; error.hidden = false;
+      newAiButton.disabled = false; syncNewAiLabel(wasGenerated);
+    }
   }
   async function create() {
     const title = form.elements.title.value.trim(), description = form.elements.description.value.trim(), error = form.querySelector('.documents-new-error');
     if (!title || !description) { error.textContent = !title ? 'Give it a name.' : 'Say what belongs in it.'; error.hidden = false; (!title ? form.elements.title : form.elements.description).focus(); return; }
-    try { const doc = await request('/documents', { method: 'POST', body: { title, description } }); showNewForm(false); docs.unshift(doc); renderList(); await openDocument(doc.id); }
-    catch (failure) { error.textContent = failure.message; error.hidden = false; }
+    const submit = form.querySelector('button[type="submit"]'); submit.disabled = true;
+    try {
+      const doc = await request('/documents', { method: 'POST', body: { title, description } });
+      const callback = afterCreate;
+      await showNewModal(false); docs.unshift(doc); renderList();
+      if (callback) await callback(doc);
+      else await openDocument(doc.id);
+    } catch (failure) { error.textContent = failure.message; error.hidden = false; }
+    finally { submit.disabled = false; }
   }
   function confirmDelete(trigger, doc, point) {
     openAccountMenu(trigger, [
@@ -114,26 +260,55 @@ export function mountDocuments({ icon, esc, toast }) {
   drawer.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     event.stopPropagation();
-    if (!form.hidden) return showNewForm(false);
     showDrawer(false); notch.focus();
   });
   form.addEventListener('submit', event => { event.preventDefault(); void create(); });
+  form.elements.description.addEventListener('input', () => syncNewAiLabel(false));
   form.elements.description.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void create(); } });
+  newModal.addEventListener('cancel', event => { event.preventDefault(); void showNewModal(false); });
+  newModal.addEventListener('click', event => {
+    if (event.target.closest('[data-doc-action="ai-describe-new"]')) { void describeNewModal(); return; }
+    if (event.target.closest('[data-doc-action="cancel-new"]')) { void showNewModal(false); return; }
+    if (event.target === newModal) {
+      const box = newModal.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) void showNewModal(false);
+    }
+  });
+  newModal.addEventListener('close', () => { afterCreate = null; });
   drawer.addEventListener('click', event => {
     const action = event.target.closest('[data-doc-action]')?.dataset.docAction, item = event.target.closest('.documents-item');
-    if (action === 'new') showNewForm(form.hidden);
-    if (action === 'cancel-new') showNewForm(false);
+    if (action === 'new') showNewModal(true);
     if (action === 'hide') showDrawer(false);
+    const iconBtn = event.target.closest('[data-doc-icon]');
+    if (iconBtn) { void pickEmoji(iconBtn, iconBtn.dataset.docIcon); return; }
     const copy = event.target.closest('[data-doc-copy]');
     if (copy) void copyReference(copy);
     if (item) void openDocument(item.dataset.docId);
   });
   drawer.addEventListener('contextmenu', event => {
-    const item = event.target.closest('.documents-item'), doc = item && docs.find(d => d.id === item.dataset.docId); if (!doc) return;
+    const row = event.target.closest('.documents-row'), id = row?.querySelector('.documents-item')?.dataset.docId, doc = id && docs.find(d => d.id === id); if (!doc) return;
     event.preventDefault();
-    openAccountMenu(item, [{ label: 'Open', run: () => void openDocument(doc.id) }, { label: 'Delete…', danger: true, run: () => confirmDelete(item, doc, { x: event.clientX, y: event.clientY }) }], { x: event.clientX, y: event.clientY }, 'Document options');
+    openAccountMenu(row, [
+      { label: 'Open', run: () => void openDocument(doc.id) },
+      ...(doc.icon ? [{ label: 'Reset icon', run: () => void setDocumentIcon(doc.id, '') }] : []),
+      { label: 'Delete…', danger: true, run: () => confirmDelete(row, doc, { x: event.clientX, y: event.clientY }) },
+    ], { x: event.clientX, y: event.clientY }, 'Document options');
   });
-  document.addEventListener('pointerdown', event => { if (isShown() && !view.open && !edge.contains(event.target) && !event.target.closest('.account-menu')) showDrawer(false); });
+  document.addEventListener('pointerdown', event => { if (isShown() && !view.open && !newModal.open && !edge.contains(event.target) && !event.target.closest('.account-menu')) showDrawer(false); });
+  document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.isComposing || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    const active = document.activeElement;
+    const typing = event.target?.isContentEditable || active?.isContentEditable || event.target?.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable=""], .ProseMirror') || active?.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable=""], .ProseMirror');
+    if (event.key === 'Escape' && isShown() && !typing && !view.open && !newModal.open && !document.querySelector('dialog[open], .account-menu, .collection-picker, .select-menu')) {
+      event.preventDefault();
+      showDrawer(false);
+      return;
+    }
+    if (event.key.toLowerCase() !== 'd' || typing) return;
+    if (view.open || newModal.open || document.querySelector('dialog[open], .account-menu, .collection-picker, .select-menu')) return;
+    event.preventDefault();
+    showDrawer();
+  });
 
   // One open document at a time. Edits save shortly after typing stops, and always before it closes.
   function setStatus(text, error = false) { const el = view.querySelector('.document-status'); if (el) { el.textContent = text; el.classList.toggle('error', error); } }
@@ -147,6 +322,7 @@ export function mountDocuments({ icon, esc, toast }) {
     const body = doc.markdown(), title = doc.titleField.value.trim() || 'Untitled', description = doc.descriptionDraft ?? doc.description;
     doc.dirty = false;
     if (body === doc.body && title === doc.title && description === doc.description) { if (open === doc) setStatus('Saved'); return; }
+    if (open === doc) setStatus('Saving…');
     doc.saving = (async () => {
       try {
         const saved = await request(`/documents/${doc.id}`, { method: 'PATCH', body: { title, body, ...(description !== doc.description ? { description } : {}), expectedUpdatedAt: doc.updatedAt } });
@@ -168,12 +344,92 @@ export function mountDocuments({ icon, esc, toast }) {
     if (file.size > IMAGE_LIMIT) throw new Error('That picture is over 15 MB.');
     return (await request('/documents/images', { method: 'POST', body: { data: await asBase64(file) } })).src;
   }
+  // Refine with AI: rewrites the selected text the way the person asks, using the AI turned on in Settings.
+  // The new text replaces the selection as an ordinary edit, so it saves like typing and ⌘Z takes it back.
+  const refine = (() => {
+    let box = null, running = null, last = '';
+    function close(force = false) {
+      if (!box || (running && !force)) return;
+      running?.abort(); running = null; box.remove(); box = null;
+    }
+    function place(editor, from, to) {
+      const frame = view.getBoundingClientRect(), end = editor.coordsAtPos(to), start = editor.coordsAtPos(from);
+      const width = Math.min(380, frame.width - 32), left = Math.min(Math.max(start.left - frame.left, 16), frame.width - width - 16);
+      const below = end.bottom - frame.top + 10, height = box.offsetHeight || 120;
+      box.style.width = `${width}px`; box.style.left = `${left}px`;
+      box.style.top = `${below + height > frame.height - 16 ? Math.max(16, start.top - frame.top - height - 10) : below}px`;
+    }
+    // The selection as Markdown. Part of one paragraph comes out as just that text.
+    function selected(editor, from, to, serializer) {
+      const { schema } = editor.state, slice = editor.state.doc.slice(from, to);
+      const inline = slice.content.firstChild?.isInline;
+      const doc = inline ? schema.topNodeType.create(null, schema.nodes.paragraph.create(null, slice.content)) : schema.topNodeType.createAndFill(null, slice.content);
+      return doc ? storedMarkdown(serializer(doc)).trim() : editor.state.doc.textBetween(from, to, '\n\n');
+    }
+    function apply(editor, from, to, original, text, parser, m) {
+      if (from > editor.state.doc.content.size || to > editor.state.doc.content.size || editor.state.doc.textBetween(from, to, '\n') !== original) throw new Error('The text changed while it was being refined. Select it again and retry.');
+      const parsed = parser(editorMarkdown(text)), $from = editor.state.doc.resolve(from), $to = editor.state.doc.resolve(to);
+      const inOne = $from.parent === $to.parent && $from.parent.isTextblock && parsed.childCount === 1 && parsed.firstChild.isTextblock;
+      const tr = inOne ? editor.state.tr.replaceWith(from, to, parsed.firstChild.content) : editor.state.tr.replaceRange(from, to, new m.Slice(parsed.content, 0, 0));
+      editor.dispatch(tr.scrollIntoView()); editor.focus();
+    }
+    async function show(editor, from, to, builder, m) {
+      close(true);
+      const original = editor.state.doc.textBetween(from, to, '\n');
+      let passage = '';
+      builder.editor.action(ctx => { passage = selected(editor, from, to, ctx.get(m.serializerCtx)); });
+      box = Object.assign(document.createElement('form'), { className: 'document-refine' });
+      box.setAttribute('aria-label', 'Refine with AI');
+      box.innerHTML = `<textarea rows="1" maxlength="2000" aria-label="How should it change?" placeholder="How should it change? Shorter, friendlier, as a list… Blank makes it shorter.">${escapeText(last)}</textarea><p class="document-refine-error" role="alert" hidden></p><div class="document-refine-foot"><span class="document-refine-model"></span><button class="document-refine-send" type="submit" aria-label="Refine" title="Refine">${UP_ICON}</button></div>`;
+      view.append(box); place(editor, from, to);
+      const field = box.querySelector('textarea'), error = box.querySelector('.document-refine-error'), foot = box.querySelector('.document-refine-foot'), model = box.querySelector('.document-refine-model');
+      field.focus({ preventScroll: true }); field.select();
+      const thisBox = box;
+      // The AI that will run is named before anything is sent.
+      request('/ai-search/tools').then(({ tools, selected: on }) => {
+        if (box !== thisBox) return;
+        const tool = tools.find(item => item.id === on);
+        if (tool) model.textContent = tool.model || tool.name;
+        else { field.disabled = true; box.querySelector('.document-refine-send').disabled = true; error.textContent = 'Turn on Claude Code, Codex or DeepSeek in Settings to refine text.'; error.hidden = false; }
+      }).catch(() => {});
+      field.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); box.requestSubmit(); }
+        if (event.key === 'Escape') { event.preventDefault(); close(); editor.focus(); }
+      });
+      box.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (running) return;
+        last = field.value.trim(); error.hidden = true;
+        running = new AbortController();
+        const idle = foot.innerHTML;
+        foot.innerHTML = `<span class="document-refine-working" role="status">${dotLoader('write')}<span>Refining…</span></span><button class="document-refine-cancel" type="button">Cancel</button>`;
+        foot.querySelector('.document-refine-cancel').onclick = () => { running?.abort(); };
+        field.disabled = true;
+        try {
+          const { text } = await request('/documents/refine', { method: 'POST', body: { documentId: open.id, text: passage, request: last }, signal: running.signal });
+          builder.editor.action(ctx => apply(editor, from, to, original, text, ctx.get(m.parserCtx), m));
+          running = null; close();
+        } catch (failure) {
+          const stopped = running?.signal.aborted; running = null;
+          if (box !== thisBox) return;
+          foot.innerHTML = idle; field.disabled = false; field.focus({ preventScroll: true });
+          if (!stopped) { error.textContent = failure.message; error.hidden = false; }
+          place(editor, from, to);
+        }
+      });
+    }
+    // A click anywhere else puts the box away, unless it's still working.
+    view.addEventListener('pointerdown', event => { if (box && !box.contains(event.target) && !event.target.closest('.milkdown-toolbar')) close(); });
+    return { show, close };
+  })();
   async function mountEditor(host, markdown) {
     const m = await loadEditor();
-    const imageConfig = { onUpload: upload, inlineOnUpload: upload, blockOnUpload: upload, proxyDomURL: shownImage, blockUploadPlaceholderText: 'Paste a link, or upload a picture', inlineUploadPlaceholderText: 'Paste a link, or upload' };
+    const imageConfig = { onUpload: upload, inlineOnUpload: upload, blockOnUpload: upload, proxyDomURL: shownImage, maxHeight: 520, blockUploadPlaceholderText: 'Paste a link, or upload a picture', inlineUploadPlaceholderText: 'Paste a link, or upload' };
     const builder = new m.CrepeBuilder({ root: host, defaultValue: editorMarkdown(markdown) })
       .addFeature(m.cursor).addFeature(m.listItem).addFeature(m.linkTooltip).addFeature(m.imageBlock, imageConfig)
-      .addFeature(m.blockEdit).addFeature(m.toolbar).addFeature(m.table)
+      .addFeature(m.blockEdit).addFeature(m.table)
+      // Selected text gets a Refine with AI button beside the formatting ones.
+      .addFeature(m.toolbar, { buildToolbar: groups => groups.addGroup('refine', 'Refine').addItem('refine', { icon: `${REFINE_ICON}<span class="refine-label">Refine</span>`, label: 'Refine with AI', active: () => false, onRun: ctx => { const editor = ctx.get(m.editorViewCtx), { from, to, empty } = editor.state.selection; if (!empty) void refine.show(editor, from, to, builder, m); } }) })
       .addFeature(m.placeholder, { text: 'Write, or type / for headings, lists, tables and pictures', mode: 'block' });
     // - bullets, the more common way to write a list.
     builder.editor.config(ctx => ctx.update(m.remarkStringifyOptionsCtx, options => ({ ...options, bullet: '-' })));
@@ -183,7 +439,7 @@ export function mountDocuments({ icon, esc, toast }) {
     const fontsReady = loadStoredFonts();
     await builder.create();
     void fontsReady.then(() => { try { builder.editor.action(ctx => { const view = ctx.get(m.editorViewCtx); view.dispatch(view.state.tr.setMeta('document-fonts', true)); }); } catch { /* Closed meanwhile. */ } });
-    return { markdown: () => storedMarkdown(builder.getMarkdown()), destroy: () => builder.destroy(), insert: text => builder.editor.action(m.insert(text)) };
+    return { markdown: () => storedMarkdown(builder.getMarkdown()), destroy: () => { refine.close(true); return builder.destroy(); }, insert: text => builder.editor.action(m.insert(text)) };
   }
   // Raw Markdown, for anyone who'd rather type it. Switching back rebuilds the editor from what's here.
   function mountRaw(host, markdown) {
@@ -196,7 +452,8 @@ export function mountDocuments({ icon, esc, toast }) {
     await open.editor?.destroy(); host.replaceChildren();
     open.raw = raw; open.editor = raw ? mountRaw(host, markdown) : await mountEditor(host, markdown);
     open.markdown = open.editor.markdown;
-    const toggle = view.querySelector('[data-doc-action="raw"]'); toggle.setAttribute('aria-pressed', String(raw)); toggle.textContent = raw ? 'Editor' : 'Markdown';
+    view.querySelector('[data-doc-action="mode-editor"]')?.setAttribute('aria-pressed', String(!raw));
+    view.querySelector('[data-doc-action="mode-raw"]')?.setAttribute('aria-pressed', String(raw));
   }
   async function openDocument(id, { naming = false } = {}) {
     if (open?.id === id && view.open) return;
@@ -205,15 +462,28 @@ export function mountDocuments({ icon, esc, toast }) {
     try { doc = await request(`/documents/${id}`); } catch (error) { toast(error.message, true); return void refresh(); }
     open = { ...doc, timer: null, saving: null, markdown: () => doc.body };
     view.innerHTML = `<header class="document-head">
-        <div class="document-name"><h2 class="document-name-text">${esc(doc.title)}</h2><button class="icon-button document-rename" type="button" data-doc-action="rename" aria-label="Rename document" title="Rename">${icon('pencil')}</button><input class="document-title" value="${esc(doc.title)}" maxlength="120" aria-label="Document name" spellcheck="false" hidden></div>
-        <span class="document-status" role="status" aria-live="polite">Saved</span>
+        <div class="document-name"><button class="document-head-icon" type="button" data-doc-action="icon" aria-label="Change document icon" title="Choose an emoji">${docIcon(doc)}</button><h2 class="document-name-text">${esc(doc.title)}</h2><button class="icon-button document-rename" type="button" data-doc-action="rename" aria-label="Rename document" title="Rename">${icon('pencil')}</button><input class="document-title" value="${esc(doc.title)}" maxlength="120" aria-label="Document name" spellcheck="false" hidden><span class="document-status" role="status" aria-live="polite">Saved</span></div>
         <button class="secondary document-conflict" type="button" data-doc-action="reload" title="Show the newer version and drop your changes" hidden>Reload</button>
         <button class="secondary document-conflict" type="button" data-doc-action="keep" title="Save your version over the newer one" hidden>Keep mine</button>
-        <button class="secondary document-raw-toggle" type="button" data-doc-action="raw" aria-pressed="false" title="Show the Markdown">Markdown</button>
+        <div class="document-mode-toggle" role="group" aria-label="Document view"><button type="button" data-doc-action="mode-editor" aria-pressed="true">Editor</button><button type="button" data-doc-action="mode-raw" aria-pressed="false" title="Show the Markdown">Markdown</button></div>
         <button class="icon-button" type="button" data-doc-action="more" aria-label="More" title="More">${icon('more')}</button>
         <button class="icon-button" type="button" data-doc-action="close" aria-label="Close document" title="Close">${icon('close')}</button>
       </header>
-      <div class="document-about"><p class="document-description" tabindex="0" title="What belongs in this document. Click to change it.">${aboutText(doc.description)}</p><textarea class="document-description-field" maxlength="600" rows="1" aria-label="What belongs in this document" hidden></textarea></div>
+      <div class="document-about">
+        <div class="document-scope-box document-about-box">
+          <div class="document-about-top">
+            <span class="document-about-kicker">What belongs in it</span>
+            <p class="document-description" tabindex="0" title="What belongs in this document. Click to expand and edit.">${aboutText(doc.description)}</p>
+            <span class="document-about-chevron" aria-hidden="true">${icon('chevron')}</span>
+          </div>
+          <div class="document-about-body" hidden>
+            <textarea class="document-description-field" maxlength="600" rows="2" placeholder="Say what belongs in this document, how entries should be formatted, and what to leave out…" aria-label="What belongs in this document"></textarea>
+            <div class="document-scope-foot document-about-foot">
+              <button class="document-scope-ai document-about-ai" type="button" data-doc-action="ai-describe-open" title="Draft or refine this description from the document’s name and text">${icon('sparkle')}<span>${doc.description ? 'Redraft' : 'Draft'}</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="document-body"><p class="document-loading">Opening…</p></div>
       <footer class="document-foot">${macKeyboard ? '⌘' : 'Ctrl'}-click a link to open it. A saved post’s link opens in the post panel.</footer>`;
     const title = view.querySelector('.document-title'); open.titleField = title;
@@ -224,23 +494,81 @@ export function mountDocuments({ icon, esc, toast }) {
     });
     title.addEventListener('blur', () => finishRename(true));
     view.querySelector('.document-name-text').addEventListener('dblclick', startRename);
-    // What belongs in the document, under its name. Click to change it; it can't be left empty.
-    const about = view.querySelector('.document-description'), aboutField = view.querySelector('.document-description-field');
-    const editAbout = () => { aboutField.value = open.descriptionDraft ?? open.description; about.hidden = true; aboutField.hidden = false; aboutField.focus(); };
-    const finishAbout = keep => {
-      if (aboutField.hidden) return;
-      const value = aboutField.value.replace(/\s+/g, ' ').trim(), before = open.descriptionDraft ?? open.description;
-      aboutField.hidden = true; about.hidden = false;
-      if (!keep || !value || value === before) return;
-      open.descriptionDraft = value; about.innerHTML = aboutText(value); schedule();
+    // What belongs in the document, under its name: collapsed to one line while reading, and expanded with its heading and AI button when clicked.
+    const aboutBox = view.querySelector('.document-about-box'), aboutTop = view.querySelector('.document-about-top'), about = view.querySelector('.document-description'), aboutBody = view.querySelector('.document-about-body'), aboutField = view.querySelector('.document-description-field'), aboutAi = view.querySelector('[data-doc-action="ai-describe-open"]');
+    const animateAbout = fromHeight => {
+      aboutBox.getAnimations().forEach(anim => anim.cancel());
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const toHeight = aboutBox.offsetHeight;
+      if (fromHeight === toHeight) return;
+      aboutBox.style.overflow = 'hidden';
+      const anim = aboutBox.animate(
+        [{ height: `${fromHeight}px` }, { height: `${toHeight}px` }],
+        { duration: 260, easing: 'cubic-bezier(.22, .68, .2, 1)' }
+      );
+      anim.onfinish = anim.oncancel = () => { aboutBox.style.overflow = ''; };
     };
-    about.addEventListener('click', editAbout);
-    about.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); editAbout(); } });
+    const syncAboutAi = (generated = false) => {
+      if (!aboutAi || aboutAi.disabled) return;
+      const saved = open.descriptionDraft ?? open.description, current = !aboutBody.hidden ? aboutField.value.trim() : saved;
+      const label = generated ? 'Redraft' : !current ? 'Draft' : (!aboutBody.hidden && current !== saved) ? 'Refine' : 'Redraft';
+      aboutAi.innerHTML = `${icon('sparkle')}<span>${label}</span>`;
+    };
+    const editAbout = () => {
+      if (aboutBox.classList.contains('is-expanded')) return;
+      const fromHeight = aboutBox.offsetHeight;
+      aboutBox.classList.add('is-expanded');
+      aboutField.value = open.descriptionDraft ?? open.description;
+      about.hidden = true; aboutBody.hidden = false;
+      syncAboutAi(false);
+      animateAbout(fromHeight);
+      aboutField.focus();
+    };
+    const finishAbout = keep => {
+      if (!aboutBox.classList.contains('is-expanded')) return;
+      const fromHeight = aboutBox.offsetHeight;
+      const value = aboutField.value.replace(/\s+/g, ' ').trim(), before = open.descriptionDraft ?? open.description;
+      if (keep && value && value !== before) {
+        open.descriptionDraft = value; about.innerHTML = aboutText(value); schedule();
+      }
+      aboutBox.classList.remove('is-expanded');
+      aboutBody.hidden = true; about.hidden = false;
+      syncAboutAi(false);
+      animateAbout(fromHeight);
+    };
+    aboutTop.addEventListener('mousedown', event => { if (aboutBox.classList.contains('is-expanded')) event.preventDefault(); });
+    aboutTop.addEventListener('click', event => {
+      if (aboutBox.classList.contains('is-expanded')) { event.stopPropagation(); finishAbout(true); }
+    });
+    aboutBox.addEventListener('click', () => { if (!aboutBox.classList.contains('is-expanded')) editAbout(); });
+    about.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); editAbout(); } });
+    aboutField.addEventListener('input', () => syncAboutAi(false));
     aboutField.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); finishAbout(true); }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finishAbout(false); }
     });
-    aboutField.addEventListener('blur', () => finishAbout(true));
+    aboutField.addEventListener('blur', event => { if (event.relatedTarget === aboutAi || aboutAi.disabled) return; finishAbout(true); });
+    aboutAi.addEventListener('mousedown', event => event.preventDefault());
+    aboutAi.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (!open || aboutAi.disabled) return;
+      const targetDoc = open, saved = targetDoc.descriptionDraft ?? targetDoc.description, draft = !aboutBody.hidden ? aboutField.value.trim() : saved;
+      aboutAi.disabled = true; aboutAi.innerHTML = `${dotLoader('write')}<span>${!aboutBody.hidden && draft && draft !== saved ? 'Refining…' : 'Drafting…'}</span>`;
+      try {
+        const result = await request('/documents/describe', { method: 'POST', body: { title: targetDoc.titleField.value.trim(), description: draft, body: targetDoc.markdown() } });
+        if (open !== targetDoc) return;
+        const fromHeight = aboutBox.offsetHeight;
+        aboutField.value = result.description;
+        targetDoc.descriptionDraft = result.description; about.innerHTML = aboutText(result.description);
+        schedule();
+        aboutAi.disabled = false; syncAboutAi(true);
+        animateAbout(fromHeight);
+        aboutField.focus();
+      } catch (error) {
+        toast(error.message, true, 'bottom-center');
+        if (open === targetDoc) { aboutAi.disabled = false; syncAboutAi(false); aboutField.focus(); }
+      }
+    });
     view.showModal();
     try { await showBody(doc.body, false); }
     catch (error) { console.error(error); toast('The editor couldn’t load. Showing the Markdown instead.', true, 'bottom-center'); await showBody(doc.body, true); }
@@ -262,18 +590,21 @@ export function mountDocuments({ icon, esc, toast }) {
     if (field.value !== field.dataset.before) schedule();
   }
   async function closeDocument() {
-    if (!open) return;
+    if (!open || view.dataset.closing) return;
     const doc = open;
-    await save().catch(() => {});
+    const saving = save(doc).catch(() => {});
+    await dismissDialog(view);
+    await saving;
     if (doc.conflict && !doc.deleted) toast('Your last changes weren’t saved: the document changed somewhere else.', true);
-    open = null; await doc.editor?.destroy?.(); view.innerHTML = '';
-    if (view.open) view.close();
+    if (open === doc) open = null;
+    await doc.editor?.destroy?.();
+    if (!open) view.innerHTML = '';
     void refresh();
   }
   view.addEventListener('cancel', event => { event.preventDefault(); void closeDocument(); });
   // The editor keeps Escape for itself, so it closes the document here unless one of the editor's menus is showing.
   view.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || view.querySelector('.milkdown [data-show="true"]') || event.target.closest('.account-menu, .document-title, .document-description-field')) return;
+    if (event.key !== 'Escape' || view.querySelector('.milkdown [data-show="true"]') || event.target.closest('.account-menu, .document-title, .document-description-field, .document-refine')) return;
     event.preventDefault(); void closeDocument();
   }, true);
   view.addEventListener('click', event => {
@@ -285,7 +616,11 @@ export function mountDocuments({ icon, esc, toast }) {
     }
     if (action === 'close') void closeDocument();
     if (action === 'rename') startRename();
-    if (action === 'raw' && open) void (async () => { await save(); await showBody(open.markdown(), !open.raw); })();
+    if (action === 'icon' && open && trigger) void pickEmoji(trigger, open.id);
+    if ((action === 'mode-editor' || action === 'mode-raw') && open) {
+      const wantRaw = action === 'mode-raw';
+      if (Boolean(open.raw) !== wantRaw) void (async () => { await save(); await showBody(open.markdown(), wantRaw); })();
+    }
     // When an AI or another window changed the document meanwhile: take theirs, or save this one over it.
     if ((action === 'reload' || action === 'keep') && open) void (async () => {
       const doc = open, fresh = await request(`/documents/${doc.id}`);
@@ -300,6 +635,7 @@ export function mountDocuments({ icon, esc, toast }) {
       const doc = open;
       openAccountMenu(trigger, [
         { label: 'Copy Markdown', run: () => navigator.clipboard.writeText(doc.markdown()).then(() => toast('Markdown copied', false, 'bottom-center'), () => toast('Couldn’t copy. Try again.', true, 'bottom-center')) },
+        ...(doc.icon ? [{ label: 'Reset icon', run: () => void setDocumentIcon(doc.id, '') }] : []),
         { label: 'Delete…', danger: true, run: () => confirmDelete(trigger, doc) },
       ], null, 'Document options', view);
     }
@@ -316,6 +652,16 @@ export function mountDocuments({ icon, esc, toast }) {
     event.preventDefault(); event.stopPropagation();
     void (async () => { for (const file of files) { try { const src = await upload(file); open?.editor.insert(`\n![](${src})\n`); schedule(); } catch (error) { toast(error.message, true, 'bottom-center'); } } })();
   }, true);
+  async function reloadIfOpen(id) {
+    if (!open || open.id !== id || !view.open || open.dirty) return;
+    try {
+      const fresh = await request(`/documents/${id}`);
+      Object.assign(open, { title: fresh.title, description: fresh.description, body: fresh.body, updatedAt: fresh.updatedAt, conflict: false, dirty: false });
+      open.titleField.value = fresh.title; view.querySelector('.document-name-text').textContent = fresh.title;
+      delete open.descriptionDraft; view.querySelector('.document-description').innerHTML = aboutText(fresh.description);
+      await showBody(fresh.body, open.raw); setStatus('Saved');
+    } catch { /* The conflict banner handles any mismatch on next edit. */ }
+  }
   window.addEventListener('beforeunload', () => { if (open?.timer) void save(); });
-  return { open: openDocument, refresh };
+  return { open: openDocument, openNew: onCreated => showNewModal(true, onCreated), refresh, showDrawer, reloadIfOpen };
 }

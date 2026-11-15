@@ -1,5 +1,6 @@
 import { orderLibraryPosts } from './source-order.js';
 import { libraryAddedAt } from './saved-time.js';
+import { searchTerms, searchesAddress } from './search-terms.js';
 export const datePresets = [
   ['any', 'Any time'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['last7', 'Last 7 days'],
   ['thisWeek', 'This week'], ['lastWeek', 'Last week'], ['last30', 'Last 30 days'],
@@ -90,8 +91,16 @@ export function dateBounds(filters, now = new Date()) {
 export function applyFilters(posts, filters = defaultFilters(), { query = '', now = new Date(), topicScope = name => [name], meaning = null } = {}) {
   const bounds = dateBounds(filters, now);
   if (bounds.error) return [];
-  const term = query.trim().toLowerCase();
-  const hasWords = p => [p.text, p.title, p.bookmarkTitle, p.author, p.authorName, p.notes, p.imageDescription, p.url, ...(p.tags || []), ...(p.topics || []), ...(p.accounts || []), ...(p.folders || [])].join(' ').toLowerCase().includes(term);
+  const terms = searchTerms(query), found = new Map();
+  // The whole search as typed. A post holding it in that order comes before one that only has the words somewhere.
+  const phrase = terms.length > 1 ? terms.join(' ') : '';
+  // 0 for no match, 1 when every word is there, 2 when they're there as typed. Worked out once per post per search.
+  const hasWords = p => {
+    let hit = found.get(p); if (hit !== undefined) return hit;
+    const text = [p.text, p.title, p.bookmarkTitle, p.author, p.authorName, p.notes, p.imageDescription, ...(p.tags || []), ...(p.topics || []), ...(p.accounts || []), ...(p.folders || [])].join(' ').toLowerCase().replace(/\s+/g, ' '), address = (p.url || '').toLowerCase();
+    hit = terms.every(term => text.includes(term) || (searchesAddress(p.platform, term) && address.includes(term))) ? phrase && text.includes(phrase) ? 2 : 1 : 0;
+    found.set(p, hit); return hit;
+  };
   const result = posts.filter(p => {
     if (filters.sources.length && !filters.sources.includes(p.platform)) return false;
     if (filters.topics.length && !filters.topics.flatMap(topicScope).some(t => (p.topics || []).includes(t))) return false;
@@ -104,14 +113,15 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
       const timestamp = Date.parse(libraryAddedAt(p));
       if (!Number.isFinite(timestamp) || (bounds.from && timestamp < +bounds.from) || (bounds.to && timestamp >= +bounds.to)) return false;
     }
-    if (term && !hasWords(p) && !meaning?.has(p.id)) return false;
+    if (terms.length && !hasWords(p) && !meaning?.has(p.id)) return false;
     return true;
   });
   const ordered = orderLibraryPosts(result, filters, +now);
-  if (!term || !meaning?.size) return ordered;
+  if (!terms.length || (!meaning?.size && !phrase)) return ordered;
   // Most likely first: posts with the words and an AI's pick, then the rest with the words, then the AI's other picks.
-  // Posts that tie keep the list's usual order, latest first.
-  const likelihood = p => (hasWords(p) ? 1000 : 0) + (meaning.get(p.id) || 0);
+  // Within each of those, a post with the search as typed comes first. Posts that tie keep the list's usual order, latest first.
+  // An AI's pick scores over 100 and the local model's under 1, so the 50 for a phrase sits between them.
+  const likelihood = p => (hasWords(p) ? 1000 : 0) + (hasWords(p) === 2 ? 50 : 0) + (meaning?.get(p.id) || 0);
   return ordered.map(p => [likelihood(p), p]).sort((a, b) => b[0] - a[0]).map(([, p]) => p);
 }
 

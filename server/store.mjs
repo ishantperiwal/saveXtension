@@ -152,11 +152,11 @@ export class Store {
     const collections = this.db.prepare(`SELECT c.id,c.platform,c.external_id AS externalId,c.account,c.name,c.url FROM instagram_collection_posts m JOIN instagram_collections c ON c.id=m.collection_id WHERE m.post_id=?`).all(id);
     return { ...this.decode(row, this.sourceOrder(id).get(id) || []), topics: topicNames(this.db, id), collections };
   }
-  // Where each Instagram post and Pinterest pin sits in the lists read from the site, top first. What a running scan
+  // Where each Instagram post, Pinterest pin and Threads post sits in the lists read from the site, top first. What a running scan
   // has read so far goes first. A place in a list always outranks a post no scan has placed yet, so they all share one far-off date.
   listOrder() {
     const lists = new Map(), result = new Map();
-    for (const { key, value } of this.db.prepare(`SELECT key,value FROM settings WHERE key LIKE 'list-order:instagram:%' OR key LIKE 'list-order:pinterest:%' OR key LIKE 'list-reading:instagram:%' OR key LIKE 'list-reading:pinterest:%'`).all()) {
+    for (const { key, value } of this.db.prepare(`SELECT key,value FROM settings WHERE key LIKE 'list-order:instagram:%' OR key LIKE 'list-order:pinterest:%' OR key LIKE 'list-order:threads:%' OR key LIKE 'list-reading:instagram:%' OR key LIKE 'list-reading:pinterest:%' OR key LIKE 'list-reading:threads:%'`).all()) {
       const [kind, platform, account, list] = key.split(':'), name = `${platform}:${account}:${list}`;
       if (!lists.has(name)) lists.set(name, { platform, account, list, order: [], reading: [] });
       try { if (kind === 'list-reading') lists.get(name).reading = JSON.parse(value).ids || []; else lists.get(name).order = JSON.parse(value); } catch { /* Left out until the next scan. */ }
@@ -290,7 +290,7 @@ export class Store {
     this.db.prepare('DELETE FROM posts WHERE id=?').run(id);
   }
   startRun(deviceId, platform, account, mode = 'quick', collectionId = null) {
-    if (!['x', 'instagram', 'pinterest', 'chrome'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
+    if (!['x', 'instagram', 'pinterest', 'threads', 'chrome'].includes(platform)) throw new HttpError(400, 'Unknown platform.');
     if (!['quick', 'deep'].includes(mode)) throw new HttpError(400, 'Choose a quick check or a deep scan.');
     if (collectionId !== null) {
       const collection = this.db.prepare('SELECT * FROM instagram_collections WHERE id=?').get(Number(collectionId));

@@ -2,7 +2,7 @@
 
 Start here when editing saveXtension. It's loaded automatically through `CLAUDE.md`, so keep it short.
 For how things work and why, read only the section you need in `docs/ARCHITECTURE.md`.
-**Anything about AI inside the app (AI search, MiniLM, Claude Code or Codex, image scanning or descriptions, filling a note, Organize): read `docs/AI.md` first.** It holds the user's decisions on this.
+**Anything about AI inside the app (AI search, the local model, Claude Code or Codex, image scanning or descriptions, filling a note, Organize): read `docs/AI.md` first.** It holds the user's decisions on this.
 
 ## What this is
 
@@ -21,7 +21,7 @@ Four folders:
 - **Fail closed.** If the account, post or control can't be positively identified, do nothing.
 - **MCP shows exactly what the app shows.** Visibility rules are shared. For anything else about MCP, read the MCP section of `docs/ARCHITECTURE.md`, and `MCP_CONNECTION.md` before changing the connection prompt.
 - **One job or unsave at a time.** Quiet checks give way to anything a person starts.
-- **AI in the app stays within the user's decisions.** Word search and MiniLM are the free default, AI search only runs from its button, cards only, small models, ask before large scans, each image read once, notes filled one post at a time only when asked. See `docs/AI.md`.
+- **AI in the app stays within the user's decisions.** Word search and the local model are the free default, AI search only runs from its button, cards only, small models, ask before large scans, each image read once, notes filled one post at a time only when asked. See `docs/AI.md`.
 - **Never overwrite better data.** See the merge in `importPosts`. Notes and curated topics are the user's.
 
 ## Working with this user
@@ -156,6 +156,8 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Documents: storage, AI edits, pictures | `server/documents.mjs` | `export class Documents` |
 | MCP document tools | `server/mcp.mjs` | `register('edit_document'` |
 | Fonts for documents: download and storage | `server/documents.mjs` | `export function documentFonts` |
+| Sending a post to a document: the job | `server/document-ai.mjs` | `export function documentAi` |
+| Its prompt and tool arguments | `server/ai-search.mjs` | `export function documentArguments` |
 
 ### UI
 
@@ -163,6 +165,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 |---|---|---|
 | Card image, caption, play icon | `public/app.js` | `function embedMetadata` |
 | Card layout and actions | `public/app.js` | `class="card-layout"` |
+| Dragging a card onto a topic | `public/post-drag.js` | `export function enablePostDrag` |
 | Note preview on a card | `public/app.js` | `function syncNotePreview` |
 | Note saving on a card | `public/app.js` | `function syncCardNote` |
 | Centered post and note view | `public/app.js` | `function showNoteView` |
@@ -172,6 +175,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Search bar centring on ⌘F | `public/app.js` | `function moveSearch` |
 | Search by meaning: model and scoring | `public/meaning-worker.js` | `async function search` |
 | Search by meaning: page side | `public/meaning-search.js` | `export function createMeaningSearch` |
+| Reading a typed search into words, for the app and MCP | `public/search-terms.js` | `export function searchTerms` |
 | AI search settings, one on at a time | `public/app.js` | `function mountAiSearchSettings` |
 | Organize dialog | `public/organize.js` | `export function organizeTopics` |
 | Running that AI search on Enter | `public/app.js` | `async function startAiSearch` |
@@ -189,6 +193,8 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Glass notification styles | `public/styles.css` | `.sync-platform-card` |
 | Note styles | `public/styles.css` | `.card-note` |
 | Documents notch, drawer and editor window | `public/documents.js` | `export function mountDocuments` |
+| Refine with AI in a document | `public/documents.js` | `const refine = (() =>` |
+| Sending a post to a document: dialog | `public/app.js` | `async function openSendToDocument` |
 | Plain Markdown in, editor Markdown out | `public/document-markdown.js` | `export function storedMarkdown` |
 | Font names drawn in their own font | `public/document-fonts.js` | `export function fontDecorations` |
 | Bundling the editor | `scripts/build-editor.mjs` | `public/vendor/editor` |
@@ -209,7 +215,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 - The browser suite passed in full on 2026-11-14 for v1.5.2, apart from one flaky run of `search.spec.mjs` "search, layout controls and Filters stick together", which passed alone three times. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
 
-**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, adding from the notes AI or a post, restoring from a backup.
+**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, restoring from a backup.
 
 **Offered, not built:**
 - A Chrome bookmark delete button (extension only), and noticing bookmarks deleted in Chrome

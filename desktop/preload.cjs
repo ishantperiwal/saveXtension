@@ -26,5 +26,6 @@ contextBridge.exposeInMainWorld('saveXDesktop', Object.freeze({
   updateStatus: () => ipcRenderer.invoke('savex-desktop', { action: 'updateStatus' }),
   checkForUpdates: () => ipcRenderer.invoke('savex-desktop', { action: 'checkForUpdates' }),
   viewUpdateRelease: () => ipcRenderer.invoke('savex-desktop', { action: 'viewUpdateRelease' }),
-  installUpdate: () => ipcRenderer.invoke('savex-desktop', { action: 'installUpdate' })
+  installUpdate: () => ipcRenderer.invoke('savex-desktop', { action: 'installUpdate' }),
+  showEmojiPanel: () => ipcRenderer.invoke('savex-desktop', { action: 'showEmojiPanel' })
 }));

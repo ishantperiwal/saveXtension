@@ -48,6 +48,29 @@ export function glideNote(field) {
   noteGlides.set(field, animation);
   animation.onfinish = animation.oncancel = () => { if (noteGlides.get(field) === animation) { noteGlides.delete(field); delete section.dataset.layoutHeight; } };
 }
+// An AI has just changed this note. It swells a touch and settles, while a band of light crosses it from the top left
+// to the bottom right, so the change is seen even when the new text sits below "Read more".
+const noteShines = new WeakMap();
+export function shineNote(section) {
+  if (!section?.isConnected || section.hidden) return;
+  const rect = section.getBoundingClientRect();
+  if (!rect.height || rect.bottom < 0 || rect.top > innerHeight) return;
+  noteShines.get(section)?.();
+  const shine = document.createElement('div'), still = reducedMotion.matches;
+  shine.className = still ? 'note-shine is-still' : 'note-shine'; shine.setAttribute('aria-hidden', 'true');
+  // The band is laid over the note, so the note has to be what it's placed against.
+  const placed = getComputedStyle(section).position === 'static';
+  if (placed) section.style.position = 'relative';
+  section.append(shine);
+  // Without motion the note only brightens for a moment.
+  const running = still
+    ? [shine.animate([{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }], { duration: 900, easing: 'ease-in-out' })]
+    : [section.animate([{ scale: 1 }, { scale: 1.03 }, { scale: 1 }], { duration: 620, easing: 'cubic-bezier(.3,.7,.3,1)' }),
+      shine.animate([{ backgroundPosition: '100% 100%' }, { backgroundPosition: '0% 0%' }], { duration: 1000, delay: 120, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'both' })];
+  const clear = () => { noteShines.delete(section); for (const animation of running) { animation.onfinish = null; animation.cancel(); } shine.remove(); if (placed) section.style.removeProperty('position'); };
+  noteShines.set(section, clear);
+  running.at(-1).onfinish = clear;
+}
 export function setNoteVisibility(section, open, prepare) {
   const current = noteAnimations.get(section);
   if (current?.open === open || (!current && section.hidden === !open)) { section.dataset.noteOpen = String(open); prepare?.(); return; }

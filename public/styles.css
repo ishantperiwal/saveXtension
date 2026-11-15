@@ -343,9 +343,13 @@ button svg, a svg { pointer-events: none; }
    The sheet slides up and the post panel slides in, so they keep their own entrances. */
 @keyframes dialog-in { from { opacity: 0; scale: .95; transform-origin: 50% 50%; } to { transform-origin: 50% 50%; } }
 @keyframes dialog-backdrop-in { from { opacity: 0; } }
+@keyframes dialog-out { from { transform-origin: 50% 50%; } to { opacity: 0; scale: .95; transform-origin: 50% 50%; } }
+@keyframes dialog-backdrop-out { to { opacity: 0; } }
 #modal[open] { animation: dialog-in 280ms cubic-bezier(.22,.68,.2,1); }
 #modal[open]::backdrop { animation: dialog-backdrop-in 240ms ease-out; }
-@media (prefers-reduced-motion: reduce) { #sheet, #sheet::backdrop, #modal[open], #modal[open]::backdrop { animation: none; transition: none; } #modal { transition: none; } }
+:is(#modal, #document-new, #document-view)[open].is-closing { animation: dialog-out 180ms cubic-bezier(.4, 0, .8, .6) forwards; pointer-events: none; }
+:is(#modal, #document-new, #document-view)[open].is-closing::backdrop { animation: dialog-backdrop-out 180ms ease-in forwards; }
+@media (prefers-reduced-motion: reduce) { #sheet, #sheet::backdrop, #modal[open], #modal[open]::backdrop, :is(#modal, #document-new, #document-view)[open].is-closing, :is(#modal, #document-new, #document-view)[open].is-closing::backdrop { animation: none; transition: none; } #modal { transition: none; } }
 #sheet .chrome-setup-steps { margin-top: 0; }
 /* Chrome and the app, joined by dots that travel while waiting and a solid line once linked. */
 .chrome-link { display: flex; align-items: center; gap: 14px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface-soft); }
@@ -476,6 +480,9 @@ button svg, a svg { pointer-events: none; }
 .cards[data-view="feed"] :is(.instagram, .pinterest, .x) .saved-preview .embed-capture-image-link:not([hidden]) { display: flex; justify-content: center; border-radius: 12px; background: var(--surface-soft); }
 .cards[data-view="feed"] :is(.instagram, .pinterest, .x) .saved-preview .embed-capture-image { width: auto; max-width: 100%; max-height: 615px; }
 .cards[data-view="feed"] :is(.instagram, .pinterest) .native-embed { max-width: 440px; margin-inline: auto; }
+/* The band of light that crosses a note an AI has just changed. It starts and ends off the note. */
+.note-shine { position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; background: linear-gradient(135deg, #fff0 43%, #b9dc6e73 46.5%, #fffffff2 50%, #f4a07c73 53.5%, #fff0 57%) 100% 100% / 300% 300% no-repeat; }
+.note-shine.is-still { background: #ffffff80; }
 .card-note .note-input { display: block; width: 100%; min-height: 22px; field-sizing: content; padding: 0; border: 0; border-radius: 0; resize: none; background: transparent; color: inherit; font: 14px/22px var(--sans); overflow: hidden; }
 .card-note .note-input:not(:focus):not([data-expanded="true"]) { max-height: 132px; }
 .card-note .note-input:focus, .card-note[data-note-open="true"] .note-input:placeholder-shown { min-height: 66px; }
@@ -519,6 +526,8 @@ button svg, a svg { pointer-events: none; }
 .note-ai-hint .select-trigger > .select-chevron { width: 12px; height: 12px; flex: 0 0 12px; color: var(--ai-soft-text); }
 .note-ai-error { margin: 8px 0 0; color: var(--danger); font-size: 12px; font-weight: 500; line-height: 18px; }
 .note-ai-working, .note-ai-off { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 20px; }
+.note-ai-working.is-waiting { color: var(--ai-soft-text); }
+.note-ai-working.is-waiting > .icon { flex: none; width: 15px; height: 15px; color: var(--ai-spark); }
 .note-ai-off > span:first-child { flex: 1; min-width: 0; }
 .note-ai-step { flex: 1; min-width: 0; }
 .note-ai-asked { margin: 4px 0 0; color: var(--ai-soft-text); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
@@ -736,6 +745,9 @@ dialog.settings-dialog::-webkit-scrollbar { display: none; width: 0; height: 0; 
 .toast-detail { display: block; margin-top: 3px; font-size: 11px; line-height: 16px; opacity: .75; }
 #toast.error .toast-detail { opacity: .9; }
 .toast-action { display: block; margin: 8px auto 2px; padding: 4px 12px; border: 1px solid currentColor; border-radius: 999px; color: inherit; background: none; font: inherit; font-size: 12px; font-weight: 500; line-height: 16px; cursor: pointer; }
+.toast-actions { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px auto 2px; }
+.toast-actions .toast-action { margin: 0; }
+.toast-action:hover:not(:disabled) { background: color-mix(in srgb, currentColor 14%, transparent); }
 @keyframes sync-toast-in { from { opacity: 0; transform: translateX(calc(100% + 32px)); } }
 @media (prefers-reduced-motion: reduce) { .sync-toast { animation: none; transition: none; } }
 @keyframes toast-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -975,7 +987,8 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .topic-group > .account-nav-item > .nav-label-text { max-width: 16ch; }
 .move-topic-list { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
 /* Dragging a folder: a lifted chip follows the pointer, targets glow in the accent. */
-body.topic-dragging, body.topic-dragging * { cursor: grabbing !important; user-select: none; }
+body.topic-dragging, body.topic-dragging *, body.post-dragging, body.post-dragging * { cursor: grabbing !important; user-select: none; }
+body.post-dragging iframe { pointer-events: none; }
 /* Post previews are other sites' frames; they would swallow the drag, so they ignore the pointer while a topic is carried. */
 body.topic-dragging iframe { pointer-events: none; }
 .topic-drag-ghost { transition: opacity 120ms ease; }
@@ -1147,9 +1160,10 @@ body.topic-dragging iframe { pointer-events: none; }
 html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 #post-panel[data-view="post"] > .post-note, dialog { overscroll-behavior: contain; }
 .post-panel-header { display: flex; flex: none; align-items: center; justify-content: space-between; height: 52px; padding: 0 10px; }
-.post-panel-browser { height: 28px; min-height: 0; padding: 0 12px; font-size: 12px; line-height: 16px; }
+.post-panel-browser { display: inline-grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; }
+.post-panel-browser svg { width: 15px; height: 15px; }
 .post-panel-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.post-panel-copy { height: 28px; min-height: 0; min-width: 128px; gap: 6px; padding: 0 12px; font-size: 12px; line-height: 16px; white-space: nowrap; }
+.post-panel-copy { height: 28px; min-height: 0; min-width: 96px; gap: 6px; padding: 0 12px; font-size: 12px; line-height: 16px; white-space: nowrap; }
 .post-panel-copy svg { flex: none; width: 13px; height: 13px; }
 .post-panel-close { width: 32px; height: 32px; padding: 7px; }
 .post-panel-view { flex: 1; min-height: 0; margin: 0 8px 8px; border-radius: 16px; background: var(--surface-soft); }
@@ -1321,11 +1335,6 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 
 /* Settings and search bar: the optional AI tool. */
 .ai-search-settings { display: grid; gap: 16px; }
-.ai-tools-heading { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; color: var(--muted); font-size: 11px; font-weight: 500; line-height: 16px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-.ai-tools-heading::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.ai-tools-heading:first-child { margin-top: 0; }
-.ai-search-settings .fine-print.ai-tools-note { margin: -12px 0 -4px; }
-.ai-tools-heading + .ai-tool-row { margin-top: -6px; }
 .ai-search-settings .fine-print { margin: 0; }
 .ai-tool-row { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .ai-tool-name { display: grid; min-width: 0; }
@@ -1500,6 +1509,52 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 @keyframes dot-sweep { 0% { opacity: 1; } 22% { opacity: .6; } 45%, 100% { opacity: .24; } }
 @keyframes dot-fill { 0%, 44% { opacity: 1; } 56%, 100% { opacity: .24; } }
 @media (prefers-reduced-motion: reduce) { .dot-loader i { animation: none; opacity: calc(.25 + var(--at, 1) * .75); } }
-.note-ai-working .dot-loader, .organize-progress .dot-loader, .organize-button .dot-loader { color: var(--ai-spark); }
+.note-ai-working .dot-loader, .organize-progress .dot-loader, .organize-button .dot-loader, .send-document-working .dot-loader, .card-actions [data-action="send-to-document"] .dot-loader, .post-panel-document .dot-loader { color: var(--ai-spark); }
 .ai-scan-button .dot-loader { color: #fff; }
 .ai-tool-busy { display: inline-flex; }
+
+/* Send to document dialog */
+#modal:has(.send-document-dialog) { max-width: 480px; padding: 24px; overflow: visible; }
+#modal:has(.send-document-dialog) > .modal-close { top: 20px; right: 20px; }
+.send-document-dialog { display: grid; gap: 14px; }
+.send-document-dialog h2 { margin: 0 36px 2px 0; font-size: 18px; line-height: 26px; font-weight: 600; }
+.send-document-dialog > p.muted { margin: 0; color: var(--secondary); font-size: 14px; line-height: 22px; }
+/* Documents as chips: tap one, the chosen one fills in. */
+.send-document-picks { min-width: 0; margin: 0; padding: 0; border: 0; }
+/* Three rows and part of a fourth, so a list that scrolls looks like it does. */
+.send-document-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 134px; overflow-y: auto; scrollbar-width: none; }
+.send-document-list[data-more-below] { -webkit-mask-image: linear-gradient(#000 calc(100% - 28px), transparent); mask-image: linear-gradient(#000 calc(100% - 28px), transparent); }
+.send-document-list[data-more-above] { -webkit-mask-image: linear-gradient(transparent, #000 28px); mask-image: linear-gradient(transparent, #000 28px); }
+.send-document-list[data-more-above][data-more-below] { -webkit-mask-image: linear-gradient(transparent, #000 28px calc(100% - 28px), transparent); mask-image: linear-gradient(transparent, #000 28px calc(100% - 28px), transparent); }
+.send-document-pick[hidden] { display: none; }
+.send-document-filter { display: block; width: 100%; height: 34px; margin: 0 0 10px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font: 13px/20px var(--sans); }
+.send-document-filter::placeholder { color: var(--muted); }
+.send-document-pick { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 32px; margin: 0; padding: 0 13px 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease; }
+.send-document-pick > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-document-pick > input { position: absolute; inset: 0; margin: 0; opacity: 0; pointer-events: none; }
+.send-document-pick > .icon { width: 14px; height: 14px; color: var(--muted); transition: color 160ms ease; }
+.send-document-emoji { flex: none; font-size: 15px; line-height: 1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.send-document-pick:hover { background: var(--hover); }
+.send-document-pick:has(> input:checked) { border-color: transparent; background: var(--action); color: var(--on-action); }
+.send-document-pick:has(> input:checked) > .icon { color: currentColor; }
+/* The directions, in the notes AI's colours, with the model and send button inside. */
+.send-document-prompt { position: relative; display: grid; gap: 8px; padding: 12px 12px 10px 14px; border-radius: 16px; background: var(--ai-glass); box-shadow: inset 0 1px 0 var(--ai-shine), 0 4px 16px var(--ai-glow); color: var(--ink); }
+.send-document-prompt::before { content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: var(--ai-edge); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); pointer-events: none; }
+.send-document-prompt textarea, .send-document-prompt textarea:focus, .send-document-prompt textarea:focus-visible { display: block; width: 100%; min-height: 44px; max-height: 180px; field-sizing: content; padding: 0; border: 0; border-radius: 0; outline: 0; resize: none; background: transparent; box-shadow: none; color: var(--ink); caret-color: var(--ai-spark); font: 14px/22px var(--sans); }
+.send-document-prompt textarea::placeholder { color: var(--muted); }
+.send-document-prompt-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.send-document-prompt-foot .custom-select { min-width: 0; }
+.send-document-prompt-foot .select-trigger { width: auto; min-height: 0; height: 24px; gap: 2px; padding: 0 6px 0 9px; border-color: var(--ai-edge-soft); border-radius: 999px; background: var(--ai-chip); box-shadow: none; color: var(--ink); font-size: 12px; line-height: 16px; }
+.send-document-prompt-foot .select-trigger:is(:hover, :focus-visible, [aria-expanded="true"]) { border-color: var(--ai-edge-soft); background: var(--ai-shine); }
+.send-document-model-name { font-size: 12px; color: var(--muted); }
+.send-document-send { display: inline-grid; flex: none; place-items: center; width: 32px; height: 32px; min-height: 0; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: var(--action); color: var(--on-action); transition: background-color 160ms ease, scale 160ms ease; }
+.send-document-send:is(:hover, :focus-visible):not([disabled]) { background: var(--accent-hover); scale: 1.06; }
+.send-document-send[disabled] { opacity: .5; }
+.send-document-send .icon { width: 16px; height: 16px; stroke-width: 2; }
+@media (prefers-reduced-motion: reduce) { .send-document-pick, .send-document-send { transition: none; } .send-document-send:is(:hover, :focus-visible):not([disabled]) { scale: none; } }
+.send-document-error { margin: 0; color: var(--danger); font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
+.send-document-asked { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface-soft); color: var(--ink); font-size: 13px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.send-document-working { display: flex; align-items: center; gap: 10px; padding: 6px 0; color: var(--secondary); font-size: 13px; line-height: 20px; }
+.card-actions [data-action="send-to-document"][data-busy], .cards[data-view="feed"] .card-actions [data-action="send-to-document"][data-busy], .post-panel-document[data-busy] { border-color: var(--ai-edge-soft); background: var(--ai-glass); box-shadow: inset 0 1px 0 var(--ai-shine), 0 2px 10px var(--ai-glow); color: var(--ai-spark); opacity: 1; }
+.card-actions [data-action="send-to-document"][data-busy]:hover, .cards[data-view="feed"] .card-actions [data-action="send-to-document"][data-busy]:hover, .post-panel-document[data-busy]:hover { background: var(--ai-shine); }
+

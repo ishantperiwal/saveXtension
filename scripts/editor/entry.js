@@ -11,6 +11,7 @@ export { toolbar } from '@milkdown/crepe/feature/toolbar';
 export { insert, replaceAll } from '@milkdown/kit/utils';
 export { remarkStringifyOptionsCtx } from '@milkdown/kit/core';
 export { $prose } from '@milkdown/kit/utils';
-export { editorViewCtx } from '@milkdown/kit/core';
+export { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core';
+export { Slice } from '@milkdown/kit/prose/model';
 export { Plugin, PluginKey } from '@milkdown/kit/prose/state';
 export { Decoration, DecorationSet } from '@milkdown/kit/prose/view';

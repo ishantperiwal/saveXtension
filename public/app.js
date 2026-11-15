@@ -5,6 +5,7 @@ import { createMeaningSearch } from './meaning-search.js';
 import { organizeTopics } from './organize.js';
 import { dotLoader } from './dot-loader.js';
 import { openCollectionPicker, closeCollectionPicker } from './collection-picker.js';
+import { enablePostDrag } from './post-drag.js';
 import { instagramSaveList, visibleInstagramSaves } from './instagram-save-lists.js';
 import { openAccountMenu, closeAccountMenu } from './account-menu.js';
 import { syncAvailability, lastSyncTime, syncAge } from './sync-state.js';
@@ -19,7 +20,7 @@ import { PRELOAD_SCREENS } from './preview-policy.js';
 import { mountWebsitePreviews } from './website-previews.js';
 import { createNoteAutosave } from './notes.js';
 import { syncNoteLinks } from './note-links.js';
-import { animateEmbedStage, setNoteVisibility, finishNoteAnimation, glideSize, noteHeightSeen, glideNote } from './motion.js';
+import { animateEmbedStage, setNoteVisibility, finishNoteAnimation, glideSize, noteHeightSeen, glideNote, shineNote } from './motion.js';
 import { addedTimeGroup, addedTimeKey, libraryAddedAt } from './saved-time.js';
 import { applyFilters, defaultFilters, dateBounds, filterChips, accountOptions } from './filters.js';
 import { mountDateRange } from './date-range.js';
@@ -43,6 +44,9 @@ const paths = {
   restore: '<path d="M4 11a8 8 0 1 1 1 6M4 4v7h7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   arrow: '<path d="M7 17 17 7M7 7h10v10"/>',
+  up: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   'double-tick': '<path d="m2.5 12.5 4.5 4.5L15 8M10.5 15l2 2L21.5 8"/>',
   sparkle: '<path d="M12 3.5 13.9 9l5.6 2-5.6 2-1.9 5.5-1.9-5.5-5.6-2 5.6-2zM19 3v3.5M17.2 4.8h3.6"/>',
@@ -153,13 +157,39 @@ function toast(message, error = false, position = '', detail = '') {
   if (position === 'bottom-center' && el.showPopover) { el.setAttribute('popover', 'manual'); el.showPopover(); }
   clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, notice ? 9000 : 4200);
 }
+function toastWithActions(message, actions = [], { detail = '', duration = 8000 } = {}) {
+  const el = $('#toast');
+  if (el.matches(':popover-open')) el.hidePopover();
+  el.removeAttribute('popover');
+  const host = modal.open ? modal : toastHome;
+  if (el.parentElement !== host) host.append(el);
+  el.textContent = message;
+  el.className = `visible bottom-center ${detail || actions.length ? 'with-detail' : ''}`;
+  if (detail) {
+    const description = document.createElement('span');
+    description.className = 'toast-detail'; description.textContent = detail; el.append(description);
+  }
+  if (actions.length) {
+    const row = document.createElement('div');
+    row.className = 'toast-actions';
+    for (const item of actions) {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'toast-action'; btn.textContent = item.label;
+      btn.onclick = () => item.onClick(btn);
+      row.append(btn);
+    }
+    el.append(row);
+  }
+  if (el.showPopover) { el.setAttribute('popover', 'manual'); el.showPopover(); }
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, duration);
+}
 async function api(path, { method = 'GET', body, keepalive = false } = {}) {
   const res = await fetch(`/api${path}`, { method, credentials: 'same-origin', keepalive, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const result = await res.json();
   if (!res.ok) { if (res.status === 401 && !['/login', '/setup'].includes(path)) boot(); throw new Error(result.error || 'Request failed.'); }
   return result;
 }
-let activeNote = null, activeNoteScope = null;
+let activeNote = null, activeNoteScope = null, documentUi = null;
 const openNoteIds = new Set(), noteStates = new Map();
 const noteKey = post => `${post.id}:${post.url}`;
 const notes = createNoteAutosave({
@@ -178,22 +208,42 @@ const notes = createNoteAutosave({
   }
 });
 function flushActiveNote() { if (activeNote) { void notes.flush(activeNote); activeNote = null; activeNoteScope = null; } }
+function closeModal() {
+  if (!modal.open || modal.dataset.closing) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { modal.close(); return; }
+  modal.dataset.closing = 'true';
+  modal.classList.add('is-closing');
+  const finish = () => {
+    delete modal.dataset.closing;
+    modal.classList.remove('is-closing');
+    if (modal.open) modal.close();
+  };
+  const timer = setTimeout(finish, 200);
+  modal.addEventListener('animationend', event => {
+    if (event.target !== modal) return;
+    clearTimeout(timer);
+    finish();
+  }, { once: true });
+}
 function showModal(content, wide = false) {
+  delete modal.dataset.closing;
+  modal.classList.remove('is-closing');
   restoreModalToast();
   clearInterval(updatePoll);
   closeSelect(); closeAccountMenu(); closeCollectionPicker();
   flushActiveNote();
   disposeEmbeds(modal);
-  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan;
+  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; delete modal.dataset.sendDocument;
   document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   modal.innerHTML = `<button class="icon-button modal-close" aria-label="Close dialog">${icon('close')}</button>${content}`;
   modal.className = wide ? 'wide' : ''; if (!modal.open) modal.showModal();
-  $('.modal-close', modal).onclick = () => modal.close();
+  $('.modal-close', modal).onclick = () => closeModal();
 }
 // Dialogs glide to fit new content. The enlarged post has its own entrance and resizing embeds.
-glideSize(modal, { enabled: () => modal.open && !modal.dataset.stacking && !modal.dataset.settling });
-modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) modal.close(); } });
-modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; });
+glideSize(modal, { enabled: () => modal.open && !modal.dataset.stacking && !modal.dataset.settling && !modal.dataset.closing });
+modal.addEventListener('cancel', e => { if (modal.querySelector('.organize-dialog')) return; e.preventDefault(); closeModal(); });
+modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) closeModal(); } });
+modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; delete modal.dataset.sendDocument; });
 
 modal.addEventListener('close', () => clearInterval(updatePoll));
 
@@ -213,7 +263,7 @@ async function refreshUpdate() {
   renderUpdateButton();
 }
 if (window.saveXDesktop?.updateStatus) { void refreshUpdate(); setInterval(refreshUpdate, 60 * 1000); addEventListener('focus', refreshUpdate); }
-// MiniLM is part of the app, but its files aren't in the installer. They arrive on first launch, and the app opens once they have.
+// The local model is part of the app, but its files aren't in the installer. They arrive on first launch, and the app opens once they have.
 function installMiniLM() {
   return new Promise(resolve => {
     const paint = (title, detail, status) => {
@@ -239,7 +289,7 @@ async function boot() {
     if (!session.authenticated) return authScreen(session.setupRequired);
     if (!(await installMiniLM())) return;
     void loadAiSearch();
-    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); mountDocuments({ icon, esc, toast }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
+    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); documentUi = mountDocuments({ icon, esc, toast }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
 }
 function authScreen(setup) {
@@ -271,13 +321,13 @@ function syncMeaningSearch() {
 function stopMeaningSearch(forget = false) {
   const wasRunning = meaningSearch.running;
   meaningSearch.stop(); meaningMatches = null; meaningList = null;
-  if (forget) try { indexedDB.deleteDatabase('savex-meaning-1'); } catch { /* Nothing was saved. */ }
+  if (forget) try { indexedDB.deleteDatabase('savex-meaning-2'); } catch { /* Nothing was saved. */ }
   if (wasRunning) renderResults();
 }
-const AI_NUDGE_SCORE = .4, AI_NUDGE_LIMIT = 40;
+const AI_NUDGE_SCORE = .38, AI_NUDGE_LIMIT = 40;
 // The optional AI tool. It runs only when someone presses Enter, because it's slower and uses their plan.
 let aiTool = '', aiToolName = '', aiResults = { query: '', matches: new Map() }, aiJob = 0, aiBusy = false, aiToolModel = '', aiLocalActive = false, aiNames = [], aiNamesAt = 0, aiNamesTimer = 0;
-// Applies the one AI that's switched on. MiniLM runs here, so it starts or stops with its switch.
+// Applies the one AI that's switched on. The local model runs here, so it starts or stops with its switch.
 async function loadAiSearch() {
   try {
     const { selected, name, model, vision, localReady } = await api('/ai-search');
@@ -287,7 +337,7 @@ async function loadAiSearch() {
     aiScanModel = vision?.model || '';
     document.querySelectorAll('.ai-scan-button:not([data-busy])').forEach(button => { button.setAttribute('aria-label', scanLabel()); $('.ai-scan-label', button).textContent = scanLabel(); });
     aiTool = selected; aiToolName = name; aiToolModel = model; aiLocalActive = !!localReady;
-    // MiniLM is always on, so word search and meaning search are the free default.
+    // The local model is always on, so word search and meaning search are the free default.
     if (localReady) { meaningSearch.start(); syncMeaningSearch(); meaningSearch.search(state.query); }
     paintSearchHint();
     // What a note can run on. A small model is always the default, and choosing another lasts for that note's run.
@@ -295,7 +345,16 @@ async function loadAiSearch() {
     noteAiChoice.clear();
     if (selected) void openOrganize.resume().catch(() => {});
     // A note the AI was filling carries on through a reload.
-    if (!noteAiJob) { const { job } = await api('/note-ai'); if (job?.state === 'running') { noteAiJob = job; paintNoteAi(job.post); void followNoteAi(); } else if (job?.state === 'done' && !noteAiUndo.has(job.post)) { const post = allPosts().find(item => item.id === job.post), card = document.querySelector(`.save-card[data-post-id="${job.post}"]`); if (post && notes.value(post) === job.notes) { noteAiUndo.set(job.post, { before: job.before, after: job.notes }); if (card) showNoteAiUndo(card, post); } } }
+    // Notes the AI is filling, or that wait their turn, carry on through a reload. A finished one keeps its Undo.
+    if (!noteAiJobs.size) {
+      const { jobs = [] } = await api('/note-ai');
+      for (const job of jobs) {
+        if (noteAiBusyState(job)) { noteAiJobs.set(job.post, job); paintNoteAi(job.post); }
+        else if (job.state === 'done' && !noteAiUndo.has(job.post)) { const post = allPosts().find(item => item.id === job.post), card = document.querySelector(`.save-card[data-post-id="${job.post}"]`); if (post && notes.value(post) === job.notes) { noteAiUndo.set(job.post, { before: job.before, after: job.notes }); if (card) showNoteAiUndo(card, post); } }
+      }
+      if (noteAiJobs.size) void followNoteAi();
+    }
+    if (!docAiJob) { const { job } = await api('/document-ai'); if (job?.state === 'running') { docAiJob = job; paintDocAiButtons(); void followDocAi(); } }
     noteAiOpen.forEach(paintNoteAi);
   } catch { /* Search carries on without it. */ }
 }
@@ -340,7 +399,7 @@ async function startAiSearch() {
   stopAiSearch(); aiResults = { query, matches: new Map() }; showAiStatus(true); renderResults();
   window.scrollTo({ left: scrollX, top: 0, behavior: 'instant' });
   const filtered = applyFilters(scopedPosts(), state.filters, { topicScope: name => topicScope(state.topicCatalog, name) }).map(post => post.id);
-  // The AI reads everything the filters allow. MiniLM can only add to what it checks, never remove: it reads saved descriptions, so a useless caption can't hide a good image.
+  // The AI reads everything the filters allow. The local model can only add to what it checks, never remove: it reads saved descriptions, so a useless caption can't hide a good image.
   const ranked = await meaningSearch.rank(query);
   if (aiResults.query !== query) return;
   const allowed = new Set(filtered), postIds = filtered;
@@ -1408,10 +1467,10 @@ function feedCardSource(post) {
 }
 
 function card(p) {
-  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.platform !== 'pinterest' || (p.collections || []).some(item => item.platform === 'pinterest')) && (p.accounts || []).some(account => /^@[\w.]+$/.test(account));
+  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.platform !== 'pinterest' || (p.collections || []).some(item => item.platform === 'pinterest')) && (p.accounts || []).some(account => /^@[\w.]+$/.test(account)), canDoc = state.localMode && !state.demo, docBusy = docAiRunning(p.id), docLabel = docBusy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
   return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}"><div class="card-content">
     <div class="card-body">
-    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button" data-action="copy-post-link" aria-label="Copy post link" title="Copy post link">${icon('link')}</button>${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
+    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button" data-action="copy-post-link" aria-label="Copy post link" title="Copy post link">${icon('link')}</button>${canDoc ? `<button class="icon-button" data-action="send-to-document" ${docBusy ? 'data-busy="true"' : ''} aria-label="${esc(docLabel)}" title="${esc(docLabel)}">${docBusy ? dotLoader('write') : icon('file')}</button>` : ''}${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
     <div class="card-layout">${feedCardSource(p)}<section class="card-note" id="note-section-${p.id}" ${showNote ? '' : 'hidden'}><label class="sr-only" for="note-${p.id}">Note</label><div class="note-editor"><textarea class="note-input" id="note-${p.id}" name="notes" rows="3" maxlength="10000" placeholder="${state.cardView === 'feed' ? 'No notes added yet.' : 'Add a note…'}" ${state.demo || noteAiRunning(p.id) ? 'readonly' : ''}>${esc(notes.value(p))}</textarea><div class="note-link-preview" hidden></div></div><button type="button" class="note-more" data-action="toggle-note-preview" hidden>Read more</button>${noteFoot(p)}</section>
     <div class="card-preview">${nativePreview(p)}</div>
     <footer class="card-footer"><button type="button" class="collection-add" data-action="add-collection" aria-label="Add to topic" title="Add to topic" aria-haspopup="dialog" aria-controls="collection-picker" aria-expanded="false" ${state.demo ? 'disabled' : ''}>${icon('plus')}</button><div class="card-tags">${[...new Set(p.topics)].map(t => `<span class="tag-pill"><button type="button" class="tag-icon" data-action="remove-topic" data-topic-name="${esc(t)}" aria-label="Remove from “${esc(t)}”" title="Remove from this topic"${state.demo ? ' disabled' : ''}>${icon('folder', 'tag-folder')}${icon('close', 'tag-close')}</button><button class="tag" data-topic="${esc(t)}">${esc(t)}</button></span>`).join('')}</div></footer></div>
@@ -1534,14 +1593,21 @@ function observeNotePreviews(root) {
   }
 }
 // Filling a note with AI, one post at a time, only when someone asks. The server does the work and adds to the note.
-let noteAiJob = null, noteAiFollowing = false;
+// A note asked for while another runs waits its turn, and starts by itself. Each post's latest job is kept here.
+const noteAiJobs = new Map();
+let noteAiFollowing = false;
+const noteAiBusyState = job => job?.state === 'running' || job?.state === 'waiting';
 // The usual question. Tab in an empty prompt box fills it in, ready to run with Enter.
 const NOTE_AI_PRESET = 'What is the post about?';
 const noteAiOpen = new Set(), noteAiDrafts = new Map(), noteAiErrors = new Map(), noteAiUndo = new Map(), noteAiChoice = new Map();
 let noteAiModels = [];
-const noteAiRunning = id => noteAiJob?.state === 'running' && noteAiJob.post === id;
+// Running or waiting: either way the note is spoken for.
+const noteAiRunning = id => noteAiBusyState(noteAiJobs.get(id));
+const noteAiWaitLabel = job => job.position > 1 ? `Waiting · ${job.position} notes ahead` : 'Waiting for the other note';
 function noteAiBoxInner(id) {
-  if (noteAiRunning(id)) return `<div class="note-ai-working" role="status">${dotLoader('write')}<span class="note-ai-step">${esc(noteAiJob.step)}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(noteAiJob.request)}</p>`;
+  const job = noteAiJobs.get(id);
+  if (job?.state === 'running') return `<div class="note-ai-working" role="status">${dotLoader('write')}<span class="note-ai-step">${esc(job.step || 'Starting')}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
+  if (job?.state === 'waiting') return `<div class="note-ai-working is-waiting" role="status">${icon('clock')}<span class="note-ai-step">${esc(noteAiWaitLabel(job))}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
   if (!aiTool) return `<div class="note-ai-off"><span>Turn on Claude Code, Codex or DeepSeek to use this.</span><button type="button" class="note-ai-cancel" data-action="settings">Open Settings</button></div>`;
   const error = noteAiErrors.get(id);
   return `<label class="sr-only" for="note-ai-input-${id}">What should go in this note?</label><textarea class="note-ai-input" id="note-ai-input-${id}" rows="1" maxlength="2000" placeholder="${NOTE_AI_PRESET} · Tab to use it">${esc(noteAiDrafts.get(id) || '')}</textarea>${error ? `<p class="note-ai-error">${esc(error)}</p>` : ''}<p class="note-ai-hint">Enter to run with ${noteAiModels.length ? `<select class="note-ai-model" aria-label="Model for this note">${noteAiModels.map(model => `<option value="${esc(model.id)}" ${model.id === noteAiChoice.get(id) ? 'selected' : ''}>${esc(model.name)}</option>`).join('')}</select>` : esc(aiToolModel)}</p>`;
@@ -1595,14 +1661,18 @@ async function followNoteAi() {
   if (noteAiFollowing) return;
   noteAiFollowing = true;
   try {
-    while (noteAiJob?.state === 'running') {
+    while ([...noteAiJobs.values()].some(noteAiBusyState)) {
       await new Promise(resolve => setTimeout(resolve, 700));
-      let job;
-      try { ({ job } = await api('/note-ai')); } catch { continue; }
-      const stepChanged = job?.step !== noteAiJob?.step;
-      noteAiJob = job;
-      if (job?.state === 'running') { if (stepChanged) document.querySelectorAll(`[data-note-ai-box="${job.post}"] .note-ai-step`).forEach(step => { step.textContent = `${job.step}…`; }); continue; }
-      if (job) finishNoteAi(job);
+      let jobs;
+      try { ({ jobs = [] } = await api('/note-ai')); } catch { continue; }
+      for (const [id, known] of noteAiJobs) {
+        if (!noteAiBusyState(known)) continue;
+        const job = jobs.find(item => item.post === id && item.id === known.id) || { ...known, state: 'cancelled' };
+        noteAiJobs.set(id, job);
+        // A waiting note that starts, or moves up the line, is redrawn. A running one only updates its step.
+        if (job.state !== known.state || job.position !== known.position) { if (noteAiBusyState(job)) paintNoteAi(id); else finishNoteAi(job); }
+        else if (job.state === 'running' && job.step !== known.step) document.querySelectorAll(`[data-note-ai-box="${id}"] .note-ai-step`).forEach(step => { step.textContent = `${job.step}…`; });
+      }
     }
   } finally { noteAiFollowing = false; }
 }
@@ -1614,9 +1684,13 @@ function finishNoteAi(job) {
     state.posts = notes.overlay(state.posts.map(item => item.id === id ? { ...item, notes: text, updatedAt } : item));
     updateCollection();
     const post = allPosts().find(item => item.id === id), card = document.querySelector(`.save-card[data-post-id="${id}"]`);
-    if (post && card) { syncCardNote(card, post); showNoteAiUndo(card, post); }
+    // A note with the cursor in it is normally left alone, so typing is never overwritten. Here it was read-only while
+    // the AI worked, so it holds nothing unsaved, and without this the result wouldn't show until the note lost focus.
+    const cardField = post && card && $('.note-input', card);
+    if (cardField && cardField.value !== notes.value(post)) cardField.value = notes.value(post);
+    if (post && card) { syncCardNote(card, post); showNoteAiUndo(card, post); shineNote($('.card-note', card)); }
     const panelField = $('#post-note-input', postPanel);
-    if (panelField && noteViewPost?.id === id) { panelField.value = text; syncNoteLinks(panelField); showNoteAiUndo(postPanel, post); }
+    if (panelField && noteViewPost?.id === id) { panelField.value = text; syncNoteLinks(panelField); showNoteAiUndo(postPanel, post); shineNote(panelField.closest('.card-note')); }
     syncMeaningSearch();
   }
   paintNoteAi(id);
@@ -1632,7 +1706,8 @@ async function startNoteAi(id, request) {
   noteAiErrors.delete(id); noteAiDrafts.set(id, request);
   try {
     await notes.flush(post);
-    ({ job: noteAiJob } = await api('/note-ai', { method: 'POST', body: { post: id, request, model: noteAiChoice.get(id) } }));
+    const { job } = await api('/note-ai', { method: 'POST', body: { post: id, request, model: noteAiChoice.get(id) } });
+    noteAiJobs.set(id, job);
     noteAiUndo.delete(id); document.querySelectorAll(`[data-note-ai-undo="${id}"]`).forEach(button => button.remove());
     paintNoteAi(id); void followNoteAi();
   } catch (error) { noteAiErrors.set(id, error.message); paintNoteAi(id); focusNoteAi(id); }
@@ -1658,8 +1733,8 @@ document.addEventListener('click', event => {
     paintNoteAi(id); if (noteAiOpen.has(id)) focusNoteAi(id);
   } else if (cancel) {
     event.preventDefault();
-    const id = noteAiJob?.post; cancel.disabled = true;
-    void api('/note-ai', { method: 'DELETE', body: {} }).then(({ job }) => { noteAiJob = job; paintNoteAi(id); focusNoteAi(id); }).catch(error => { cancel.disabled = false; toast(error.message, true, 'bottom-center'); });
+    const id = Number(cancel.closest('[data-note-ai-box]')?.dataset.noteAiBox); cancel.disabled = true;
+    void api('/note-ai', { method: 'DELETE', body: { post: id } }).then(({ job }) => { if (job?.post === id) noteAiJobs.set(id, job); paintNoteAi(id); focusNoteAi(id); }).catch(error => { cancel.disabled = false; toast(error.message, true, 'bottom-center'); });
   } else if (undo) { event.preventDefault(); void undoNoteAi(Number(undo.dataset.noteAiUndo), undo); }
   // The button has become the box, so clicking away is what closes it. What was typed is kept for next time.
   if (toggle || !event.target.isConnected || event.target.closest?.('.select-menu')) return;
@@ -1677,6 +1752,170 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void startNoteAi(id, event.target.value); }
   else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); noteAiOpen.delete(id); paintNoteAi(id); document.querySelector(`[data-note-ai="${id}"]`)?.focus({ preventScroll: true }); }
 });
+// Condensing a saved post into one of the user's documents, respecting that document's description.
+let docAiJob = null, docAiFollowing = false, docAiLastDocument = '', docAiChoice = '', docAiError = '';
+const docAiDrafts = new Map();
+const docAiRunning = id => docAiJob?.state === 'running' && (id === undefined || docAiJob.post === id);
+function paintDocAiButtons() {
+  document.querySelectorAll('.save-card [data-action="send-to-document"]').forEach(button => {
+    const id = Number(button.closest('.save-card')?.dataset.postId), busy = docAiRunning(id), wasBusy = button.hasAttribute('data-busy');
+    button.toggleAttribute('data-busy', busy);
+    if (busy !== wasBusy) button.innerHTML = busy ? dotLoader('write') : icon('file');
+    const label = busy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
+    button.setAttribute('aria-label', label); button.title = label;
+  });
+  document.querySelectorAll('.post-panel-document').forEach(button => {
+    const id = Number(button.dataset.postId), busy = docAiRunning(id), wasBusy = button.hasAttribute('data-busy');
+    button.toggleAttribute('data-busy', busy);
+    if (busy !== wasBusy) button.innerHTML = `${busy ? dotLoader('write') : icon('file')}<span>${busy ? 'Sending…' : 'Document'}</span>`;
+    else $('span', button).textContent = busy ? 'Sending…' : 'Document';
+    const label = busy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
+    button.title = label;
+  });
+}
+function paintSendDocumentRunning() {
+  if (!docAiJob || docAiJob.state !== 'running') return;
+  showModal(`<div class="send-document-dialog is-running"><h2>Sending to “${esc(docAiJob.documentTitle || 'Document')}”</h2>${docAiJob.request ? `<p class="send-document-asked">${esc(docAiJob.request)}</p>` : '<p class="muted">Adding what fits this document’s description.</p>'}<div class="send-document-working" role="status">${dotLoader('write')}<span class="send-document-step">${esc(docAiJob.step || 'Reading this save')}…</span></div><div class="button-row"><button type="button" class="secondary" id="cancel-send-document">Cancel</button></div></div>`);
+  modal.dataset.sendDocument = String(docAiJob.post);
+  $('#cancel-send-document', modal).onclick = async event => {
+    event.currentTarget.disabled = true;
+    const postId = docAiJob?.post;
+    try {
+      ({ job: docAiJob } = await api('/document-ai', { method: 'DELETE', body: {} }));
+      paintDocAiButtons();
+      if (postId) await openSendToDocument(postId); else modal.close();
+    } catch (error) { event.currentTarget.disabled = false; toast(error.message, true, 'bottom-center'); }
+  };
+}
+async function openSendToDocument(postId) {
+  const id = Number(postId), post = allPosts().find(item => item.id === id);
+  if (!post || state.demo) return;
+  if (!aiTool) {
+    showModal(`<div class="send-document-dialog"><h2>Send to document</h2><p class="muted">Turn on Claude Code, Codex or DeepSeek in Settings to condense saved posts into your documents.</p><div class="button-row"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button type="button" class="primary" data-action="settings">Open Settings</button></div></div>`);
+    return;
+  }
+  try {
+    const [{ documents }, { job }] = await Promise.all([api('/documents'), api('/document-ai')]);
+    if (job?.state === 'running') {
+      docAiJob = job; paintDocAiButtons(); paintSendDocumentRunning(); void followDocAi();
+      return;
+    }
+    if (!documents.length) {
+      showModal(`<div class="send-document-dialog"><h2>Send to document</h2><p class="muted">You don’t have any documents yet. Create a document first and describe what belongs in it — like a font list, colour notes or prompts.</p><div class="button-row"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button type="button" class="primary" id="open-documents-drawer">${icon('plus')}<span>New document</span></button></div></div>`);
+      $('#open-documents-drawer', modal).onclick = () => { modal.close(); documentUi?.openNew(doc => { docAiLastDocument = doc.id; void openSendToDocument(id); }); };
+      return;
+    }
+    const chosenDoc = documents.find(doc => doc.id === docAiLastDocument) || documents[0];
+    docAiLastDocument = chosenDoc.id;
+    const chosenModel = noteAiModels.find(model => model.id === docAiChoice)?.id || noteAiModels[0]?.id || '';
+    const draft = docAiDrafts.get(id) || '';
+    const pick = doc => `<label class="send-document-pick"><input type="radio" name="documentId" value="${doc.id}" ${doc.id === chosenDoc.id ? 'checked' : ''}>${doc.icon ? `<span class="send-document-emoji" aria-hidden="true">${esc(doc.icon)}</span>` : icon('file')}<span>${esc(doc.title)}</span></label>`;
+    const model = noteAiModels.length > 1 ? `<select name="model" class="send-document-model" aria-label="Model for this run">${noteAiModels.map(item => `<option value="${esc(item.id)}" ${item.id === chosenModel ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select>` : `<span class="send-document-model-name">${esc(noteAiModels[0]?.name || aiToolModel)}</span>`;
+    // Documents as chips to tap, and the directions in the same colourful box as the notes AI, with its send button inside.
+    showModal(`<form class="send-document-dialog" id="send-document-form"><h2>Send to document</h2><fieldset class="send-document-picks"><legend class="sr-only">Document</legend>${documents.length > 8 ? `<input type="search" class="send-document-filter" placeholder="Find a document" aria-label="Find a document" autocomplete="off">` : ''}<div class="send-document-list">${documents.map(pick).join('')}</div></fieldset><div class="send-document-prompt"><textarea name="request" id="send-document-request" rows="2" maxlength="2000" aria-label="Directions, optional" placeholder="What to pull out and how to write it. Leave blank to add whatever fits.">${esc(draft)}</textarea>${docAiError ? `<p class="send-document-error" role="alert">${esc(docAiError)}</p>` : ''}<div class="send-document-prompt-foot">${model}<button class="send-document-send" type="submit" aria-label="Send to document" title="Send to document">${icon('up')}</button></div></div></form>`);
+    modal.dataset.sendDocument = String(id);
+    styleSelects(modal);
+    const requestField = $('#send-document-request', modal), modelSelect = $('.send-document-model', modal), form = $('#send-document-form', modal);
+    const pickedDocument = () => form.elements.documentId.value;
+    form.onchange = event => { if (event.target.name === 'documentId') docAiLastDocument = pickedDocument(); };
+    // Documents come most recently updated first, so the one last sent to leads. The list fades at an edge with more beyond it.
+    const list = $('.send-document-list', modal), filter = $('.send-document-filter', modal);
+    const edges = () => { list.toggleAttribute('data-more-above', list.scrollTop > 2); list.toggleAttribute('data-more-below', list.scrollTop + list.clientHeight < list.scrollHeight - 2); };
+    list.onscroll = edges;
+    // Measured again whenever the list or a chip changes size, since chips wrap differently once the font has loaded.
+    const measure = new ResizeObserver(edges); for (const element of [list, ...list.children]) measure.observe(element);
+    $('input:checked', list)?.closest('label').scrollIntoView({ block: 'nearest' });
+    if (filter) {
+      const shown = () => [...list.children].filter(chip => !chip.hidden);
+      filter.oninput = () => {
+        const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        for (const chip of list.children) chip.hidden = !words.every(word => chip.textContent.toLowerCase().includes(word));
+        list.scrollTop = 0; edges();
+      };
+      // Enter picks the first match and moves on to the directions.
+      filter.onkeydown = event => {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        event.preventDefault();
+        const first = shown()[0]?.querySelector('input');
+        if (!first) return;
+        first.checked = true; docAiLastDocument = first.value; requestField.focus({ preventScroll: true });
+      };
+    }
+    if (modelSelect) modelSelect.onchange = () => { docAiChoice = modelSelect.value; };
+    requestField.oninput = () => { docAiDrafts.set(id, requestField.value); };
+    requestField.onkeydown = event => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
+    };
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const submit = $('button[type="submit"]', form); submit.disabled = true;
+      docAiError = '';
+      docAiLastDocument = pickedDocument();
+      docAiDrafts.set(id, requestField.value);
+      try {
+        await notes.flush(post);
+        ({ job: docAiJob } = await api('/document-ai', { method: 'POST', body: { post: id, documentId: docAiLastDocument, request: requestField.value, model: modelSelect?.value || chosenModel } }));
+        paintDocAiButtons(); paintSendDocumentRunning(); void followDocAi();
+      } catch (error) {
+        docAiError = error.message;
+        await openSendToDocument(id);
+      }
+    };
+    requestField.focus({ preventScroll: true });
+  } catch (error) { toast(error.message, true, 'bottom-center'); }
+}
+async function followDocAi() {
+  if (docAiFollowing) return;
+  docAiFollowing = true;
+  try {
+    while (docAiJob?.state === 'running') {
+      await new Promise(resolve => setTimeout(resolve, 700));
+      let job;
+      try { ({ job } = await api('/document-ai')); } catch { continue; }
+      const stepChanged = job?.step !== docAiJob?.step;
+      docAiJob = job;
+      if (job?.state === 'running') {
+        if (stepChanged) {
+          paintDocAiButtons();
+          if (modal.open && modal.dataset.sendDocument) {
+            const step = $('.send-document-step', modal);
+            if (step) step.textContent = `${job.step}…`;
+          }
+        }
+        continue;
+      }
+      paintDocAiButtons();
+      if (job) finishDocAi(job);
+    }
+  } finally { docAiFollowing = false; }
+}
+function finishDocAi(job) {
+  if (job.state === 'failed') {
+    docAiError = job.error || 'Couldn’t update that document.';
+    if (modal.open && modal.dataset.sendDocument) void openSendToDocument(job.post);
+    else toast(docAiError, true, 'bottom-center');
+    return;
+  }
+  if (job.state !== 'done') return;
+  docAiError = ''; docAiDrafts.delete(job.post);
+  documentUi?.refresh(); documentUi?.reloadIfOpen(job.documentId);
+  if (modal.open && modal.dataset.sendDocument) modal.close();
+  const actions = [{ label: 'Open document', onClick: () => { hideToast(); void documentUi?.open(job.documentId); } }];
+  if (job.changed && job.changeId) {
+    actions.push({
+      label: 'Undo',
+      onClick: async button => {
+        button.disabled = true;
+        try {
+          await api('/document-ai/undo', { method: 'POST', body: { changeId: job.changeId } });
+          documentUi?.refresh(); documentUi?.reloadIfOpen(job.documentId);
+          toast('Undone.', false, 'bottom-center');
+        } catch (error) { toast(error.message, true, 'bottom-center'); }
+      }
+    });
+  }
+  toastWithActions(job.summary || `Updated “${job.documentTitle}”.`, actions);
+}
 function syncCardNote(card, post, immediate = false, preview = true) {
   const section = $('.card-note',card), field = $('.note-input',card), label = $('.note-status',card);
   if (!field) return;
@@ -1929,8 +2168,9 @@ function showPost({ layout, url, notePost = pendingNotePost }) {
   postPanel.dataset.layout = layout; postPanel.dataset.view = notePost ? 'note' : 'post';
   const width = notePost ? 0 : postWidths()[layout];
   postPanel.style.width = width ? `${width}px` : '';
-  const browser = layout === 'saved' ? '' : '<button class="primary post-panel-browser" type="button">Open in browser</button>';
-  const copy = saved ? `<button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" title="Copy post reference">${icon('copy')}<span>Copy reference</span></button><button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" data-copy="link" title="Copy post link">${icon('link')}<span>Copy link</span></button>` : '';
+  const browser = layout === 'saved' ? '' : `<button class="primary post-panel-browser" type="button" aria-label="Open in browser" title="Open in browser">${icon('globe')}</button>`;
+  const canDoc = state.localMode && !state.demo, docBusy = saved && docAiRunning(saved.id), docLabel = docBusy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
+  const copy = saved ? `<button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" title="Copy post reference">${icon('copy')}<span>Reference</span></button><button class="secondary post-panel-copy" type="button" data-post-id="${saved.id}" data-copy="link" title="Copy post link">${icon('link')}<span>Link</span></button>${canDoc ? `<button class="secondary post-panel-copy post-panel-document" type="button" data-post-id="${saved.id}" ${docBusy ? 'data-busy="true"' : ''} title="${esc(docLabel)}">${docBusy ? dotLoader('write') : icon('file')}<span>${docBusy ? 'Sending…' : 'Document'}</span></button>` : ''}` : '';
   const header = `<header class="post-panel-header"><div class="post-panel-actions">${browser}${copy}</div><button class="icon-button post-panel-close" type="button" aria-label="Close post">${icon('close')}</button></header>`;
   const view = layout === 'saved' ? `<div class="post-panel-saved"><section class="saved-preview">${embedMetadata(saved, true)}</section></div>` : POST_VIEW;
   postPanel.innerHTML = notePost
@@ -1952,6 +2192,7 @@ function postMoved(url) {
   section.outerHTML = panelNoteMarkup(next);
   if (next) mountNoteView(next);
   for (const copy of postPanel.querySelectorAll('.post-panel-copy')) { copy.hidden = !next; if (next) copy.dataset.postId = next.id; }
+  paintDocAiButtons();
 }
 // The post is a native view, which can't fade and would stay solid until the end. A picture of it goes in its place first, so it all leaves as one.
 async function freezePost() {
@@ -1979,9 +2220,15 @@ async function dismissPost() {
 window.saveXDesktop?.onPost?.(showPost, dismissPost, postMoved);
 postPanel.addEventListener('cancel', event => { event.preventDefault(); void dismissPost(); });
 postPanel.addEventListener('click', event => {
+  const sendDoc = event.target.closest('.post-panel-document');
+  if (sendDoc) {
+    const id = Number(sendDoc.dataset.postId);
+    void dismissPost().then(() => { if (id) void openSendToDocument(id); });
+    return;
+  }
   const copy = event.target.closest('.post-panel-copy');
   if (copy) void copyPostReference(copy, true, copy.dataset.copy || 'reference').then(copied => {
-    const label = $('span', copy), idle = copy.dataset.copy === 'link' ? 'Copy link' : 'Copy reference'; label.textContent = copied ? 'Copied' : 'Couldn’t copy';
+    const label = $('span', copy), idle = copy.dataset.copy === 'link' ? 'Link' : 'Reference'; label.textContent = copied ? 'Copied' : 'Couldn’t copy';
     clearTimeout(copy.resetLabel); copy.resetLabel = setTimeout(() => { label.textContent = idle; }, 1500);
   });
   if (event.target.closest('.post-panel-browser')) void window.saveXDesktop.openPostInBrowser().catch(error => toast(error.message, true)).finally(dismissPost);
@@ -2494,7 +2741,7 @@ const AI_TOOL_ICONS = {
   deepseek: '<svg class="ai-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#4d6bfe"/><path d="M5 13.5c2.5 3.5 7.5 4.5 11 1.5 1.5-1.3 2.5-3 3-5-1 .8-2 1.200-3 1.200-2.500 0-3.500-2.200-6-2.200-2.200 0-4 1.800-5 4.500Z" fill="#fff"/></svg>',
   codex: '<svg class="ai-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#111"/><path d="m7 8 4 4-4 4M13 16.5h4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
-// MiniLM is always on. Claude Code and Codex install and sign in here, and one can be chosen for AI search.
+// The local model is always on. Claude Code and Codex install and sign in here, and one can be chosen for AI search.
 async function mountAiSearchSettings() {
   const box = $('.ai-search-settings'); if (!box) return;
   let timer = 0;
@@ -2522,9 +2769,8 @@ async function mountAiSearchSettings() {
     if (!box.isConnected) return;
     clearTimeout(timer);
     {
-      box.innerHTML = '<h4 class="ai-tools-heading">Normal searches</h4>' + row('minilm', 'MiniLM', { text: 'all-MiniLM-L6-v2 · on this computer' }, '<span class="fine-print">Always on</span>')
-        + (tools.length ? '<h4 class="ai-tools-heading">Enhance searches with</h4><p class="fine-print ai-tools-note">Runs when you click it, and sends saved text online.</p>' : '')
-        + tools.map(tool => row(tool.id, tool.name, tool.failed ? { text: tool.failed === 'install' ? 'Install failed' : 'Sign-in failed', failed: true } : { text: tool.model }, toolControl(tool, selected)) + (tool.usesKey && addingKey === tool.id ? keyForm(tool) : '')).join('');
+      // LEAF is always on, so it's named beside the panel's title instead of having a row. Only the AIs you can switch on are listed.
+      box.innerHTML = tools.map(tool => row(tool.id, tool.name, tool.failed ? { text: tool.failed === 'install' ? 'Install failed' : 'Sign-in failed', failed: true } : { text: tool.model }, toolControl(tool, selected)) + (tool.usesKey && addingKey === tool.id ? keyForm(tool) : '')).join('');
       box.querySelectorAll('[data-ai-tool]').forEach(input => { input.onchange = () => { box.querySelectorAll('[data-ai-tool]').forEach(item => { item.disabled = true; }); stopAiSearch(); void refresh({ method: 'POST', body: { tool: input.checked ? input.dataset.aiTool : '' } }); }; });
       box.querySelectorAll('[data-ai-action]').forEach(control => { control.onclick = () => { control.disabled = true; void runAction(control.dataset.aiAction, control.dataset.tool); }; });
       box.querySelectorAll('[data-ai-key]').forEach(form => {
@@ -2555,7 +2801,7 @@ async function settingsDialog() {
     showModal(`<h2>Settings</h2><div class="settings-panels">
       ${window.saveXDesktop?.socialAccounts ? settingsPanel('extension', 'Chrome extension', { aside: '<div id="chrome-helper-settings"></div>' }, '<div id="chrome-helper-about"></div>') : ''}
       ${window.saveXDesktop?.socialAccounts ? settingsPanel('accounts', 'Accounts', { className: 'native-account-settings', detail: '<span class="settings-heading-detail" id="settings-account-count"></span>' }, '<div id="native-account-settings-list"></div>') : ''}
-      ${settingsPanel('meaning', 'AI search', { }, '<div class="ai-search-settings"></div>')}
+      ${settingsPanel('meaning', 'Use AI', { detail: '<span class="settings-heading-detail"> · LEAF on this computer</span>' }, '<div class="ai-search-settings"></div>')}
       ${settingsPanel('mcp', 'MCP', { }, '<div class="mcp-settings"></div>')}
       ${desktop && window.saveXDesktop.updateStatus ? settingsPanel('updates', 'App version', { className: 'app-updates', headingId: 'app-update-heading', aside: '<span class="settings-panel-note" id="app-update-current" role="status" aria-live="polite" hidden>· Up to date</span><span class="settings-panel-note" id="app-update-version"></span>' }, '<p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button>') : ''}
       ${settingsPanel('backup', 'Backup', { }, `<div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div>`)}
@@ -2722,6 +2968,8 @@ document.addEventListener('click', async e => {
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
       case 'copy-post-link': await copyPostReference(button, false, 'link'); break;
+      case 'send-to-document': await openSendToDocument(button.closest('[data-post-id]')?.dataset.postId); break;
+      case 'close-modal': closeModal(); break;
       case 'remove-topic': removeTopicDialog(Number(button.closest('[data-post-id]').dataset.postId), button.dataset.topicName); break;
       case 'retry-preview': retryEmbed(button.closest('.save-card')?.querySelector('.native-embed')); break;
       case 'toggle-note-preview': {
@@ -2830,4 +3078,5 @@ addEventListener('scroll', syncToolbar, { passive: true }); addEventListener('re
 enableTopicDrag({ topics: () => state.topicCatalog, describe: id => state.topicCatalog.find(topic => topic.id === id), move: moveTopic, arrange: arrangeTopics,
   tag: { has: (postId, id) => state.demo || !!allPosts().find(post => post.id === postId)?.topics.includes(state.topicCatalog.find(topic => topic.id === id)?.name), add: tagPost },
   selection: () => state.filters.topics.map(name => state.topicCatalog.find(topic => topic.name === name)?.id).filter(Boolean) });
+enablePostDrag({ post: id => allPosts().find(item => item.id === id), topic: id => state.topicCatalog.find(item => item.id === id), add: tagPost, enabled: () => !state.demo });
 boot();

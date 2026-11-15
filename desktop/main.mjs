@@ -3,7 +3,7 @@ import { mkdir, readFile, appendFile, cp } from 'node:fs/promises';
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, xPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
+import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, threadsPost, xPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
@@ -118,6 +118,12 @@ async function start() {
         if (result.response !== 0) return false;
         await updater.install(); app.quit(); return true;
       }
+      case 'showEmojiPanel': {
+        if (!app.isEmojiPanelSupported()) return false;
+        window?.focus();
+        app.showEmojiPanel();
+        return true;
+      }
       default: throw new Error('Unsupported desktop action.');
     }
   });
@@ -160,7 +166,8 @@ async function quietCheck(request) {
   // Nobody's here, so there's nothing to keep fresh, and reading sites all night is what gets noticed.
   if (powerMonitor.getSystemIdleTime() >= IDLE_SECONDS) return true;
   // Instagram is the least tolerant of automated visits, so it's only read when asked for, or when the app opens.
-  const previous = library.sync.chosenJob(), targets = previous?.targets?.filter(target => target !== 'instagram');
+  // Threads is Instagram's sister site and shares its sign-in, so it's treated the same.
+  const previous = library.sync.chosenJob(), targets = previous?.targets?.filter(target => !['instagram', 'threads'].includes(target));
   if (targets?.length) await autoQuickSync({ ...previous, targets }, true);
   return true;
 }
@@ -235,10 +242,10 @@ async function createWindow() {
   window = new BrowserWindow({ title: 'saveXtension', width: 1280, height: 900, minWidth: 760, minHeight: 560, show: false, backgroundColor: '#f7f8f3', icon: join(root, 'desktop', 'assets', 'icon.png'),
     webPreferences: { preload: join(root, 'desktop', 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false }
   });
-  // Instagram, X and Pinterest posts and saved Chrome bookmarks open in the library's slide-in panel; every other link opens in the browser.
+  // Instagram, X, Pinterest and Threads posts and saved Chrome bookmarks open in the library's slide-in panel; every other link opens in the browser.
   const savedBookmark = url => !!library.store.db.prepare("SELECT 1 FROM posts WHERE platform='chrome' AND url=?").get(url);
   const openPost = (url, platform) => { social.openPost(url, platform, window, { browsing: browsingAccounts, onSaved: ({ platform, account }) => checks?.saved({ targets: [platform], xAccount: account || 'all' }), onUnsaved: panelUnsaved }); window.webContents.send('savex-post', { url, layout: platform === 'instagram' ? `instagram-${/\/reels?\//.test(url) ? 'reel' : 'post'}` : platform }); };
-  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url), pin = pinterestPost(url), tweet = xPost(url); if (post) openPost(post, 'instagram'); else if (pin) openPost(pin, 'pinterest'); else if (tweet) openPost(tweet, 'x'); else if (savedBookmark(url)) openPost(url, 'chrome'); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  window.webContents.setWindowOpenHandler(({ url }) => { const post = instagramPost(url), pin = pinterestPost(url), tweet = xPost(url), thread = threadsPost(url); if (post) openPost(post, 'instagram'); else if (pin) openPost(pin, 'pinterest'); else if (tweet) openPost(tweet, 'x'); else if (thread) openPost(thread, 'threads'); else if (savedBookmark(url)) openPost(url, 'chrome'); else if (isWebLink(url)) void shell.openExternal(url); return { action: 'deny' }; });
   // A reload loses the panel, and the post must not stay over the library without it.
   window.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) social.closePost(); });
   window.webContents.on('will-navigate', (event, url) => { if (!isLibraryFrame(url, library.origin)) { event.preventDefault(); if (isWebLink(url)) void shell.openExternal(url); } });

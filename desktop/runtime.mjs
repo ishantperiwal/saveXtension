@@ -30,8 +30,15 @@ export const pinterestPost = value => {
     return url.protocol === 'https:' && !url.username && !url.password && !url.port && isPinterestHost(url.hostname) && id ? `https://www.pinterest.com/pin/${id}/` : '';
   } catch { return ''; }
 };
+// A Threads post link, reduced to its canonical page. Its author is part of the link.
+export const threadsPost = value => {
+  try {
+    const url = new URL(value), match = url.pathname.match(/^\/@([\w.]{1,100})\/post\/([\w-]+)(?:\/|$)/);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && ['threads.com', 'www.threads.com', 'threads.net', 'www.threads.net'].includes(url.hostname) && match ? `https://www.threads.com/@${match[1]}/post/${match[2]}` : '';
+  } catch { return ''; }
+};
 // The ID a post is stored under, read from its link.
-export const postExternalId = (platform, url) => url.match(platform === 'x' ? /\/status\/(\d+)/ : platform === 'pinterest' ? /\/pin\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1] || null;
+export const postExternalId = (platform, url) => url.match(platform === 'x' ? /\/status\/(\d+)/ : platform === 'pinterest' ? /\/pin\/(\d+)/ : platform === 'threads' ? /\/post\/([\w-]+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1] || null;
 // Which connected account a post opens as: one that saved it, preferring one being browsed.
 // `owner` says whether it saved the post, since any other account's Save button says nothing about this save.
 export function panelAccount(connected, savedBy = [], browsing = []) {
@@ -47,6 +54,9 @@ export function panelRequestKind(platform, { method, url, body = '' }) {
   let path; try { path = new URL(url).pathname; } catch { return null; }
   if (platform === 'x') return /\/graphql\/[^/]+\/CreateBookmark$/.test(path) ? 'save' : /\/graphql\/[^/]+\/DeleteBookmark$/.test(path) ? 'unsave' : null;
   if (platform === 'pinterest') return /^\/resource\/(?:Repin|Pin)Resource\/create\/?$/.test(path) ? 'save' : /^\/resource\/PinResource\/delete\/?$/.test(path) ? 'unsave' : null;
+  // Threads is Meta's, so a save is assumed to be a named mutation like Instagram's. Only a save counts: it starts a scan
+  // that reads the saved list. An unsave is never acted on, because Threads has no check of a post's saved state yet.
+  if (platform === 'threads') { const name = decodeBody(body).match(/fb_api_req_friendly_name=([^&\s]+)/)?.[1] || ''; return /save/i.test(name) && /mutation/i.test(name) && !/unsave/i.test(name) ? 'save' : null; }
   const direct = path.match(/\/api\/v1\/web\/save\/\d+\/(save|unsave)\/?$/)?.[1];
   if (direct) return direct;
   const name = decodeBody(body).match(/fb_api_req_friendly_name=([^&\s]+)/)?.[1] || '';

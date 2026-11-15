@@ -21,6 +21,7 @@ import { syncQueue } from './sync.mjs';
 import { HttpError, text, canonicalPost } from './domain.mjs';
 import { createLibraryMcp } from './mcp.mjs';
 import { noteAi as createNoteAi } from './note-ai.mjs';
+import { documentAi as createDocumentAi } from './document-ai.mjs';
 import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
 import { Documents, documentImages, documentFonts } from './documents.mjs';
 
@@ -49,7 +50,10 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   const mcp = createLibraryMcp(store, { origin: appOrigin, localMode, images, fonts });
   // The same rules as MCP: only the saves the app shows.
   const organize = aiOrganize({ search: aiSearch, topics: new TopicLibrary(store), visibleIds: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).map(post => post.id).filter(id => !hidden.has(id)); } });
-  const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl: `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, visiblePost: id => { const post = store.post(id); return !!post && !post.archived && !hiddenInstagramSaveIds(store).includes(id); } });
+  const visiblePost = id => { const post = store.post(id); return !!post && !post.archived && !hiddenInstagramSaveIds(store).includes(id); };
+  const baseUrl = `http://127.0.0.1:${new URL(appOrigin).port || '80'}`;
+  const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost });
+  const docAi = createDocumentAi({ store, documents, topics: topicLibrary, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -119,7 +123,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (!localMode || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) throw new HttpError(403, 'MCP accepts local connections only.');
         const allowedOrigins = new Set([appOrigin, `http://127.0.0.1:${new URL(appOrigin).port || '80'}`, `http://localhost:${new URL(appOrigin).port || '80'}`]);
         if (requestOrigin !== undefined && !allowedOrigins.has(requestOrigin)) throw new HttpError(403, 'Unsupported MCP origin.');
-        if (noteMcp) { const handler = noteAi.mcpFor(noteMcp[1]); if (!handler) throw new HttpError(404, 'This note job has finished.'); return await handler.handle(req, res); }
+        if (noteMcp) { const handler = noteAi.mcpFor(noteMcp[1]) || docAi.mcpFor(noteMcp[1]); if (!handler) throw new HttpError(404, 'This note job has finished.'); return await handler.handle(req, res); }
         return await mcp.handle(req, res);
       }
       if (req.method === 'OPTIONS' && isExtensionRoute && extensionOrigin(requestOrigin)) { res.writeHead(204); res.end(); return; }
@@ -195,7 +199,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         }
         if (localMode && path === '/api/extension/known' && req.method === 'GET') {
           const query = new URL(req.url, appOrigin).searchParams, platform = query.get('platform'), account = query.get('account');
-          if (!['x', 'instagram', 'pinterest'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
+          if (!['x', 'instagram', 'pinterest', 'threads'].includes(platform) || !account) throw new HttpError(400, 'Choose a social account.');
           return json(res, { ids: knownForScan(store, platform, account, query.get('collectionId'), store.scanKnownPostIds(platform, account, query.get('collectionId'))) });
         }
         if (path === '/api/extension/status' && req.method === 'GET') return json(res, { ok: true, name: store.get('name'), device: d.name });
@@ -296,16 +300,33 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (typeof input.changeId !== 'string') throw new HttpError(400, 'Invalid change.');
           return json(res, organize.undo(input.changeId));
         }
-        if (localMode && path === '/api/note-ai' && req.method === 'GET') return json(res, { job: noteAi.current() });
+        if (localMode && path === '/api/note-ai' && req.method === 'GET') return json(res, { job: noteAi.current(), jobs: noteAi.all() });
         if (localMode && path === '/api/note-ai/models' && req.method === 'GET') return json(res, { models: await aiSearch.noteModels() });
-        if (localMode && path === '/api/note-ai' && req.method === 'DELETE') return json(res, { job: noteAi.cancel() });
+        if (localMode && path === '/api/note-ai' && req.method === 'DELETE') { const input = await body(req); return json(res, { job: noteAi.cancel(Number.isInteger(input.post) ? input.post : undefined), jobs: noteAi.all() }); }
         if (localMode && path === '/api/note-ai' && req.method === 'POST') {
           const input = await body(req);
           if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
+          if (docAi.current()?.state === 'running') throw new HttpError(409, 'A document is still being updated. Wait for it, or cancel it.');
           // Only a model on the list, and the default when none is chosen.
           const models = await aiSearch.noteModels(), model = input.model ? models.find(item => item.id === input.model) : null;
           if (input.model && !model) throw new HttpError(400, 'That model isn’t available.');
-          return json(res, { job: noteAi.start(input.post, input.request, model) });
+          return json(res, { job: noteAi.start(input.post, input.request, model), jobs: noteAi.all() });
+        }
+        if (localMode && path === '/api/document-ai' && req.method === 'GET') return json(res, { job: docAi.current() });
+        if (localMode && path === '/api/document-ai' && req.method === 'DELETE') return json(res, { job: docAi.cancel() });
+        if (localMode && path === '/api/document-ai' && req.method === 'POST') {
+          const input = await body(req);
+          if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
+          if (typeof input.documentId !== 'string' || !input.documentId.trim()) throw new HttpError(400, 'Choose a document.');
+          if (noteAi.current()?.state === 'running') throw new HttpError(409, 'A note is still being filled. Wait for it, or cancel it.');
+          const models = await aiSearch.noteModels(), model = input.model ? models.find(item => item.id === input.model) : null;
+          if (input.model && !model) throw new HttpError(400, 'That model isn’t available.');
+          return json(res, { job: docAi.start(input.post, input.documentId.trim(), input.request, model) });
+        }
+        if (localMode && path === '/api/document-ai/undo' && req.method === 'POST') {
+          const input = await body(req);
+          if (typeof input.changeId !== 'string') throw new HttpError(400, 'Invalid change.');
+          return json(res, docAi.undo(input.changeId));
         }
         if (localMode && path === '/api/ai-search/scan' && req.method === 'DELETE') {
           const input = await body(req);
@@ -378,6 +399,13 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         }
         if (path === '/api/documents' && req.method === 'GET') return json(res, { documents: documents.list() });
         if (path === '/api/documents' && req.method === 'POST') return json(res, documents.create(await body(req)));
+        if (localMode && path === '/api/documents/describe' && req.method === 'POST') return json(res, await docAi.describe(await body(req)));
+        if (localMode && path === '/api/documents/refine' && req.method === 'POST') {
+          // Closing the box stops the AI, through the request closing.
+          const stop = new AbortController(); res.on('close', () => { if (!res.writableEnded) stop.abort(); });
+          const input = await body(req);
+          return json(res, await docAi.refine({ documentId: String(input.documentId || ''), text: input.text, request: input.request }, stop.signal));
+        }
         if (path === '/api/documents/images' && req.method === 'POST') return json(res, await pictures.add((await body(req, 21 * 1024 * 1024)).data));
         const picture = path.match(/^\/api\/documents\/images\/([a-f0-9]{32}\.(?:png|jpg|gif|webp))$/);
         if (picture && req.method === 'GET') { const { bytes, type } = await pictures.read(picture[1]); res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' }); return res.end(bytes); }
@@ -436,6 +464,6 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   server.on('listening', () => { preview.start(); images.schedule(); });
   const pinGifs = checkPinterestGifs ? pinterestGifs({ store, onError: error => console.error(`Pinterest GIF check: ${error.message}`) }) : null;
   void pinGifs?.start();
-  server.on('close', () => { preview.close(); images.close(); meaning.close(); aiSearch.close(); noteAi.close(); void pinGifs?.close(); void mcp.close(); });
+  server.on('close', () => { preview.close(); images.close(); meaning.close(); aiSearch.close(); noteAi.close(); docAi.close(); void pinGifs?.close(); void mcp.close(); });
   return { server, store, setupCode, mcp, sync, unsaves, images };
 }

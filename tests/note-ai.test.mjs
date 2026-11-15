@@ -114,3 +114,21 @@ test('Codex runs without the person’s connected apps, a shell or browsers', ()
     assert.match(text, /--ignore-user-config/); assert.match(text, /--sandbox read-only/); assert.doesNotMatch(text, /view_image=false/);
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
+test('a second note waits its turn, starts by itself, and can be cancelled while it waits', async () => {
+  const posts = new Map([[1, { id: 1, notes: '' }], [2, { id: 2, notes: '' }], [3, { id: 3, notes: '' }]]), finishers = [], visits = [];
+  const store = { post: id => posts.get(id), updatePost: (id, input) => Object.assign(posts.get(id), input, { updatedAt: 'now' }) };
+  const mcp = { forNote: id => { visits.push(id); return { close: async () => {}, handle() {} }; } };
+  const ai = noteAi({ store, mcp, baseUrl: 'http://127.0.0.1:1', visiblePost: () => true, tool: () => ({ name: 'Claude Code', model: 'Haiku 5.5' }), run: () => new Promise(resolve => { finishers.push(resolve); }) });
+  assert.equal(ai.start(1, 'x').state, 'running');
+  const second = ai.start(2, 'y'), third = ai.start(3, 'z');
+  assert.equal(second.state, 'waiting'); assert.equal(second.position, 1); assert.equal(third.position, 2);
+  assert.throws(() => ai.start(2, 'again'), /already waiting/);
+  assert.equal(ai.cancel(3).state, 'cancelled');
+  // Only one visit at a time: the second post isn't opened until the first is done.
+  assert.deepEqual(visits, [1]);
+  finishers[0](reply('one')); await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(posts.get(1).notes, 'one'); assert.deepEqual(visits, [1, 2]);
+  assert.equal(ai.all().find(job => job.post === 2).state, 'running');
+  finishers[1](reply('two')); await ai.idle();
+  assert.equal(posts.get(2).notes, 'two'); assert.equal(posts.get(3).notes, ''); assert.deepEqual(visits, [1, 2]);
+});

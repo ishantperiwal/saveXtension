@@ -8,7 +8,7 @@ export function imageRecovery({ store, images, visit, blocked, onError = () => {
   const misses = new Map();
   const wait = ms => new Promise(resolve => { release = resolve; timer = setTimeout(resolve, ms); timer.unref?.(); });
   const pausedKey = platform => `image_recovery_paused:${platform}`;
-  const paused = () => ['instagram', 'x'].filter(platform => Number(store.get(pausedKey(platform)) || 0) > Date.now());
+  const paused = () => ['instagram', 'x', 'threads'].filter(platform => Number(store.get(pausedKey(platform)) || 0) > Date.now());
   const pause = (platform, ms) => { misses.delete(platform); store.set(pausedKey(platform), String(Date.now() + ms)); };
   const pace = () => gap + Math.random() * jitter;
   const off = () => store.get('image_recovery') === 'false';

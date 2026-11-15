@@ -97,3 +97,16 @@ test('Chrome additions sort and filter by import time while unknown historical i
   assert.deepEqual(applyFilters(posts,{...defaultFilters(),date:'today'},{now:new Date(2026,10,1,18)}).map(p=>p.id),[1]);
   assert.deepEqual(applyFilters(posts).map(p=>p.id),[1,3,2]);
 });
+
+test('word search wants every word in any order, puts the search as typed first, and leaves a social post\u2019s address out', () => {
+  const post = (id, platform, text, day, url = `https://x.com/i/status/${id}`) => ({ id, platform, text, url, topics: [], accounts: [], savedAt: iso(2026, 10, day), addedAt: iso(2026, 10, day) });
+  const list = [post(1, 'x', 'A plugin\nfor Figma', 3), post(2, 'x', 'a figma   plugin', 2), post(3, 'x', 'figma only', 1), post(4, 'chrome', '', 4, 'https://figma.com/plugin-status')];
+  const find = (query, meaning) => applyFilters(list, defaultFilters(), { query, now, meaning }).map(p => p.id);
+  assert.deepEqual(find('figma plugin'), [2, 4, 1]);
+  assert.deepEqual(find('"figma plugin"'), [2]);
+  assert.deepEqual(find('“plugin for” figma'), [1]);
+  assert.deepEqual(find('status'), [4]);
+  assert.deepEqual(find('x.com/i/status/3'), [3]);
+  // An AI's pick with the words still comes before a phrase match it didn't pick.
+  assert.deepEqual(find('figma plugin', new Map([[1, 107]])), [1, 2, 4]);
+});

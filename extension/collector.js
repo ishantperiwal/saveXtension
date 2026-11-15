@@ -23,7 +23,7 @@
     let status = 'partial', message = '', total = 0, reachedEnd = false;
     const deep = options.mode === 'deep';
     const known = new Set(options.knownIds || []);
-    const postId = post => post.url.match(info.platform === 'x' ? /\/status\/(\d+)/ : info.platform === 'pinterest' ? /\/pin\/(\d+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1];
+    const postId = post => post.url.match(info.platform === 'x' ? /\/status\/(\d+)/ : info.platform === 'pinterest' ? /\/pin\/(\d+)/ : info.platform === 'threads' ? /\/post\/([\w-]+)/ : /\/(?:p|reels?|tv)\/([\w-]+)/)?.[1];
     let familiar = 0;
     const seen = new Set(); let pending = [], idle = 0, passes = 0;
     const minutes = deep ? 120 : 10;

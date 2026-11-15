@@ -94,7 +94,7 @@ test('a new search stops the old one', async () => {
   search.cancel();
 });
 
-test('the AI switch is Claude Code, Codex or nothing, because MiniLM is always on', () => {
+test('the AI switch is Claude Code, Codex or nothing, because the local model is always on', () => {
   const search = aiSearch({ store: settings(), visiblePosts: () => [], find: () => '/fake/tool', isSignedIn: async () => true, hasLocal: () => true });
   assert.equal(search.summary().selected, ''); assert.equal(search.summary().localReady, true);
   search.choose('claude'); assert.equal(search.summary().selected, 'claude');
@@ -102,7 +102,7 @@ test('the AI switch is Claude Code, Codex or nothing, because MiniLM is always o
   assert.throws(() => search.choose('minilm'));
   search.choose(''); assert.equal(search.summary().selected, '');
   const saved = settings(); saved.set('ai-search-tool', 'minilm');
-  assert.equal(aiSearch({ store: saved, visiblePosts: () => [], find: () => '/fake/tool' }).summary().selected, '', 'an old MiniLM choice just means no AI tool');
+  assert.equal(aiSearch({ store: saved, visiblePosts: () => [], find: () => '/fake/tool' }).summary().selected, '', 'an old local-model choice just means no AI tool');
 });
 
 test('a running search reports real progress and the exact model', async () => {
@@ -201,7 +201,7 @@ test('a post with a note keeps its description out of the first pass, and it set
   assert.match(prompts[1], /After Effects panel/);
   assert.deepEqual(job.matches, [[1, 8]]);
   assert.deepEqual([job.settleTotal, job.settleDone], [2, 2]);
-  assert.equal(sent.length, 1, 'only the undescribed post MiniLM liked has its image read');
+  assert.equal(sent.length, 1, 'only the undescribed post the local model liked has its image read');
 });
 
 

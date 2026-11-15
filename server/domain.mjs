@@ -7,7 +7,7 @@ export class HttpError extends Error {
 
 export function canonicalPost(input) {
   let url;
-  try { url = new URL(String(input)); } catch { throw new HttpError(400, 'Enter a valid Instagram or X post URL.'); }
+  try { url = new URL(String(input)); } catch { throw new HttpError(400, 'Enter a valid Instagram, X or Threads post URL.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port) throw new HttpError(400, 'Unsupported post URL.');
   const host = url.hostname.toLowerCase().replace(/^www\./, '').replace(/^mobile\./, '');
   if (['x.com', 'twitter.com'].includes(host)) {
@@ -23,7 +23,12 @@ export function canonicalPost(input) {
     const match = url.pathname.match(PINTEREST_PIN);
     if (match) return { platform: 'pinterest', externalId: match[1], url: `https://www.pinterest.com/pin/${match[1]}/` };
   }
-  throw new HttpError(400, 'Use a link to an Instagram post/Reel or an X post.');
+  // A Threads post's link always names its author, and its code is the same kind as an Instagram post's.
+  if (['threads.com', 'threads.net'].includes(host)) {
+    const match = url.pathname.match(/^\/@([\w.]{1,100})\/post\/([A-Za-z0-9_-]+)(?:\/|$)/);
+    if (match) return { platform: 'threads', externalId: match[2], url: `https://www.threads.com/@${match[1]}/post/${match[2]}` };
+  }
+  throw new HttpError(400, 'Use a link to an Instagram post/Reel, an X post or a Threads post.');
 }
 
 export function text(value, max = 2000) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
@@ -54,8 +59,9 @@ export function tags(value) {
   return [...new Set(value.map(t => text(t, 40).toLowerCase()).filter(Boolean))].slice(0, 16);
 }
 
-// X and Instagram profile pictures: a person's face, never what the post shows.
-const PROFILE_PICTURE = /^\/profile_images\/|\/t51\.2885-19\//;
+// X, Instagram and Threads profile pictures: a person's face, never what the post shows. Meta's image
+// host files them under a -19 category whatever the number before it (2885 on Instagram, 82787 on Threads).
+const PROFILE_PICTURE = /^\/profile_images\/|\/t51\.\d+-19\//;
 
 // Instagram's page summary puts its counts and the date before the caption, as in
 // 448 likes, 12 comments - someone on July 26, 2026: "The caption". Only the caption is worth keeping.

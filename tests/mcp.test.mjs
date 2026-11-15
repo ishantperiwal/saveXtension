@@ -61,6 +61,9 @@ test('MCP library queries paginate, combine filters, expose full original refere
     const third=api.search({limit:1,cursor:second.nextCursor});assert.equal(third.saves[0].platform,'instagram');assert.equal(third.nextCursor,null);
     assert.throws(()=>api.search({query:'different',cursor:first.nextCursor}),/Cursor/);
     assert.equal(api.search({query:'100%_'}).total,1);assert.equal(api.search({query:'SECRET'}).total,0);
+    // Every word in any order, quotes for a phrase, and a social post's address only for a search that looks like a link.
+    assert.equal(api.search({query:'python coding'}).total,1);assert.equal(api.search({query:'"python coding"'}).total,0);assert.equal(api.search({query:'"coding tutorial" PYTHON'}).total,1);
+    assert.equal(api.search({query:'status'}).total,0);assert.equal(api.search({query:'status/123456'}).total,1);assert.equal(api.search({query:'example.org'}).total,1);
     assert.equal(api.search({platforms:['instagram'],accounts:[{platform:'instagram',handle:'@ONE'}],kinds:['video'],savedAfter:'2026-10-01T05:30:00+05:30',savedBefore:'2026-10-02T00:00:00Z'}).total,1);
     assert.equal(api.search({collectionIds:[store.instagramCollections()[0].id]}).total,1);
     assert.equal(api.search({folder:'References/Design',hasNotes:true}).total,1);

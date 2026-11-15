@@ -30,7 +30,53 @@
         return { platform: 'pinterest', account: `@${match[1]}`, valid: true, collection: !!collectionId, collectionId };
       }
     }
+    // Threads has one saved list, and its address doesn't name the account, so the account comes from the
+    // navigation's profile link, as on X.
+    if (['threads.com', 'threads.net'].includes(host) && /^\/saved\/?$/.test(path)) return { platform: 'threads', account: threadsAccount(doc), valid: true };
     return { valid: false, platform: null, account: '' };
+  }
+  // The signed-in account's profile link sits in the navigation, outside every post. A post's own author links are
+  // inside a post box, so they never count.
+  function threadsAccount(doc) {
+    const handles = new Set();
+    for (const anchor of doc.querySelectorAll('a[href^="/@"]')) {
+      if (anchor.closest('[data-pressable-container]') || !anchor.querySelector('svg')) continue;
+      const handle = anchor.getAttribute('href').match(/^\/@([\w.]{1,100})\/?$/)?.[1];
+      if (handle) handles.add(handle.toLowerCase());
+    }
+    // Two different profile links mean the page can't say whose it is.
+    return handles.size === 1 ? `@${[...handles][0]}` : '';
+  }
+  // Each post is a box marked data-pressable-container. Its own link is the one around its time. A post it quotes
+  // sits inside it with its own link and time, so anything inside that part belongs to the quoted post.
+  function threadsPosts(doc) {
+    const found = new Map();
+    const timeLink = anchor => /^\/@[\w.]+\/post\/[\w-]+/.test(anchor.getAttribute('href') || '') && anchor.querySelector('time');
+    for (const card of doc.querySelectorAll('[data-pressable-container="true"]')) {
+      if (card.parentElement?.closest('[data-pressable-container="true"]')) continue;
+      const links = [...card.querySelectorAll('a[href]')].filter(timeLink), own = links[0];
+      const match = own?.getAttribute('href').match(/^\/@([\w.]{1,100})\/post\/([\w-]+)/);
+      if (!match || found.has(match[2])) continue;
+      // The part holding a quoted post: from its link, the largest box that doesn't also hold this post's own link.
+      const quotedBoxes = links.slice(1).map(link => { let box = link; while (box.parentElement && box.parentElement !== card && !box.parentElement.contains(own)) box = box.parentElement; return box; });
+      const quoted = el => quotedBoxes.some(box => box.contains(el));
+      const caption = [...card.querySelectorAll('span[dir="auto"]')].filter(span => !span.closest('a,[role="button"]') && !span.querySelector('time') && !span.parentElement?.closest('span[dir="auto"]') && !quoted(span)).map(visibleText).filter(Boolean).join('\n');
+      const picture = img => /(?:cdninstagram\.com|fbcdn\.net)\//.test(img.getAttribute('src') || '') && !/\/t51\.\d+-19\//.test(img.getAttribute('src')) && !/profile picture/i.test(img.getAttribute('alt') || '');
+      // A link's preview card is the link's picture, not the post's own.
+      const preview = el => !!el.closest('a[href]:not([href^="/"])');
+      const allImages = [...card.querySelectorAll('img')].filter(picture), images = allImages.filter(img => !quoted(img) && !preview(img));
+      const videos = [...card.querySelectorAll('video')], ownVideo = videos.find(video => !quoted(video));
+      const source = img => img.getAttribute('src') || '';
+      const thumbnail = (images[0] && source(images[0])) || ownVideo?.getAttribute('poster') || allImages.map(source)[0] || videos[0]?.getAttribute('poster') || '';
+      const authorName = visibleText([...card.querySelectorAll(`a[href="/@${match[1]}"]`)].find(anchor => !quoted(anchor) && visibleText(anchor)));
+      found.set(match[2], { url: `https://www.threads.com/@${match[1]}/post/${match[2]}`, author: match[1], authorName: authorName && authorName !== match[1] ? authorName : '', text: caption,
+        thumbnail, media: [...new Set(images.map(source).filter(Boolean))],
+        kind: ownVideo ? 'video' : images.length > 1 ? 'carousel' : images.length ? 'image' : 'text',
+        // Media can still be loading, so only a post showing media is sure of its kind.
+        kindSure: !!ownVideo || images.length > 0,
+        publishedAt: own.querySelector('time')?.getAttribute('datetime') || null });
+    }
+    return [...found.values()];
   }
   function pinterestBoards(doc, location) {
     const info = pageInfo(doc, location);
@@ -133,6 +179,11 @@
     return [...found.values()];
   }
   function detail(doc, platform, url) {
+    // A Threads post's page shows it in the same box as the list, with the post it replies to above and replies below.
+    if (platform === 'threads') {
+      const code = url.match(/\/post\/([\w-]+)/)?.[1];
+      return threadsPosts(doc).find(p => p.url.endsWith(`/post/${code}`)) || null;
+    }
     if (platform === 'x') {
       const id = url.match(/\/status\/(\d+)/)?.[1];
       return xPosts(doc).find(p => p.url.endsWith(`/status/${id}`)) || null;
@@ -178,6 +229,10 @@
       if (doc.querySelector('[data-testid="emptyState"]')) return 'empty';
       return !xPosts(doc).length && doc.querySelector('main article, main a[href*="/status/"] time') ? 'unreadable' : '';
     }
+    if (platform === 'threads') {
+      if (threadsPosts(doc).length) return '';
+      return doc.querySelector('[data-pressable-container="true"]') || doc.querySelectorAll('img[src*="fbcdn.net"],img[src*="cdninstagram.com"]').length >= 3 ? 'unreadable' : '';
+    }
     if (platform === 'pinterest') {
       if (pinterestPosts(doc).length) return '';
       if (doc.querySelector('[data-test-id="pin"]') || doc.querySelectorAll('img[src*="pinimg.com"]').length >= 3) return 'unreadable';
@@ -186,6 +241,6 @@
     const images = [...doc.querySelectorAll('main img[src]')].filter(img => !img.closest('header'));
     return !instagramPosts(doc).length && images.length >= 3 ? 'unreadable' : '';
   }
-  const layoutChanged = platform => `${platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram'} loaded, but saveXtension couldn’t read the page. The site’s layout may have changed, so saveXtension needs an update. Nothing was removed.`;
-  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, pinterestBoards, xBookmarkState, diagnose, layoutChanged, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : platform === 'pinterest' ? pinterestPosts(doc) : instagramPosts(doc) };
+  const layoutChanged = platform => `${platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : platform === 'threads' ? 'Threads' : 'Instagram'} loaded, but saveXtension couldn’t read the page. The site’s layout may have changed, so saveXtension needs an update. Nothing was removed.`;
+  globalThis.SaveXExtractors = { pageInfo, detail, instagramCollections, pinterestBoards, xBookmarkState, diagnose, layoutChanged, threadsAccount, extract: (doc, platform) => platform === 'x' ? xPosts(doc) : platform === 'pinterest' ? pinterestPosts(doc) : platform === 'threads' ? threadsPosts(doc) : instagramPosts(doc) };
 })();

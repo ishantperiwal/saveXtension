@@ -52,7 +52,7 @@ async function loaded(tabId, timeout = 25000) {
   }
   throw new Error('The site took too long to load. Click Sync to try again.');
 }
-const sourceName = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram';
+const sourceName = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : platform === 'threads' ? 'Threads' : 'Instagram';
 async function inspect(tabId, platform) {
   const end = Date.now() + 20000;
   while (Date.now() < end) {
@@ -209,6 +209,11 @@ async function preparePlan(job) {
       const accounts = scope?.account ? catalog.accounts.filter(item => item.handle.toLowerCase() === scope.account.toLowerCase()) : catalog.accounts;
       if (!accounts.length) throw new Error(`Connect ${scope?.account || 'Pinterest'} in saveXtension, then retry.`);
       plan.push(...accounts.map(item => ({ platform, account: item.handle, ...(scope?.collection ? { collection: scope.collection } : {}) })));
+    } else if (platform === 'threads') {
+      // Threads has one saved list per account and syncs from the desktop app only, so every connected account is read.
+      const catalog = await desktop.accounts('threads');
+      if (!catalog.accounts.length) throw new Error('Connect Threads in saveXtension, then retry.');
+      plan.push(...catalog.accounts.map(item => ({ platform, account: item.handle })));
     } else if (desktop && platform === 'instagram') {
       const catalog = await desktop.accounts('instagram'), requested = job.instagramScope?.account;
       const accounts = requested && requested !== 'current' ? catalog.accounts.filter(item => item.handle.toLowerCase() === requested.toLowerCase()) : catalog.accounts;
@@ -251,7 +256,7 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   const tab = await createWorkTab('sync');
   job.ownedTabs.push(tab.id); job.sourceTabId = tab.id; job.phase = 'loading'; await chrome.storage.local.set({ job });
   await chrome.tabs.update(tab.id, { autoDiscardable: false, muted: true });
-  await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : platform === 'pinterest' ? 'https://www.pinterest.com/' : 'https://www.instagram.com/' });
+  await chrome.tabs.update(tab.id, { url: platform === 'x' ? 'https://x.com/i/bookmarks#savex-sync' : platform === 'pinterest' ? 'https://www.pinterest.com/' : platform === 'threads' ? 'https://www.threads.com/saved#savex-sync' : 'https://www.instagram.com/' });
   await sleep(400);
   await loaded(tab.id);
   if (desktop) await desktop.verifyAccount(tab.id, platform, selectedAccount);
@@ -338,6 +343,8 @@ async function startSource(platform, selectedAccount = null, collection = null) 
   const info = await inspect(tab.id, platform);
   if (collection && (info.account.toLowerCase() !== collection.account.toLowerCase() || info.collectionId !== collection.externalId)) throw new Error(`${sourceName(platform)} did not open the expected account and ${platform === 'pinterest' ? 'board' : 'collection'}.`);
   if (platform === 'x' && !info.account) throw new Error('Couldn’t identify the active X account. Try again after signing in.');
+  // The saved page has to name the same account that was just checked, or nothing is read.
+  if (platform === 'threads' && (!info.account || (selectedAccount && info.account.toLowerCase() !== selectedAccount.toLowerCase()))) throw new Error(`Threads didn’t show ${selectedAccount || 'your account'} on the saved page. No posts were imported.`);
   if (platform === 'x') { const catalog = await get('xAccountCatalog'); if (catalog && catalog.active !== info.account) await publishAccounts({ ...catalog, active: info.account, busy: false }); }
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', files: ['background-render.js'] });
   const mode = job.mode === 'deep' ? 'deep' : 'quick';
@@ -412,7 +419,7 @@ async function enrich() {
   await setRun({ ...run, stage: 'enriching' });
   // Reuse only our own tab; the user's original tabs are never navigated or scrolled.
   for (let i = job.detailIndex || 0; i < posts.length && !(await stopped()); i++) {
-    await progress(`${run.platform === 'x' ? run.account + ' · ' : ''}Refreshing metadata · ${i + 1} of ${posts.length} ${run.platform === 'x' ? 'X' : 'Instagram'} saves`);
+    await progress(`${run.platform === 'x' ? run.account + ' · ' : ''}Refreshing metadata · ${i + 1} of ${posts.length} ${sourceName(run.platform)} saves`);
     try {
       await chrome.tabs.update(run.tabId, { url: posts[i].url }); await sleep(350); await loaded(run.tabId, 15000);
       const end = Date.now() + 6000; let detail;
@@ -564,7 +571,7 @@ async function handle(message, sender) {
   if (sender.tab && !extensionPage) {
     const run = await get('syncState');
     if (!run || run.tabId !== sender.tab.id || run.runId !== message.runId || run.stage !== 'collecting' || run.status !== 'running') throw new Error('No active sync for this tab.');
-    const info = new URL(sender.url); if (!['x.com', 'www.x.com', 'twitter.com', 'www.instagram.com', 'instagram.com'].includes(info.hostname) && !/(?:^|\.)pinterest\.[a-z.]+$/.test(info.hostname)) throw new Error('Unsupported source.');
+    const info = new URL(sender.url); if (!['x.com', 'www.x.com', 'twitter.com', 'www.instagram.com', 'instagram.com', 'www.threads.com', 'threads.com', 'www.threads.net', 'threads.net'].includes(info.hostname) && !/(?:^|\.)pinterest\.[a-z.]+$/.test(info.hostname)) throw new Error('Unsupported source.');
     if (message.type === 'SYNC_BATCH') {
       const result = await request(`/runs/${run.runId}`, { posts: message.posts });
       await setRun({ ...run, imported: run.imported + result.imported, updated: run.updated + result.updated, rejected: run.rejected + result.rejected }); return result;

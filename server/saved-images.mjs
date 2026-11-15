@@ -88,7 +88,7 @@ export function savedImages(store, { dir, download = downloadWebsite } = {}) {
     // A save whose download failed, ticked saves first. Posts with no image link never get here.
     nextRecovery(skipPlatforms = []) {
       const hidden = new Set(hiddenInstagramSaveIds(store)), now = Date.now();
-      const rows = db.prepare("SELECT p.id,p.platform,p.url,p.accounts,i.recovery_attempts AS attempts FROM post_images i JOIN posts p ON p.id=i.post_id WHERE i.file IS NULL AND p.archived=0 AND p.platform IN ('instagram','x') AND i.recovery_attempts<? AND i.recovery_at<=?").all(RECOVERY_ATTEMPTS, now - RETRY_AFTER)
+      const rows = db.prepare("SELECT p.id,p.platform,p.url,p.accounts,i.recovery_attempts AS attempts FROM post_images i JOIN posts p ON p.id=i.post_id WHERE i.file IS NULL AND p.archived=0 AND p.platform IN ('instagram','x','threads') AND i.recovery_attempts<? AND i.recovery_at<=?").all(RECOVERY_ATTEMPTS, now - RETRY_AFTER)
         .filter(row => !skipPlatforms.includes(row.platform));
       rows.sort((a, b) => hidden.has(a.id) - hidden.has(b.id) || a.attempts - b.attempts || b.id - a.id);
       return rows[0] ? { ...rows[0], accounts: JSON.parse(rows[0].accounts) } : null;

@@ -1,7 +1,7 @@
 import { hiddenInstagramSaveIds, saveListSelections } from './instagram-save-lists.mjs';
 import { canonicalPost } from './domain.mjs';
 
-// MEMORY is also what the app shows Instagram and Pinterest in their site's order from, so it covers a whole library.
+// MEMORY is also what the app shows Instagram, Pinterest and Threads in their site's order from, so it covers a whole library.
 const QUICK_LIMIT = 5, DEEP_LIMIT = 25, MEMORY = 5000, DAY = 86400000;
 const orderKey = (platform, account, collectionId) => `list-order:${platform}:${account.toLowerCase()}:${collectionId || 'all'}`;
 const readingKey = (platform, account, collectionId) => `list-reading:${platform}:${account.toLowerCase()}:${collectionId || 'all'}`;
@@ -25,7 +25,7 @@ export function listScanFinished(store, run, status) {
 // arrives, not only at the end. A finished scan's full read replaces this in missingFromList. A stopped scan's read is
 // kept on top of what was remembered, which is safe because a stopped All posts read always makes the collections get read.
 export function listReadSoFar(store, run, posts) {
-  if (!['instagram', 'pinterest'].includes(run.platform) || !run.account) return;
+  if (!['instagram', 'pinterest', 'threads'].includes(run.platform) || !run.account) return;
   const key = readingKey(run.platform, run.account, run.collection_id);
   let held = null;
   try { held = JSON.parse(store.get(key) || 'null'); } catch { /* Starts again. */ }
@@ -82,7 +82,7 @@ export function savedListGate(store, run, { status, seenIds, collectionsDone, re
 // A quick scan only reads the top of a list, so it compares against the order it remembers from last
 // time, and only for the stretch it actually read. A scan that reached a collection's end covers all of it.
 export function missingFromList(store, run, { status, seenIds, reachedEnd }) {
-  if (status !== 'completed' || !Array.isArray(seenIds) || !['x', 'instagram', 'pinterest'].includes(run.platform) || !run.account) return [];
+  if (status !== 'completed' || !Array.isArray(seenIds) || !['x', 'instagram', 'pinterest', 'threads'].includes(run.platform) || !run.account) return [];
   const seen = seenIds.filter(id => typeof id === 'string').slice(0, 2000), read = new Set(seen);
   const key = orderKey(run.platform, run.account, run.collection_id);
   let known = [];
@@ -90,7 +90,8 @@ export function missingFromList(store, run, { status, seenIds, reachedEnd }) {
   const lastRead = known.reduce((last, id, index) => read.has(id) ? index : last, -1);
   store.set(key, JSON.stringify([...seen, ...known.slice(lastRead + 1).filter(id => !read.has(id))].slice(0, MEMORY)));
   // Pinterest only remembers the order here, because a pin leaving a board is checked by two full board reads.
-  if (run.platform === 'pinterest') return [];
+  // Threads only remembers it too: it has no check of a post's own saved state yet, so nothing missing is ever looked into.
+  if (['pinterest', 'threads'].includes(run.platform)) return [];
   // X's deep scan has its own check for everything missing.
   if (run.platform === 'x' && run.mode === 'deep') return [];
   const candidates = new Set(known.slice(0, lastRead + 1).filter(id => !read.has(id)));

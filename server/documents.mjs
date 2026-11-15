@@ -6,12 +6,22 @@ import { HttpError, updatedTime } from './domain.mjs';
 // Documents are the person's own pages, written in Markdown: lists, tables, images, links, anything.
 // A link to a saved post is just its address, and the app opens it in the post panel. They never come from a sync.
 export const TITLE_LIMIT = 120, DESCRIPTION_LIMIT = 600, BODY_LIMIT = 500000, IMAGE_LIMIT = 15 * 1024 * 1024;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 export function initializeDocuments(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
   // What the document is for and what belongs in it (user's decision: required to create one). An AI adds only what fits it.
-  if (!db.prepare('PRAGMA table_info(documents)').all().some(c => c.name === 'description')) db.exec("ALTER TABLE documents ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  const columns = db.prepare('PRAGMA table_info(documents)').all().map(c => c.name);
+  if (!columns.includes('description')) db.exec("ALTER TABLE documents ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  if (!columns.includes('icon')) db.exec("ALTER TABLE documents ADD COLUMN icon TEXT NOT NULL DEFAULT ''");
 }
-const view = row => row && { id: row.id, title: row.title, description: row.description, body: row.body, createdAt: row.created_at, updatedAt: row.updated_at };
+const view = row => row && { id: row.id, title: row.title, description: row.description, icon: row.icon || '', body: row.body, createdAt: row.created_at, updatedAt: row.updated_at };
+const cleanIcon = value => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const first = graphemeSegmenter.segment(trimmed)[Symbol.iterator]().next().value?.segment || '';
+  return first.length <= 16 ? first : '';
+};
 const cleanTitle = value => {
   const title = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
   if (!title) throw new HttpError(400, 'Give the document a name.');
@@ -35,25 +45,32 @@ const outline = body => body.split('\n').filter(line => /^#{1,3}\s/.test(line)).
 export class Documents {
   constructor(db) { this.db = db; initializeDocuments(db); }
   list({ outlines = false } = {}) {
-    return this.db.prepare('SELECT * FROM documents ORDER BY updated_at DESC').all().map(row => ({ id: row.id, title: row.title, description: row.description, createdAt: row.created_at, updatedAt: row.updated_at, characters: row.body.length, ...(outlines ? { headings: outline(row.body) } : {}) }));
+    return this.db.prepare('SELECT * FROM documents ORDER BY updated_at DESC').all().map(row => ({ id: row.id, title: row.title, description: row.description, icon: row.icon || '', createdAt: row.created_at, updatedAt: row.updated_at, characters: row.body.length, ...(outlines ? { headings: outline(row.body) } : {}) }));
   }
   get(id) {
     const doc = view(this.db.prepare('SELECT * FROM documents WHERE id=?').get(String(id)));
     if (!doc) throw new HttpError(404, 'That document isn’t in your library.');
     return doc;
   }
-  create({ title, description, body = '', id = randomUUID() }) {
+  create({ title, description, icon = '', body = '', id = randomUUID() }) {
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO documents(id,title,description,body,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(id, cleanTitle(title), cleanDescription(description), cleanBody(body), now, now);
+    this.db.prepare('INSERT INTO documents(id,title,description,icon,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id, cleanTitle(title), cleanDescription(description), cleanIcon(icon), cleanBody(body), now, now);
     return this.get(id);
   }
   // expectedUpdatedAt stops a save from overwriting a newer version, such as an AI's edit made while the page was open.
-  save(id, { title, description, body, expectedUpdatedAt }) {
+  save(id, { title, description, icon, body, expectedUpdatedAt }) {
     const current = this.get(id);
     if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== current.updatedAt) throw new HttpError(409, 'This document changed somewhere else. Reload it first.');
-    const next = { title: title === undefined ? current.title : cleanTitle(title), description: description === undefined ? current.description : cleanDescription(description), body: body === undefined ? current.body : cleanBody(body) };
-    if (next.title === current.title && next.description === current.description && next.body === current.body) return current;
-    this.db.prepare('UPDATE documents SET title=?,description=?,body=?,updated_at=? WHERE id=?').run(next.title, next.description, next.body, updatedTime(current.updatedAt), current.id);
+    const next = {
+      title: title === undefined ? current.title : cleanTitle(title),
+      description: description === undefined ? current.description : cleanDescription(description),
+      icon: icon === undefined ? current.icon : cleanIcon(icon),
+      body: body === undefined ? current.body : cleanBody(body),
+    };
+    const contentSame = next.title === current.title && next.description === current.description && next.body === current.body;
+    if (contentSame && next.icon === current.icon) return current;
+    const nextUpdatedAt = contentSame ? current.updatedAt : updatedTime(current.updatedAt);
+    this.db.prepare('UPDATE documents SET title=?,description=?,icon=?,body=?,updated_at=? WHERE id=?').run(next.title, next.description, next.icon, next.body, nextUpdatedAt, current.id);
     return this.get(id);
   }
   delete(id) {
