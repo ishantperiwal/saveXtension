@@ -135,3 +135,34 @@ test('Escape respects dialogs and notes, clears pending searches, and keeps a ne
   await expect(page.locator('[data-nav-account="instagram:@other"]')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.save-card')).toHaveCount(1);
 });
+
+test('AI searching pill stays behind the AI progress card when they overlap, while centred search stays above',async({page})=>{
+  await page.setViewportSize({width:1050,height:700});
+  await page.route('**/api/ai-search*',route=>{
+    const url=route.request().url();
+    if(route.request().method()==='POST')return route.fulfill({json:{job:{id:1,state:'running',phase:'reading',done:1,total:3,reading:['reddit.creates'],matches:[]}}});
+    if(url.includes('job='))return route.fulfill({json:{job:{id:1,state:'running',phase:'reading',done:1,total:3,reading:['reddit.creates'],matches:[]}}});
+    return route.fulfill({json:{selected:'deepseek',name:'DeepSeek',model:'V4.1 Flash',vision:false,localReady:false}});
+  });
+  const search=await searchFixture(page,20);
+  await search.fill('Reference');
+  const hint=page.locator('.search-hint');
+  await expect(hint).toBeVisible();
+  await hint.click();
+  await expect(hint).toContainText('DeepSeek · V4.1 Flash · searching');
+  const card=page.locator('.ai-progress-card');
+  await expect(card).toBeVisible();
+  await page.evaluate(()=>scrollTo(0,200));
+  await expect.poll(async()=>(await card.boundingBox()).y).toBeLessThan(90);
+  const [hintBox,cardBox]=await Promise.all([hint.boundingBox(),card.boundingBox()]);
+  const overlapLeft=Math.max(hintBox.x,cardBox.x), overlapRight=Math.min(hintBox.x+hintBox.width,cardBox.x+cardBox.width);
+  const overlapTop=Math.max(hintBox.y,cardBox.y), overlapBottom=Math.min(hintBox.y+hintBox.height,cardBox.y+cardBox.height);
+  expect(overlapRight).toBeGreaterThan(overlapLeft);
+  expect(overlapBottom).toBeGreaterThan(overlapTop);
+  const hit=await page.evaluate(([x,y])=>Boolean(document.elementFromPoint(x,y)?.closest('.ai-results-loader')),[(overlapLeft+overlapRight)/2,(overlapTop+overlapBottom)/2]);
+  expect(hit).toBe(true);
+  await findShortcut(page);
+  await expect(page.locator('.search.is-centred')).toBeVisible();
+  const scrimHit=await page.evaluate(([x,y])=>Boolean(document.elementFromPoint(x,y)?.closest('.search-tools')),[cardBox.x+cardBox.width/2,cardBox.y+cardBox.height/2]);
+  expect(scrimHit).toBe(true);
+});

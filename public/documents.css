@@ -1,15 +1,23 @@
-/* Documents: a dark panel docked to the right edge, set apart from the library. Closed, it sits just off screen and only its notch shows. */
+/* Documents: a dark frosted-glass floating panel on the right edge. Closed, it sits off screen and only its notch shows. */
 .documents-edge {
-  --doc-bg: #1f221e; --doc-ink: #eef1ea; --doc-muted: #a3ab9b; --doc-line: #ffffff17; --doc-hover: #ffffff12; --doc-field: #ffffff0d;
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 8; width: min(320px, calc(100vw - 48px));
-  background: var(--doc-bg); color: var(--doc-ink); border-left: 1px solid var(--doc-line);
-  translate: 100% 0; transition: translate 320ms cubic-bezier(.22,.68,.2,1), box-shadow 320ms ease;
+  --doc-bg: #141714; --doc-glass: linear-gradient(145deg, rgba(14, 17, 14, 0.84), rgba(18, 21, 17, 0.74)); --doc-ink: #f1f4ed; --doc-muted: color-mix(in srgb, #eef1ea 66%, transparent); --doc-line: rgba(255, 255, 255, 0.13); --doc-hover: rgba(255, 255, 255, 0.11); --doc-field: rgba(255, 255, 255, 0.08);
+  position: fixed; top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 8; width: min(320px, calc(100vw - 48px));
+  border: 1px solid var(--doc-line); border-radius: 28px;
+  background: var(--doc-glass); -webkit-backdrop-filter: blur(24px) saturate(1.7); backdrop-filter: blur(24px) saturate(1.7);
+  color: var(--doc-ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+  translate: calc(100% + max(16px, env(safe-area-inset-right))) 0;
+  transition: translate 320ms cubic-bezier(.22,.68,.2,1), box-shadow 320ms ease;
 }
-.documents-edge[data-open="true"] { translate: 0 0; box-shadow: -16px 0 48px #1b201b33; }
-:root[data-theme="dark"] .documents-edge { --doc-bg: #0f110f; --doc-line: #ffffff1f; }
+.documents-edge[data-open="true"] {
+  translate: 0 0;
+  box-shadow: 0 20px 56px rgba(10, 12, 10, 0.34), 0 4px 16px rgba(10, 12, 10, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .documents-edge { --doc-bg: #0c0e0c; --doc-glass: linear-gradient(145deg, rgba(10, 12, 10, 0.88), rgba(14, 17, 14, 0.76)); --doc-line: rgba(255, 255, 255, 0.15); }
+@media (prefers-reduced-transparency: reduce) { .documents-edge { background: var(--doc-bg); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 /* The notch belongs to the panel: a rounded bump in the same colour that eases out of its left edge, so it travels with it. */
 .documents-notch { position: absolute; top: 50%; right: calc(100% - 1px); display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 120px; padding: 0 0 0 9px; translate: 0 -50%; border: 0; background: none; color: var(--doc-muted); cursor: pointer; transition: width 260ms cubic-bezier(.22,.68,.2,1), color 180ms ease; }
-.documents-notch-shape { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--doc-bg); filter: drop-shadow(-4px 0 8px #1b201b2e); }
+.documents-notch-shape { position: absolute; inset: 0; width: 100%; height: 100%; fill: color-mix(in srgb, var(--doc-bg) 86%, transparent); filter: drop-shadow(-4px 0 8px #1b201b2e); }
 .documents-notch .icon { position: relative; width: 18px; height: 18px; }
 /* An invisible margin around the bump, so it's easy to hit without looking bigger. */
 .documents-notch::before { content: ''; position: absolute; inset: -12px 0 -12px -20px; }
@@ -21,7 +29,7 @@
 .documents-edge[data-open="true"] .documents-notch .icon { opacity: 0; }
 .documents-edge[data-open="true"] .documents-notch-shape { filter: none; }
 .documents-notch .icon { transition: opacity 140ms ease; }
-.documents-drawer { display: flex; flex-direction: column; gap: 12px; height: 100%; padding: 20px 14px 14px; }
+.documents-drawer { display: flex; flex-direction: column; gap: 12px; height: 100%; padding: 20px 14px 14px; border-radius: inherit; overflow: hidden; }
 /* Closed, the list is hidden once the panel has slid away, so nothing in it can be reached or found while it's off screen. */
 .documents-edge[data-open="false"] .documents-drawer { visibility: hidden; transition: visibility 0s 320ms; }
 .documents-drawer-head { display: flex; align-items: center; gap: 2px; padding-left: 6px; }
@@ -36,7 +44,8 @@
 .documents-filter { width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--doc-line); border-radius: 12px; background: var(--doc-field); color: var(--doc-ink); font: inherit; }
 .documents-filter::placeholder { color: var(--doc-muted); }
 .documents-edge .documents-filter:focus-visible { outline: 2px solid #ffffff40; outline-offset: 0; background-color: #ffffff17; }
-.documents-list { flex: 1; min-height: 0; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.documents-list { flex: 1; min-height: 0; margin: 0; padding: 0 0 12px; overflow-y: auto; list-style: none; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); scrollbar-width: none; }
+.documents-list::-webkit-scrollbar { display: none; }
 .documents-row { display: flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 12px; }
 .documents-row:hover, .documents-row:focus-within { background: var(--doc-hover); }
 .documents-icon, .documents-copy { position: relative; display: grid; flex: none; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--doc-muted); cursor: pointer; transition: color 140ms ease, background-color 140ms ease; }
@@ -70,7 +79,7 @@
 .document-rename .icon { width: 14px; height: 14px; }
 .document-title { field-sizing: content; min-width: 12ch; max-width: 100%; height: 36px; padding: 0 8px; margin-left: -4px; border: 1px solid var(--selected-border); border-radius: 10px; background: var(--paper); color: var(--ink); font: 600 20px/1.2 var(--sans); outline: none; }
 #document-view .document-title:focus-visible { background-color: var(--paper); }
-.document-status { flex-shrink: 0; margin-left: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.document-status { flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .document-status.error { color: var(--danger); }
 .document-head .secondary { height: 30px; min-height: 0; padding: 0 12px; font-size: 12px; }
 .document-mode-toggle { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
@@ -80,7 +89,8 @@
 .document-body { position: relative; flex: 1; min-height: 0; overflow-y: auto; }
 .document-loading { padding: 24px 28px; color: var(--muted); }
 .document-raw { display: block; width: 100%; height: 100%; padding: 24px 28px; border: 0; resize: none; background: var(--paper); color: var(--ink); font: 13px/1.65 var(--mono); outline: none; }
-.document-foot { padding: 8px 28px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.document-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 28px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.document-foot-hint { min-width: 0; }
 
 /* The editor in the app's own colours and type, in both themes. */
 .document-body .milkdown {
@@ -99,6 +109,7 @@
   background: var(--paper);
 }
 .document-body .milkdown .ProseMirror { padding: 28px 72px 64px; }
+.document-body .milkdown .ProseMirror:focus, .document-body .milkdown .ProseMirror:focus-visible { outline: none; }
 /* Headings closer to the text size, so a document reads like notes rather than a poster. */
 .document-body .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; letter-spacing: -.01em; }
 .document-body .milkdown .ProseMirror h1 { font-size: 1.75em; line-height: 1.25; margin-top: 24px; }
@@ -116,7 +127,7 @@
 .document-body .milkdown .milkdown-image-block .image-wrapper .image-resize-handle { bottom: 8px; width: 64px; height: 6px; border: 1px solid #ffffff8c; border-radius: 999px; background: #1f221ed9; box-shadow: 0 2px 8px #00000040; cursor: ns-resize; }
 .document-body .milkdown .milkdown-image-block .image-wrapper .image-resize-handle::before { content: ''; position: absolute; inset: -10px -24px; }
 .document-body .milkdown .milkdown-image-block:is(:hover, .selected) > .image-wrapper .image-resize-handle { opacity: 1; }
-@media (max-width: 720px) { .document-body .milkdown .ProseMirror { padding: 20px 28px 48px; } .document-head { padding-left: 18px; } }
+@media (max-width: 720px) { .document-body .milkdown .ProseMirror { padding: 20px 28px 48px; } .document-head { padding-left: 18px; } .document-foot { padding-left: 18px; padding-right: 18px; } }
 .document-body .milkdown .ProseMirror pre { margin: 12px 0; padding: 14px 16px; border-radius: 12px; background: var(--surface-soft); color: var(--ink); font: 13px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .document-body .milkdown .ProseMirror pre code { font: inherit; background: none; padding: 0; color: inherit; }
 

@@ -110,3 +110,11 @@ test('word search wants every word in any order, puts the search as typed first,
   // An AI's pick with the words still comes before a phrase match it didn't pick.
   assert.deepEqual(find('figma plugin', new Map([[1, 107]])), [1, 2, 4]);
 });
+
+test('Threads accounts are browsable, and named in filter chips', () => {
+  const options = accountOptions([{ platform: 'threads', accounts: ['@Me'] }]);
+  assert.ok(options.some(option => option.value === 'threads:@me' && option.label === '@Me'));
+  assert.equal(accountOptions([], [], { pinterest: true }).find(option => option.platform === 'threads')?.label, 'Threads');
+  assert.equal(accountOptions([]).some(option => option.platform === 'threads'), false);
+  assert.equal(filterChips({ ...defaultFilters(), accounts: ['threads:@me'] }).find(chip => chip.key === 'account:threads:@me').title, 'Threads @me');
+});

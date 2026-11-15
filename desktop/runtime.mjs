@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
+import { countChromeBookmarks } from './chrome-bookmarks.mjs';
 import { Store } from '../server/store.mjs';
 import { topicCatalog, importTopicCatalog, topicNames } from '../server/topics.mjs';
 import { isPinterestHost, PINTEREST_DOMAINS, PINTEREST_PIN } from '../public/pinterest-host.js';
@@ -129,6 +130,8 @@ export async function prepareHelper(source, destination, origin) {
   if (!manifest.optional_permissions.length) delete manifest.optional_permissions;
   // Sites it now holds outright can't also be optional; Chrome warns about that on load.
   delete manifest.optional_host_permissions;
+  // The app sets the library's address itself, so the options page has nothing to offer here.
+  delete manifest.options_ui;
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   for (const name of ['background.js', 'options.js', 'options.html']) {
     const path = join(destination, name), contents = await readFile(path, 'utf8');
@@ -202,7 +205,7 @@ export async function startDesktopLibrary({ dataDir, helperSource, legacyOrigin 
   for (let offset = 0; offset < 20; offset++) {
     origin = `http://localhost:${initialPort + offset}`;
     // Test runs start from an empty folder each time, so they leave out search by meaning instead of downloading it every launch.
-    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), meaningDir: process.env.SAVEX_DESKTOP_NO_SEARCH_MODEL ? undefined : join(dataDir, 'meaning-search'), origin, localMode: true, nativeTransport, checkPinterestGifs: true, keyVault, aiKeysFile: join(dataDir, 'ai-keys.json') });
+    instance = createApp({ dataPath: join(dataDir, 'savextension.sqlite'), imagesDir: join(dataDir, 'images'), meaningDir: process.env.SAVEX_DESKTOP_NO_SEARCH_MODEL ? undefined : join(dataDir, 'meaning-search'), origin, localMode: true, nativeTransport, checkPinterestGifs: true, keyVault, aiKeysFile: join(dataDir, 'ai-keys.json'), countChromeBookmarks: url => countChromeBookmarks(url) });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(initialPort + offset, '127.0.0.1', resolve); });
       break;

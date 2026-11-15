@@ -5,7 +5,7 @@ For a fast way into the code, see [NEW_CHAT_CONTEXT.md](NEW_CHAT_CONTEXT.md). Fo
 
 ## In one paragraph
 
-saveXtension is a local desktop library of your Instagram saves, X bookmarks, Pinterest pins and Chrome bookmarks, also available to LLMs over MCP. It uses no platform APIs. You sign in inside the app, and hidden windows read your saved lists the way your own browser would, storing a copy on your computer. Everything else (search, topics, notes, MCP) works from that local copy, so it keeps working when a site changes or goes down.
+saveXtension is a local desktop library of your Instagram saves, X bookmarks, Pinterest pins, Threads saves and Chrome bookmarks, also available to LLMs over MCP. It uses no platform APIs. You sign in inside the app, and hidden windows read your saved lists the way your own browser would, storing a copy on your computer. Everything else (search, topics, notes, MCP) works from that local copy, so it keeps working when a site changes or goes down.
 
 ## The API-less approach
 
@@ -30,7 +30,7 @@ Electron main process  (desktop/main.mjs)
 └─ Hidden windows  (desktop/social.mjs)  sandboxed, muted, one session per account
      └─ run extension/extractors.js, collector.js and unsave-dom.js inside the site's page
 
-Optional: the same extension/ code in real Chrome, for handing over a sign-in, or for browser mode.
+Optional: the same extension/ code in real Chrome, for handing over a sign-in, deleting a Chrome bookmark, or for browser mode.
 ```
 
 **Why the scan engine lives in `extension/`:** the code began as a Chrome extension and runs unchanged in both places. The desktop app gives it a fake `chrome.*` API, where "tabs" are hidden windows. A change to `extension/` affects both.
@@ -53,6 +53,8 @@ Optional: the same extension/ code in real Chrome, for handing over a sign-in, o
 
 **Pinterest reads All pins first too,** with the same check, and it replaces reading the ticked boards when nothing changed. Pins outside your ticked boards are stored for the comparison and stay hidden. One addition: only a board read can confirm a pin left a board, so a pin gone from All pins, or one waiting for its second board read, also means reading the boards. A pin moved between boards doesn't change All pins, so that waits for a Deep scan or a board refresh.
 
+**Threads has one saved list per account,** `threads.com/saved`, read like X's bookmarks: no collections, every connected Threads account in turn, and only from the desktop app. Its address doesn't name the account, so the page must show exactly one profile link in its navigation, outside every post, and it must match the account being scanned, or nothing is read (`threadsAccount`). Each post is a `data-pressable-container` box, and its own link is the one around its time. A post it quotes sits inside with its own link and time, so its words and pictures aren't taken as this post's. A link's preview picture can be a card's picture, but doesn't make the post an image. Threads is left out of the timed background checks, as Instagram is, since it's the same company and shares the sign-in. Its order is kept in the same `list-order:*` memory as Instagram's All posts.
+
 Scans run with background throttling off, because hidden pages otherwise stop rendering. A sign-in page or a rate-limit message stops the scan immediately.
 
 ## What starts a scan
@@ -61,8 +63,8 @@ Scans run with background throttling off, because hidden pages otherwise stop re
 |---|---|---|
 | App opens | Last scan you chose (`autoQuickSync`) | Yes |
 | You click Sync or Deep scan | What you chose | Yes |
-| Every 30–35 minutes while open, unless the computer has been idle 5+ minutes | Last scan you chose, without Instagram | Quiet |
-| You return to the app, 10+ minutes since the last check | Last scan you chose, without Instagram | Quiet |
+| Every 30–35 minutes while open, unless the computer has been idle 5+ minutes | Last scan you chose, without Instagram or Threads | Quiet |
+| You return to the app, 10+ minutes since the last check | Last scan you chose, without Instagram or Threads | Quiet |
 | A save is spotted in the panel | That platform, about 1.5 seconds later | Quiet |
 | A Pinterest post closes in the panel | Pinterest | Quiet |
 
@@ -86,13 +88,15 @@ A saved pin only gives a still preview, so a GIF looks like an image. `server/pi
 
 The rule: **a post leaves only after evidence from the site itself.** Evidence means its own page shows "not saved" twice, including after a reload, with the right account (X and Instagram), or its board no longer contains it (Pinterest, which has no single saved state per pin).
 
-| How it's noticed | X | Instagram | Pinterest | Chrome |
-|---|---|---|---|---|
-| Card's Unsave button | Clicks, then verifies | Clicks, then verifies | Sends Pinterest's unsave request, then rereads the board | No button |
-| Unsaved in the panel | Request spotted (confirmed) | Request spotted (names unconfirmed) | Request starts a board read | n/a |
-| Post opened in the panel | Save button read | Save button read (not on `/reel/` pages) | Not read | n/a |
-| Quick scan | Position compared | Position compared, plus collections read to the end | Boards read to the end, twice | Not removed |
-| Deep scan | Up to 25 missing per account | Collections read to the end, up to 25 | Boards read to the end, twice | Not removed |
+| How it's noticed | X | Instagram | Pinterest | Threads | Chrome |
+|---|---|---|---|---|---|
+| Card's Unsave button | Clicks, then verifies | Clicks, then verifies | Sends Pinterest's unsave request, then rereads the board | No button | Extension in Chrome deletes it, then rereads twice |
+| Unsaved in the panel | Request spotted (confirmed) | Request spotted (names unconfirmed) | Request starts a board read | Ignored | n/a |
+| Post opened in the panel | Save button read | Save button read (not on `/reel/` pages) | Not read | Not read | n/a |
+| Quick scan | Position compared | Position compared, plus collections read to the end | Boards read to the end, twice | Not removed | Not removed |
+| Deep scan | Up to 25 missing per account | Collections read to the end, up to 25 | Boards read to the end, twice | Not removed | Not removed |
+
+Threads can't check a post's own saved state yet, so nothing removes a Threads save: it has no Unsave button, the server refuses one, and a post missing from its list is only forgotten from the list's order, never sent to be checked.
 
 - **Showing the site's order:** scans add posts as they read them, newest first, so the time a post was added can't give the site's order. Instead the same `list-order:*` memory places each post (`listOrder` in `server/store.mjs`, `orderLibraryPosts` in `public/source-order.js`). One Instagram account follows All posts, one collection or board follows its own list, and X keeps its own positions. While a scan runs, `listReadSoFar` keeps what it has read in a `list-reading:*` setting, so posts appear in order as they arrive. A finished scan replaces it with the full read, and a stopped scan's read is kept on top of what was remembered. A post in no list yet goes below the placed ones, in the order it was added, until a deep scan reads that far. One Pinterest account follows All pins. Pins are read in the page's own order, which hasn't been compared with what the grid shows on screen.
 - **Position compare** (`missingFromList`): each list remembers its order in a `list-order:*` setting. A remembered post inside the stretch a scan just read, but not seen, becomes a candidate. Up to 5 are checked per quick scan, each gets at most one check a day, and posts the app isn't showing are skipped. On Instagram a quick scan usually reads only All posts, so this comparison happens there.
@@ -102,7 +106,12 @@ The rule: **a post leaves only after evidence from the site itself.** Evidence m
 - **Pinterest safeguards** (`pinterestBoardChanges`): two full reads at least a minute apart, ignored if more than 30% of a board (or more than 2 pins on a small board) goes missing at once.
 - **Mistakes mostly heal themselves:** a wrongly removed post that's still saved returns at the next scan that reads it.
 
-Chrome bookmarks are read-only. Deleted bookmarks stay in the library, and the app never writes to Chrome.
+**Chrome bookmarks** change in Chrome only from the card's **Delete from Chrome** button. Bookmarks deleted in Chrome itself stay in the library.
+- **Who deletes:** the extension in real Chrome, with `chrome.bookmarks` (`deleteBookmark` in `extension/bookmark-delete.js`). The app never edits Chrome's `Bookmarks` file, because Chrome rewrites it while running and it carries a checksum. The app's own worker can't reach Chrome, so the server hands these requests only to the extension (`claimedBookmarkDelete`, `claim(...,'chrome')` in `server/unsave.mjs`), and social unsaves only to the worker. The extension reports `bookmarkDelete` in its heartbeat; older ones, or none, get a message explaining how to connect or update it, and the card opens the extension page instead of the dialog.
+- **Which bookmarks:** a card is one address, merged from every folder and profile, so every bookmark in the extension's profile whose address is exactly the card's (`new URL().href`, as on import) is deleted. One left behind would bring the card back at the next read. If any match was set by an organization, none are deleted.
+- **Other profiles:** the extension sees only its own profile. Before confirming, the desktop app counts the address across every profile's file (`countChromeBookmarks`); a file it can't read stops the delete. If the extension finds none but the files have some, they're in another profile and nothing is deleted. If it deletes fewer than the files held, the card stays, with a message saying so. Without the files (browser mode, or the extension's copy standing in for them), the extension's profile is the whole source.
+- **Evidence:** after deleting, two reads of the tree at least 300 ms apart must not contain the address, and the server checks the extension deleted as many as it found before removing the card. A failure after deleting is `uncertain`, as for the other sites.
+- **Noticing deletions made in Chrome** isn't built. A read is complete only if every profile file was read, and the extension's stand-in copy covers one profile, so a missing bookmark isn't yet evidence. Doing it would need each read to record which profiles it covered.
 
 ## Post panel and note view
 
@@ -208,6 +217,9 @@ The person's own pages beside their saves, for what they want to keep and come b
 ## Other modes and older code
 
 - **Browser mode:** `npm start` serves on port 3210, with the Chrome extension doing the scanning. The panel isn't available, so posts open in new tabs.
+- **Keeping Chrome's copy current:** Download in the Chrome setup steps saves the extension to `Downloads/saveXtension Chrome helper`. At each launch, and on Download, the app also overwrites any folder Chrome has loaded saveXtension from with Load unpacked, wherever it is (`loadedHelperFolders` in `desktop/chrome-bookmarks.mjs` reads each profile's preferences and only counts folders whose manifest names saveXtension). Each copy is built beside the old folder and swapped in, so it holds exactly this version and looks new in Finder; a same-named folder that isn't the helper is only copied into, never removed. The step then shows the version read back from the folder. Chrome still needs its reload button pressed to pick up the new version.
+- **Chrome extension's own UI:** its popup only says whether it can reach the library. Scanning starts in the app. The app's copy of the extension has no options page, since the app sets the library's address itself. Browser mode keeps the options page, and the popup shows Allow access there until the sites and bookmarks are granted.
+- **Chrome helper status:** the app can't reach the extension, only hear from it. While the extension can reach the app it checks in every 2 seconds (each check keeps Chrome from putting it to sleep), so it counts as gone after 45 seconds of silence (a scan can keep it busy that long); on its slower 30-second retry, after 90 seconds. Settings › Chrome extension has Check again (`checkChrome` in `server/sync.mjs`), which waits for one fresh check-in: 6 seconds at the fast pace, 40 at the slow one, then shows Not connected.
 - **Hosted backend:** the password, session and pairing code stays behind `AUTH_REQUIRED=true`. It isn't the supported path.
 - **Live card embeds:** `public/embeds.js`, `server/embeds.mjs` and the `savex-live-previews` flag are dormant. They're kept deliberately for now, and browser tests still rely on the flag.
 - **Updates:** `desktop/updates.mjs` downloads verified installers from GitHub Releases. Builds aren't notarized.
@@ -218,13 +230,15 @@ Ordered from most to least durable. Ratings are judgment, not measurement.
 
 | Dependency | Used for | Where | Durability | If it changes |
 |---|---|---|---|---|
-| Post links: `/status/<id>`, `/p/<code>`, `/pin/<id>` | Identity, finding posts | `domain.mjs`, `extractors.js` | Very high | Scans stop finding posts, and it's reported |
-| Chrome's `Bookmarks` JSON file | Chrome source | `chrome-bookmarks.mjs` | High | Read fails and is reported, with Chrome's own copy as fallback |
-| List URLs: `/i/bookmarks`, `/<handle>/saved/`, `/<handle>/_boards/` | Opening lists | `background.js` | High | Scan fails with an error |
+| Post links: `/status/<id>`, `/p/<code>`, `/pin/<id>`, `/@<author>/post/<code>` | Identity, finding posts | `domain.mjs`, `extractors.js` | Very high | Scans stop finding posts, and it's reported |
+| Chrome's `Bookmarks` JSON file | Chrome source, and counting copies before a delete | `chrome-bookmarks.mjs` | High | Read fails and is reported, with Chrome's own copy as fallback. A delete stops. |
+| `chrome.bookmarks` `getTree` and `remove` | Deleting a bookmark | `bookmark-delete.js` | Very high, a stable extension API | The delete fails and nothing is removed from the library |
+| List URLs: `/i/bookmarks`, `/<handle>/saved/`, `/<handle>/_boards/`, Threads `/saved` | Opening lists | `background.js` | High | Scan fails with an error |
 | X `data-testid`: `tweet`, `tweetText`, `tweetPhoto`, `User-Name` | Reading posts | `extractors.js` | Medium-high | `diagnose` reports a layout change |
 | X `bookmark`, `removeBookmark` buttons | Saved state | `extractors.js` | Medium-high | Post stays |
 | Pinterest `data-test-id`: `pin`, `board-feed` | Reading pins | `extractors.js` | Medium | `diagnose` reports a layout change |
-| Account checks: X profile link, Instagram navigation, Pinterest `__PWS_DATA__` | Right account | `social.mjs` | Medium | Scan refuses to run |
+| Threads `data-pressable-container` post boxes, a time inside the post's link, `span[dir="auto"]` text | Reading Threads posts | `extractors.js` | Medium-low, saved page unconfirmed | `diagnose` reports a layout change |
+| Account checks: X profile link, Instagram navigation, Pinterest `__PWS_DATA__`, Threads navigation profile link (unconfirmed) | Right account | `social.mjs` | Medium | Scan refuses to run |
 | X quoted post block (`div[role="link"]` with its own author) | Video label | `extractors.js` | Medium, unconfirmed | Wrong play icon only |
 | Instagram English labels: Save, Saved, Like, Comment | Saved state | `unsave-dom.js` | Low-medium | Post stays; card button refuses to click |
 | Save and unsave request names | Instant panel reaction | `runtime.mjs` | Low; X and Pinterest saves confirmed, Instagram not | Falls back to the next check |

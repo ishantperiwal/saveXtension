@@ -123,3 +123,69 @@ test('a refused unsave or scan names what is running, in the words the library e
     assert.equal(refused.status,409);assert.equal((await refused.json()).error,BUSY.scan.title);
   }finally{await app.mcp.close();app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
 });
+
+test('Threads saves have no Unsave, and an unsave seen in the panel is never acted on',()=>{
+  const {store,queue}=setup();
+  try{
+    store.importPosts([{url:'https://www.threads.com/@author/post/Ab1',accounts:['@one']}]);
+    const post=store.posts()[0];
+    assert.throws(()=>queue.prepare(post.id),/cannot be unsaved/);
+    assert.equal(queue.expectUnsaved({platform:'threads',account:'@one',externalId:'Ab1'}),null);
+    assert.equal(store.posts().length,1);
+  }finally{store.close();}
+});
+test('a Chrome bookmark is deleted only by the extension in Chrome, and leaves the library only once every copy is gone',()=>{
+  const store=new Store(':memory:'),sync=syncQueue(store),queue=unsaveQueue(store,sync);
+  const bookmark=url=>{store.importPosts([{platform:'chrome',url,bookmarkTitle:'Guide',folders:['Bookmarks bar / Design']}]);return store.posts().find(post=>post.url===url);};
+  const queueDelete=(post,copies)=>queue.confirm(post.id,{nonce:queue.prepare(post.id,copies).nonce,confirmed:true,account:'Chrome'});
+  try{
+    const p=bookmark('https://example.com/guide');
+    // Without the extension, or with one from before it could delete, nothing is queued and the reason says what to do.
+    assert.throws(()=>queue.prepare(p.id),/needs the saveXtension extension in Chrome/);
+    sync.heartbeat({instance:'chrome',bookmarksReady:true});assert.throws(()=>queue.prepare(p.id),/needs updating/);
+    sync.heartbeat({instance:'chrome',bookmarksReady:false,bookmarkDelete:true});assert.throws(()=>queue.prepare(p.id),/Allow bookmarks/);
+    sync.heartbeat({instance:'chrome',bookmarksReady:true,bookmarkDelete:true});
+    const proof=queue.prepare(p.id,1);assert.deepEqual(proof.accounts,['Chrome']);assert.equal(proof.copies,1);assert.deepEqual(proof.folders,['Bookmarks bar / Design']);
+    let job=queueDelete(p,1);
+    // The app's own worker can't reach Chrome, and the extension never takes a social unsave.
+    assert.equal(queue.claim('native',true),null);assert.equal(queue.claim('chrome',true,'chrome').id,job.id);
+    assert.throws(()=>queue.act(job.id,'chrome',{}),/no longer available/);
+    queue.act(job.id,'chrome',{found:1});
+    assert.throws(()=>queue.finish(job.id,'chrome',{status:'succeeded',removed:0,observations:evidence(job)}),/didn’t report/);assert.ok(store.post(p.id));
+    job=queue.finish(job.id,'chrome',{status:'succeeded',removed:1,observations:evidence(job)});
+    assert.equal(job.deleted,1);assert.equal(job.message,'Deleted from Chrome.');assert.equal(store.post(p.id),null);queue.acknowledge(job.id);
+
+    // A copy in another profile would bring it back, so the card stays.
+    const other=bookmark('https://example.com/other');job=queueDelete(other,2);queue.claim('chrome',true,'chrome');queue.act(job.id,'chrome',{found:1});
+    job=queue.finish(job.id,'chrome',{status:'succeeded',removed:1,observations:evidence(job)});
+    assert.equal(job.deleted,0);assert.match(job.message,/another profile/);assert.ok(store.post(other.id));queue.acknowledge(job.id);
+
+    // None in the extension's profile but some in Chrome's files: another profile, so nothing is deleted.
+    job=queueDelete(other,1);queue.claim('chrome',true,'chrome');
+    assert.throws(()=>queue.act(job.id,'chrome',{found:0}),/different Chrome profile/);
+    job=queue.finish(job.id,'chrome',{status:'failed',message:'refused'});assert.equal(job.status,'failed');assert.ok(store.post(other.id));queue.acknowledge(job.id);
+
+    // Already gone everywhere Chrome keeps it: the card goes without deleting anything.
+    job=queueDelete(other,0);queue.claim('chrome',true,'chrome');queue.act(job.id,'chrome',{found:0});
+    job=queue.finish(job.id,'chrome',{status:'succeeded',removed:0,observations:evidence(job)});
+    assert.equal(job.deleted,1);assert.match(job.message,/already gone/);assert.equal(store.post(other.id),null);
+  }finally{store.close();}
+});
+test('in the desktop app a bookmark delete is offered to the Chrome extension, never to the app’s own worker',async()=>{
+  const origin='http://localhost:3248',nativeTransport={token:'native-token',instance:'native'},counted=[];
+  const app=createApp({origin,nativeTransport,countChromeBookmarks:async url=>{counted.push(url);return 1;}});app.server.listen(3248,'127.0.0.1');await once(app.server,'listening');
+  const request=async(path,data,headers={})=>{const r=await fetch(origin+'/api'+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,'Content-Type':'application/json',...headers},body:data===undefined?undefined:JSON.stringify(data)});return{status:r.status,data:await r.json()};};
+  const extension={Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'};
+  try{
+    app.store.importPosts([{platform:'chrome',url:'https://example.com/guide',bookmarkTitle:'Guide',folders:['Other bookmarks']}]);const p=app.store.posts()[0];
+    assert.equal((await request(`/posts/${p.id}/unsave/prepare`,{})).status,409);
+    await request('/extension/jobs',{instance:'chrome',bookmarksReady:true,bookmarkDelete:true},extension);
+    const proof=(await request(`/posts/${p.id}/unsave/prepare`,{})).data;assert.equal(proof.copies,1);assert.deepEqual(counted,['https://example.com/guide']);
+    const job=(await request(`/posts/${p.id}/unsave`,{nonce:proof.nonce,confirmed:true,account:'Chrome'})).data;
+    let heartbeat=(await request('/extension/jobs',{instance:'native',ready:true,claim:true,unsave:true},{'X-Savex-Native':'native-token'})).data;assert.equal(heartbeat.claimedUnsave,null);
+    heartbeat=(await request('/extension/jobs',{instance:'chrome',bookmarksReady:true,bookmarkDelete:true,claim:true},extension)).data;assert.equal(heartbeat.claimedBookmarkDelete.id,job.id);
+    await request(`/extension/unsaves/${job.id}/act`,{instance:'chrome',found:1},extension);
+    assert.equal((await request(`/extension/unsaves/${job.id}/finish`,{instance:'chrome',status:'succeeded',removed:1,observations:evidence(job)},extension)).status,200);
+    assert.equal(app.store.post(p.id),null);
+  }finally{await app.mcp.close();await new Promise(resolve=>app.server.close(resolve));app.store.close();}
+});

@@ -60,3 +60,14 @@ test('passwords, expiring sessions and single-use revocable pairing', () => {
     const expired = store.pairCode(); store.db.prepare('UPDATE pairing SET expires=0').run(); assert.throws(() => store.pair(expired, 'Expired'));
   } finally { store.close(); }
 });
+
+test('Threads links keep their author, share one identity across threads.net and threads.com, and drop profile pictures', () => {
+  assert.deepEqual(canonicalPost('https://www.threads.net/@maker.studio/post/DfCarousel1/media?xmt=AQ'), { platform: 'threads', externalId: 'DfCarousel1', url: 'https://www.threads.com/@maker.studio/post/DfCarousel1' });
+  assert.equal(canonicalPost('https://threads.com/@a_b/post/Ab-1').externalId, 'Ab-1');
+  for (const url of ['https://www.threads.com/@maker.studio', 'https://www.threads.com/saved', 'https://www.threads.com/t/Ab1']) assert.throws(() => canonicalPost(url), url);
+  assert.equal(imageUrl('https://instagram.fixc10-2.fna.fbcdn.net/v/t51.82787-19/1_n.jpg'), '');
+  assert.equal(imageUrl('https://instagram.fixc10-2.fna.fbcdn.net/v/t51.2885-19/1_n.jpg'), '');
+  assert.match(imageUrl('https://instagram.fixc10-2.fna.fbcdn.net/v/t51.82787-15/2_n.jpg'), /82787-15/);
+  const post = cleanPost({ platform: 'threads', url: 'https://www.threads.com/@writer/post/DfQuote3', text: 'Words' });
+  assert.equal(post.platform, 'threads'); assert.equal(post.kind, 'text');
+});

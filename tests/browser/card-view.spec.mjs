@@ -245,3 +245,51 @@ test('empty feed notes are directly editable, stay visible when cleared, and kee
   await page.getByRole('button',{name:'Feed view',exact:true}).click();await settled(page);
   await expect(field).toBeVisible();await expect(field).toHaveAttribute('placeholder','No notes added yet.');
 });
+
+test('short feed cards extend the post container to clear the entire left action rail', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1440, height: 800 });
+  const bookmark = {
+    id: 9901,
+    platform: 'chrome',
+    externalId: 'bm-9901',
+    url: 'https://navbar.gallery/',
+    bookmarkTitle: 'component design gallery for web',
+    title: 'component design gallery for web',
+    text: '',
+    author: 'navbar.gallery',
+    authorName: 'navbar.gallery',
+    media: [],
+    topics: [],
+    collections: [],
+    accounts: [],
+    notes: '',
+    archived: false,
+    savedAt: '2026-11-10T08:00:00Z',
+    addedAt: '2026-11-10T08:00:00Z',
+  };
+  await page.route('**/api/posts?scope=all', route => route.fulfill({ json: { posts: [bookmark], runs: [] } }));
+  await page.goto('/');
+  const card = page.locator('[data-post-id="9901"]');
+  await expect(card).toBeVisible();
+  for (const width of [1440, 950]) {
+    await page.setViewportSize({ width, height: 800 });
+    const metrics = await card.evaluate(el => {
+      const preview = el.querySelector('.card-preview').getBoundingClientRect();
+      const buttons = [...el.querySelectorAll('.card-actions button')].filter(b => b.getBoundingClientRect().height > 0);
+      const first = buttons[0].getBoundingClientRect();
+      const last = buttons[buttons.length - 1].getBoundingClientRect();
+      return {
+        buttonCount: buttons.length,
+        topGap: first.top - preview.top,
+        bottomGap: preview.bottom - last.bottom,
+        previewBottom: preview.bottom,
+        lastBottom: last.bottom,
+      };
+    });
+    expect(metrics.buttonCount).toBe(4);
+    expect(metrics.topGap).toBeCloseTo(12, 0);
+    expect(metrics.bottomGap).toBeGreaterThanOrEqual(metrics.topGap - 0.5);
+    expect(metrics.previewBottom).toBeGreaterThan(metrics.lastBottom);
+  }
+});

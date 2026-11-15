@@ -1,6 +1,7 @@
 import { createWorkTab, closeWorkTab, cleanWorkTabs, adoptConnectionTab } from './work-tabs.js';
 import { performUnsave } from './unsave-worker.js';
 import { bookmarkPosts } from './bookmarks.js';
+import { deleteBookmark } from './bookmark-delete.js';
 
 const DEFAULT_ORIGIN = 'http://localhost:3210';
 const SOCIAL_ORIGINS = ['https://x.com/*', 'https://www.instagram.com/*'];
@@ -494,8 +495,14 @@ async function checkJobs() {
     if (allowed && !(await chrome.scripting.getRegisteredContentScripts({ ids: ['savex-background-layout'] })).length) {
       await chrome.scripting.registerContentScripts([{ id: 'savex-background-layout', matches: SOCIAL_ORIGINS, js: ['background-render.js'], world: 'MAIN', runAt: 'document_start' }]);
     }
-    const response = await request('/jobs', { chromeSession: !desktop && !!chrome.cookies, chromeSessionSites: await chromeSessionSites(), instance: await instanceId(), name: desktop ? 'saveXtension' : navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
+    const response = await request('/jobs', { chromeSession: !desktop && !!chrome.cookies, chromeSessionSites: await chromeSessionSites(), instance: await instanceId(), name: desktop ? 'saveXtension' : navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome', ready: allowed, bookmarksReady: bookmarkAccess, bookmarksSupported: true, version: chrome.runtime.getManifest().version, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true, unsave: true, bookmarkDelete: !desktop, claim: (allowed || bookmarkAccess) && !job && !accountScanPromise && !unsaving, jobId: job?.id });
     reachedLibrary=true;
+    // A Chrome bookmark the person chose to delete in the library. Only this real Chrome can reach it.
+    if (!desktop && response.claimedBookmarkDelete) {
+      unsaving = true;
+      void deleteBookmark(response.claimedBookmarkDelete, { request, instance: await instanceId(), sleep }).finally(() => { unsaving = false; void checkJobs(); });
+      return;
+    }
     if (!desktop && response.desktopSocial) {
       if (job) { await closeOwned(); await chrome.storage.local.remove(['job', 'cancelRequested']); }
       // The desktop app reads Chrome's bookmark file itself, but managed computers can keep it
@@ -584,15 +591,8 @@ async function handle(message, sender) {
     throw new Error('Unsupported collector action.');
   }
   if (!extensionPage) throw new Error('Only the library and extension can manage sync.');
-  if (message.type === 'GET_STATUS') return { ready: await ready(), bookmarksReady: await bookmarksReady(), bookmarksSupported: true, origin: await origin(), syncState: await get('syncState'), job: await get('job'), xAccounts: await get('xAccountCatalog') };
+  if (message.type === 'GET_STATUS') return { ready: await ready(), bookmarksReady: await bookmarksReady(), reachable: await request('/status').then(() => true, () => false) };
   if (message.type === 'CHECK_JOBS') { await checkJobs(); return {}; }
-  if (message.type === 'START_BACKGROUND') {
-    if ((message.targets || ['x']).some(p => p !== 'chrome') && !(await ready())) throw new Error('Enable background access first.');
-    if (message.targets?.includes('chrome') && !(await bookmarksReady())) throw new Error('Allow Chrome bookmarks first.');
-    await request('/queue', { targets: message.targets || ['x'], xAccount: message.xAccount || 'current', mode: message.mode || 'quick' });
-    await checkJobs(); return {};
-  }
-  if (message.type === 'STOP_SYNC') { await request('/stop', {}); await checkJobs(); return {}; }
   if (message.type === 'OPEN_LIBRARY') { await chrome.tabs.create({ url: await origin() }); return {}; }
   throw new Error('Unknown extension action.');
 }

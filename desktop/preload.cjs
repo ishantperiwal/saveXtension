@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('saveXDesktop', Object.freeze({
   chromeBookmarksFound: () => ipcRenderer.invoke('savex-desktop', { action: 'chromeBookmarksFound' }),
   openDownloads: () => ipcRenderer.invoke('savex-desktop', { action: 'openDownloads' }),
   saveHelper: () => ipcRenderer.invoke('savex-desktop', { action: 'saveHelper' }),
+  revealHelper: () => ipcRenderer.invoke('savex-desktop', { action: 'revealHelper' }),
   updateStatus: () => ipcRenderer.invoke('savex-desktop', { action: 'updateStatus' }),
   checkForUpdates: () => ipcRenderer.invoke('savex-desktop', { action: 'checkForUpdates' }),
   viewUpdateRelease: () => ipcRenderer.invoke('savex-desktop', { action: 'viewUpdateRelease' }),

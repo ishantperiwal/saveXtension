@@ -21,6 +21,7 @@ import { syncQueue } from './sync.mjs';
 import { HttpError, text, canonicalPost } from './domain.mjs';
 import { createLibraryMcp } from './mcp.mjs';
 import { noteAi as createNoteAi } from './note-ai.mjs';
+import { aiLine } from './ai-line.mjs';
 import { documentAi as createDocumentAi } from './document-ai.mjs';
 import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
 import { Documents, documentImages, documentFonts } from './documents.mjs';
@@ -29,10 +30,10 @@ const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.json': 'application/json' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, documentImagesDir = imagesDir && resolve(imagesDir, '..', 'document-images'), documentFontsDir = imagesDir && resolve(imagesDir, '..', 'document-fonts'), imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '' } = {}) {
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, documentImagesDir = imagesDir && resolve(imagesDir, '..', 'document-images'), documentFontsDir = imagesDir && resolve(imagesDir, '..', 'document-fonts'), imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '', countChromeBookmarks } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
-  const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync);
+  const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync, { countChromeBookmarks });
   const enqueueSync = (...args) => { if(unsaves.busy())throw new HttpError(409, BUSY.scan.title); if(!args[7])sync.giveWay(); return sync.enqueue(...args); };
   // Discard the generated image cache; previews are served by the platforms.
   store.db.exec('DROP TABLE IF EXISTS media_cache');
@@ -52,8 +53,10 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   const organize = aiOrganize({ search: aiSearch, topics: new TopicLibrary(store), visibleIds: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).map(post => post.id).filter(id => !hidden.has(id)); } });
   const visiblePost = id => { const post = store.post(id); return !!post && !post.archived && !hiddenInstagramSaveIds(store).includes(id); };
   const baseUrl = `http://127.0.0.1:${new URL(appOrigin).port || '80'}`;
-  const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost });
-  const docAi = createDocumentAi({ store, documents, topics: topicLibrary, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost });
+  // Notes and Send to document share one line, so a post is only ever opened by one of them at a time.
+  const aiTurns = aiLine();
+  const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost, line: aiTurns });
+  const docAi = createDocumentAi({ store, documents, topics: topicLibrary, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost, line: aiTurns });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -162,7 +165,8 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (native) sync.nativeHeartbeat(input); else sync.heartbeat(input);
           const canWork = !nativeTransport || native;
           const claimedUnsave = canWork && input.claim && input.ready ? unsaves.claim(text(input.instance,100),input.unsave===true) : null;
-          return json(res, { ...sync.status(), chromeSessionRequest: !!nativeTransport && !native && extensionOrigin(requestOrigin) && input.chromeSession === true ? sync.chromeSessionRequestFor(text(input.instance, 100)) : null, desktopSocial: !!nativeTransport, unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: canWork && input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: !nativeTransport && sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: !native && sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: canWork && !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { native, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
+          const claimedBookmarkDelete = !native && input.claim && input.bookmarksReady ? unsaves.claim(text(input.instance,100),input.bookmarkDelete===true,'chrome') : null;
+          return json(res, { ...sync.status(), claimedBookmarkDelete, chromeSessionRequest: !!nativeTransport && !native && extensionOrigin(requestOrigin) && input.chromeSession === true ? sync.chromeSessionRequestFor(text(input.instance, 100)) : null, desktopSocial: !!nativeTransport, unsave: unsaves.status(), claimedUnsave, scanAccountsRequested: canWork && input.accountSwitching ? sync.takeAccountScan() : false, setupRequested: !nativeTransport && sync.takeSetup(text(input.instance, 100)), bookmarkSetupRequested: !native && sync.takeSetup(text(input.instance, 100), 'chrome'), claimed: canWork && !unsaves.busy() && input.claim && (input.ready || input.bookmarksReady) ? sync.claim(text(input.instance, 100), input.accountSwitching === true, { native, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, socialReady: input.ready === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true }) : null });
         }
         if (localMode && nativeTransport && path === '/api/extension/chrome-session' && req.method === 'POST') {
           if (req.headers['x-savex-native'] || !extensionOrigin(requestOrigin)) throw new HttpError(403, 'Only the Chrome helper sends a sign-in here.');
@@ -183,7 +187,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         }
         if (localMode && path === '/api/extension/stop' && req.method === 'POST') { return json(res, { job: sync.cancel() }); }
         const unsavePath = path.match(/^\/api\/extension\/unsaves\/([a-f0-9]+)\/(act|finish)$/);
-        if(localMode && unsavePath && req.method==='POST') {const input=await body(req);return json(res,unsavePath[2]==='act'?unsaves.act(unsavePath[1],text(input.instance,100)):unsaves.finish(unsavePath[1],text(input.instance,100),input));}
+        if(localMode && unsavePath && req.method==='POST') {const input=await body(req);return json(res,unsavePath[2]==='act'?unsaves.act(unsavePath[1],text(input.instance,100),input):unsaves.finish(unsavePath[1],text(input.instance,100),input));}
         const jobPath = path.match(/^\/api\/extension\/jobs\/([a-f0-9]+)$/);
         if (localMode && jobPath && req.method === 'POST') { const input = await body(req); return json(res, { job: sync.update(jobPath[1], input.instance, input) }); }
         if (localMode && path === '/api/extension/details' && req.method === 'GET') {
@@ -276,7 +280,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         const unsaveAck=path.match(/^\/api\/unsave\/([a-f0-9]+)\/ack$/);
         if(localMode && unsaveAck && req.method==='POST'){await body(req);return json(res,unsaves.acknowledge(unsaveAck[1]));}
         const unsavePost = path.match(/^\/api\/posts\/(\d+)\/unsave(?:\/(prepare))?$/);
-        if(localMode && unsavePost && req.method==='POST') {const input=await body(req);return json(res,unsavePost[2]?unsaves.prepare(Number(unsavePost[1])):unsaves.confirm(Number(unsavePost[1]),input));}
+        if(localMode && unsavePost && req.method==='POST') {const input=await body(req);return json(res,unsavePost[2]?unsaves.prepare(Number(unsavePost[1]),await unsaves.chromeCopies(Number(unsavePost[1]))):unsaves.confirm(Number(unsavePost[1]),input));}
         if (localMode && path === '/api/ai-search') {
           if (req.method === 'GET') { const id = Number(new URL(req.url, appOrigin).searchParams.get('job')); return json(res, id ? { job: aiSearch.job(id) } : aiSearch.summary()); }
           if (req.method === 'DELETE') { aiSearch.cancel(); return json(res, {}); }
@@ -306,7 +310,6 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/note-ai' && req.method === 'POST') {
           const input = await body(req);
           if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
-          if (docAi.current()?.state === 'running') throw new HttpError(409, 'A document is still being updated. Wait for it, or cancel it.');
           // Only a model on the list, and the default when none is chosen.
           const models = await aiSearch.noteModels(), model = input.model ? models.find(item => item.id === input.model) : null;
           if (input.model && !model) throw new HttpError(400, 'That model isn’t available.');
@@ -318,7 +321,6 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           const input = await body(req);
           if (!Number.isInteger(input.post)) throw new HttpError(400, 'Invalid post.');
           if (typeof input.documentId !== 'string' || !input.documentId.trim()) throw new HttpError(400, 'Choose a document.');
-          if (noteAi.current()?.state === 'running') throw new HttpError(409, 'A note is still being filled. Wait for it, or cancel it.');
           const models = await aiSearch.noteModels(), model = input.model ? models.find(item => item.id === input.model) : null;
           if (input.model && !model) throw new HttpError(400, 'That model isn’t available.');
           return json(res, { job: docAi.start(input.post, input.documentId.trim(), input.request, model) });
@@ -385,6 +387,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (localMode && path === '/api/sync/setup' && req.method === 'POST') return json(res, sync.requestSetup((await body(req)).kind));
         if (localMode && path === '/api/sync/accounts' && req.method === 'POST') return json(res, sync.requestAccountScan());
         if (localMode && path === '/api/sync' && req.method === 'POST') { const input = await body(req); return json(res, { job: enqueueSync(input.targets, input.xAccount, input.mode, input.instagramAccount, input.instagramCollectionId, input.pinterestAccount, input.pinterestCollectionId, input.quiet === true) }); }
+        if (localMode && path === '/api/sync/chrome-check' && req.method === 'POST') return json(res, { chromeBrowser: sync.checkChrome() });
         if (localMode && path === '/api/sync/stop' && req.method === 'POST') { return json(res, { job: sync.cancel() }); }
         if (path === '/api/instagram-save-list' && req.method === 'POST') return json(res, { instagramSaveLists: setInstagramSaveList(store, await body(req)) });
         if (path === '/api/posts' && req.method === 'GET') {

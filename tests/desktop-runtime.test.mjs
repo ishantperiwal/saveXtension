@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { Store } from '../server/store.mjs';
 import { createApp } from '../server/app.mjs';
-import { expandShortLinks, pageLinks, panelAccount, postExternalId, panelRequestKind, panelRequestPost, instagramShortcode, startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink, instagramPost, pinterestPost, xPost } from '../desktop/runtime.mjs';
+import { expandShortLinks, pageLinks, panelAccount, postExternalId, panelRequestKind, panelRequestPost, instagramShortcode, startDesktopLibrary, readDatabaseSnapshot, importSnapshot, isLibraryFrame, isWebLink, instagramPost, pinterestPost, threadsPost, xPost } from '../desktop/runtime.mjs';
 import { windowsBrowsers } from '../desktop/browser.mjs';
 
 test('desktop navigation and browser candidates do not expose arbitrary protocols or credentials', () => {
@@ -41,6 +41,17 @@ test('the post panel tells a site\'s save and unsave requests from everything el
   assert.equal(kind('pinterest', 'https://www.pinterest.com/resource/RepinResource/delete/'), null);
   assert.equal(kind('pinterest', 'https://www.pinterest.com/resource/PinResource/delete/'), 'unsave');
   assert.equal(kind('pinterest', 'https://www.pinterest.com/resource/UserSessionResource/create/'), null);
+  // Threads only ever reports a save, which starts a scan. An unsave is never acted on, since nothing can check it yet.
+  assert.equal(kind('threads', 'https://www.threads.com/graphql/query', 'useBarcelonaSavePostMutation'), 'save');
+  assert.equal(kind('threads', 'https://www.threads.com/graphql/query', 'useBarcelonaUnsavePostMutation'), null);
+  assert.equal(kind('threads', 'https://www.threads.com/graphql/query', 'useBarcelonaLikeMutation'), null);
+  assert.equal(kind('threads', 'https://www.threads.com/api/v1/web/save/123/unsave/'), null);
+});
+test('Threads post links open in the panel at their canonical page, and nothing else does', () => {
+  assert.equal(threadsPost('https://www.threads.net/@maker.studio/post/DfCarousel1/media?xmt=1'), 'https://www.threads.com/@maker.studio/post/DfCarousel1');
+  assert.equal(threadsPost('https://threads.com/@a_b/post/Ab-1'), 'https://www.threads.com/@a_b/post/Ab-1');
+  for (const url of ['https://www.threads.com/@maker.studio', 'https://www.threads.com/saved', 'http://www.threads.com/@a/post/B', 'https://threads.com.evil.com/@a/post/B', 'https://www.threads.com:444/@a/post/B']) assert.equal(threadsPost(url), '', url);
+  assert.equal(postExternalId('threads', 'https://www.threads.com/@a/post/Ab_1'), 'Ab_1');
 });
 
 test('a post opens as the account that saved it, and only then is its Save button worth reading', () => {

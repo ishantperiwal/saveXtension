@@ -43,9 +43,10 @@ test('Accounts and Collections browse the same library with cross-source counts 
   await all.click(); await expect(page.locator('.collection-folders')).toBeVisible(); expect(await ids(page)).toEqual([]);
   await expect(all).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('tab', { name: 'Topics', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('button', { name: 'Refresh all sources', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Refresh all sources', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.locator('[data-filter="all"]').click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Quick scan and refresh', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: 'Accounts', exact: true }).click();
   await page.locator('.archive-nav').click(); expect(await ids(page)).toEqual([5]);
   await page.getByRole('tab', { name: 'Topics', exact: true }).click();

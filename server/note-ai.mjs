@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpError } from './domain.mjs';
 import { readNote, runNoteTool, signedOutMessage } from './ai-search.mjs';
+import { aiLine } from './ai-line.mjs';
 
 const REQUEST_LIMIT = 2000, NOTE_LIMIT = 10000;
 // What the AI adds keeps only lines the note doesn't already have, and says nothing twice itself.
@@ -25,11 +26,11 @@ export function withoutRepeats(before, note, postText = '') {
 // Someone asks for something on one post's note, and the AI inspects that post through tools tied to it.
 // One runs at a time, so the site only ever sees one visit. A note asked for meanwhile waits its turn and starts by itself
 // (user's decision): each one was still asked for on its own post. The AI only returns text: this adds it below the note, or replaces the note if the person asked for a rewrite. Undo in the app puts it back.
-export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTool }) {
+export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTool, line = aiLine() }) {
   let job = null, lastId = 0, drained = null;
   // Every post's latest job, running, waiting or finished, so the app can follow them all. Oldest first.
   const jobs = new Map();
-  const view = current => current && { id: current.id, post: current.post, request: current.request, state: current.state, position: current.state === 'waiting' ? [...jobs.values()].filter(item => item.state === 'waiting').indexOf(current) + 1 : 0, step: current.step, error: current.error, notes: current.notes, before: current.before, updatedAt: current.updatedAt, model: current.model };
+  const view = current => current && { id: current.id, post: current.post, request: current.request, state: current.state, waitingFor: current.waitingFor || '', position: current.state === 'waiting' ? [...jobs.values()].filter(item => item.state === 'waiting').indexOf(current) + 1 : 0, step: current.step, error: current.error, notes: current.notes, before: current.before, updatedAt: current.updatedAt, model: current.model };
   async function work(current, chosen) {
     const url = `${baseUrl}/mcp/note/${current.token}`;
     try {
@@ -69,7 +70,14 @@ export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTo
   function drain() {
     if (drained) return drained;
     drained = (async () => {
-      for (let next; (next = [...jobs.values()].find(item => item.state === 'waiting'));) await begin(next);
+      // Each note also waits its turn in the line it shares with Send to document.
+      for (let next; (next = [...jobs.values()].find(item => item.state === 'waiting'));) {
+        next.waitingFor = line.holder() || '';
+        const release = line.now('note') || await line.take('note');
+        next.waitingFor = '';
+        if (next.state !== 'waiting') { release(); continue; }
+        try { await begin(next); } finally { release(); }
+      }
     })().finally(() => { drained = null; });
     return drained;
   }

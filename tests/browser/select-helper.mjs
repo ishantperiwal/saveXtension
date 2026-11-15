@@ -2,14 +2,14 @@
 // not a hidden settings dialog or a synthetic production click target.
 const scanScopes = new WeakMap();
 export async function openSyncOptions(page) {
-  if (await page.locator('#modal[data-all-sources-scan]').isVisible()) return;
-  if (await page.locator('#modal').isVisible()) await page.getByRole('button',{name:'Close dialog',exact:true}).click();
-  // The all-sources refresh sits on the All saves row while it is selected.
-  if (!(await page.getByRole('button',{name:'Refresh all sources',exact:true}).isVisible())) await page.locator('[data-filter="all"]').click();
-  await page.getByRole('button',{name:'Refresh all sources',exact:true}).click();
+  if (await page.getByRole('menu', { name: 'Account options', exact: true }).isVisible()) return;
+  // A dialog still playing its closing animation is already on its way out.
+  if (await page.locator('#modal:not(.is-closing)').isVisible()) await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  await page.locator('[data-filter="all"]').click({ button: 'right' });
 }
 export async function closeSyncOptions(page) {
-  if (await page.locator('#modal').isVisible()) await page.locator('#modal').getByRole('button',{name:'Close dialog',exact:true}).click();
+  if (await page.locator('#modal:not(.is-closing)').isVisible()) await page.locator('#modal').getByRole('button',{name:'Close dialog',exact:true}).click();
+  if (await page.getByRole('menu').isVisible()) await page.keyboard.press('Escape');
 }
 export async function chooseSelect(page,label,value) {
   if (label==='Sync source'||label==='X accounts') {
@@ -33,8 +33,7 @@ export async function startScan(page,mode='quick') {
   // after the visible controls have left their busy state.
   await page.waitForFunction(()=>![...document.querySelectorAll('.sidebar-account-refresh')].some(button=>button.disabled),null,{timeout:10000});
   const scope=scanScopes.get(page)||{platform:'x',account:null};
-  if(scope.platform==='all') {await openSyncOptions(page);await page.getByRole('button',{name:mode==='deep'?'Deep scan':'Quick scan',exact:true}).click();return;}
-  const row=scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="${scope.platform}:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
+  const row=scope.platform==='all'?page.locator('[data-filter="all"]'):scope.platform==='chrome'?page.locator('[data-filter="chrome"]'):page.locator(scope.account?.startsWith('@')?`[data-nav-account="${scope.platform}:${scope.account.toLowerCase()}"]`:`[data-nav-account^="${scope.platform}:"]`).first();
   // The menu is drawn once, greyed out if the app still thinks the last scan is running, so reopen it until the item is live.
   const item=page.getByRole('menuitem',{name:mode==='deep'?'Deep scan and refresh':'Quick scan and refresh',exact:true});
   for(const end=Date.now()+15000;;){

@@ -5,9 +5,9 @@ const compare = (a,b) => time(b.observedAt) - time(a.observedAt) || (b.runOrder 
 // Looking at one account or one collection shows its list exactly as the site does, without date headings.
 export function showsSiteList(filters = {}) {
   const selected = filters.accounts || [];
-  return !!filters.collection || (selected.length === 1 && /^(x|instagram|pinterest):@[\w.]+$/i.test(selected[0]));
+  return !!filters.collection || (selected.length === 1 && /^(x|instagram|pinterest|threads):@[\w.]+$/i.test(selected[0]));
 }
-const ORDERED = ['x', 'instagram', 'pinterest'];
+const ORDERED = ['x', 'instagram', 'pinterest', 'threads'];
 // There is no common order across accounts/platforms. Keep their existing
 // slots within each date group and order each account's subsequence.
 export function orderLibraryPosts(posts, filters = {}, now = Date.now()) {
@@ -17,7 +17,8 @@ export function orderLibraryPosts(posts, filters = {}, now = Date.now()) {
     if (!ORDERED.includes(post.platform)) continue;
     const selected = (filters.accounts || []).filter(value => value.startsWith(`${post.platform}:`)).map(value => value.slice(post.platform.length+1).toLowerCase());
     const matches = account => !selected.length || selected.includes('*') || selected.includes(account.toLowerCase());
-    // X has one list per account. An Instagram post has a place in All posts and in each collection, and a pin a place on each board.
+    // X has one list per account, and so does Threads, kept in the same list memory as Instagram's All posts. An Instagram post
+    // has a place in All posts and in each collection, and a pin a place on each board.
     const lists = (post.sourceOrder || []).filter(entry => matches(entry.account));
     const entries = post.platform === 'x' ? lists : filters.collection ? lists.filter(entry => String(entry.collection) === String(filters.collection)) : post.platform === 'instagram' || lists.some(entry => entry.collection === null) ? lists.filter(entry => entry.collection === null) : lists;
     entries.sort(compare);

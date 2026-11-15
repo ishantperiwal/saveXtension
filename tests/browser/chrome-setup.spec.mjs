@@ -6,7 +6,7 @@ test('the Chrome page guides loading the helper when Chromeâ€™s bookmarks arenâ€
     const known = {
       chromeBookmarksFound: async () => false, helperInfo: async () => ({ version: '1.0.0', path: '/helper' }),
       saveHelper: async () => { window.calls.push('save'); return { path: '/Users/me/Downloads/saveXtension Chrome helper' }; },
-      openExtensions: async () => { window.calls.push('open'); return true; }, openDownloads: async () => { window.calls.push('downloads'); return true; }, copyText: async text => { window.calls.push(`copy:${text}`); return true; },
+      openExtensions: async () => { window.calls.push('open'); return true; }, revealHelper: async () => { window.calls.push('reveal'); return true; }, copyText: async text => { window.calls.push(`copy:${text}`); return true; },
       wakeSocial: async () => { window.calls.push('wake'); return true; }
     };
     window.saveXDesktop = new Proxy(known, { get: (target, key) => target[key] || (async () => null) });
@@ -34,8 +34,8 @@ test('the Chrome page guides loading the helper when Chromeâ€™s bookmarks arenâ€
   await expect(setup.locator('.chrome-setup-steps > li').first()).toContainText('Downloads â€º saveXtension Chrome helper');
   await expect(setup.locator('.chrome-setup-steps > li').first()).toHaveClass(/is-done/);
   await setup.getByRole('button', { name: 'Open in Chrome' }).click();
-  await setup.getByRole('button', { name: 'Open Downloads folder' }).click();
-  await expect.poll(() => page.evaluate(() => window.calls)).toEqual(['save', 'open', 'downloads']);
+  await setup.getByRole('button', { name: 'Show in Finder' }).click();
+  await expect.poll(() => page.evaluate(() => window.calls)).toEqual(['save', 'open', 'reveal']);
   // Chrome loads the extension: the setup page closes by itself and the import takes over.
   status.chromeBrowser = { online: true, bookmarksReady: true };
   await expect(setup).not.toBeVisible({ timeout: 5000 });

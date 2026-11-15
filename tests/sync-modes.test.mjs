@@ -116,3 +116,12 @@ test('missing posts stay saved unless a manual deep scan supplies two matching e
     assert.equal(app.store.posts().some(p => p.externalId === '3'), true);
   } finally { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.store.close(); }
 });
+
+test('Threads syncs from the desktop app only', () => {
+  const store = new Store(':memory:');
+  try {
+    assert.throws(() => syncQueue(store).enqueue(['threads']), /desktop app/);
+    const job = syncQueue(store, { native: true }).enqueue(['threads', 'x']);
+    assert.deepEqual(job.targets, ['threads', 'x']);
+  } finally { store.close(); }
+});

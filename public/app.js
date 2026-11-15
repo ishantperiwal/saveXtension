@@ -15,7 +15,7 @@ import { syncAccountOptions, legacySyncSelection, syncSelectionRequest } from '.
 import { sidebarAccounts } from './sidebar-accounts.js';
 import { embedTarget } from './embed-target.js';
 import { mountEmbeds, disposeEmbeds, configureEmbeds, retryEmbed } from './embeds.js';
-import { layoutCards, disposeCardLayout, setCardView } from './masonry.js';
+import { layoutCards, disposeCardLayout, setCardView, pauseReadingHold } from './masonry.js';
 import { PRELOAD_SCREENS } from './preview-policy.js';
 import { mountWebsitePreviews } from './website-previews.js';
 import { createNoteAutosave } from './notes.js';
@@ -29,6 +29,7 @@ import { mountMcpSettings } from './mcp-settings.js';
 import { topicTree, topicScope, canNest, enableTopicDrag } from './topic-tree.js';
 import { isPinterestHost, PINTEREST_PIN } from './pinterest-host.js';
 import { mountDocuments } from './documents.js';
+import { createAiActivity } from './ai-activity.js';
 const isPinterestPin = value => { try { const url = new URL(value); return isPinterestHost(url.hostname) && PINTEREST_PIN.test(url.pathname); } catch { return false; } };
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $('#app'), modal = $('#modal'), toastHome = $('#toast').parentElement;
@@ -81,7 +82,7 @@ const paths = {
 };
 const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.bookmark}</svg>`;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const platformName = p => p === 'x' ? 'X' : p === 'chrome' ? 'Chrome bookmarks' : p === 'pinterest' ? 'Pinterest' : 'Instagram';
+const platformName = p => p === 'x' ? 'X' : p === 'chrome' ? 'Chrome bookmarks' : p === 'pinterest' ? 'Pinterest' : p === 'threads' ? 'Threads' : 'Instagram';
 const macKeyboard = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 const searchKeys = macKeyboard ? '⌘ F' : 'Ctrl F';
 let sourceMarkId = 0;
@@ -90,6 +91,8 @@ function sourceIcon(source) {
   const svg = content => `<svg class="source-icon source-icon-${source}" viewBox="0 0 24 24" aria-hidden="true">${content}</svg>`;
   if (source === 'instagram') return svg(`<defs><linearGradient id="${mark}" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#fbb04b"/><stop offset=".45" stop-color="#ed386b"/><stop offset="1" stop-color="#9b42ba"/></linearGradient></defs><rect x="1" y="1" width="22" height="22" rx="6" fill="url(#${mark})"/><rect x="5.5" y="5.5" width="13" height="13" rx="4" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="16.4" cy="7.7" r="1" fill="#fff"/>`);
   if (source === 'pinterest') return svg('<path fill="#e60023" d="M12.017 0C5.396 0 .029 5.367.029 11.987c0 5.079 3.158 9.417 7.618 11.162-.105-.949-.199-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.354-.629-2.758-1.379l-.749 2.848c-.269 1.045-1.004 2.352-1.498 3.146 1.123.345 2.306.535 3.55.535 6.607 0 11.985-5.365 11.985-11.987C23.97 5.39 18.592.026 11.985.026L12.017 0z"/>');
+  // An @ drawn in one stroke, in the ink colour like X's mark.
+  if (source === 'threads') return svg('<path fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" d="M15.6 12.4c0 2.6-1.3 4.1-3.3 4.1-1.8 0-3-1.4-3-3.4 0-2.1 1.3-3.6 3.2-3.6 1.5 0 2.6.8 3.1 2.1M15.6 8.6v4.6c0 1.7.9 2.7 2.2 2.7 1.8 0 2.9-1.8 2.9-4.3A8.7 8.7 0 1 0 12 20.4c1.9 0 3.4-.4 4.8-1.2"/>');
   if (source === 'x') return svg('<path fill="currentColor" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.64 7.584H.47l8.6-9.835L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/>');
   if (source === 'chrome') return svg('<path fill="#ea4335" d="M12 1a11 11 0 0 1 9.526 5.5H12a5.5 5.5 0 0 0-4.763 8.25L2.474 6.5A11 11 0 0 1 12 1Z"/><path fill="#fbbc05" d="M21.526 6.5A11 11 0 0 1 12 23l4.763-8.25A5.5 5.5 0 0 0 12 6.5Z"/><path fill="#34a853" d="M12 23A11 11 0 0 1 2.474 6.5l4.763 8.25a5.5 5.5 0 0 0 9.526 0Z"/><circle cx="12" cy="12" r="4.6" fill="#4285f4" stroke="#fff" stroke-width=".9"/>');
   return icon('grid');
@@ -101,6 +104,14 @@ const styleSelects = (root = document) => enhanceSelects(root);
 const relative = date => {
   const days = Math.floor((Date.now() - Date.parse(date)) / 86400000);
   return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 7 ? `${days} days ago` : new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+// When a post entered saveXtension, said shortly beside its name: today, yesterday, days ago, then the date.
+const addedWhen = date => {
+  const then = new Date(date), days = Math.floor((Date.now() - +then) / 86400000);
+  if (days <= 0) return 'Added today';
+  if (days === 1) return 'Added yesterday';
+  if (days < 7) return `Added ${days} days ago`;
+  return `Added ${then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: then.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })}`;
 };
 const collapsedInstagramAccounts = new Set();
 // Unsave replaced archiving in everyday use. The archive view and its controls
@@ -115,7 +126,7 @@ const collapsedTopics = new Set();
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-topics')); if (Array.isArray(saved)) for (const id of saved) if (typeof id === 'string') collapsedTopics.add(id); } catch { /* Start with subfolders expanded. */ }
 try { const saved = JSON.parse(localStorage.getItem('savex-collapsed-instagram')); if (Array.isArray(saved)) for (const account of saved) if (typeof account === 'string') collapsedInstagramAccounts.add(account); } catch { /* Start with collections expanded. */ }
 let storedSyncAccounts = null;
-try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|pinterest:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
+try { const saved = JSON.parse(localStorage.getItem('savex-sync-accounts')); if (Array.isArray(saved) && saved.every(value => /^(x:(current|@[a-z0-9_]{1,30})|instagram:current|pinterest:current|threads:current|chrome:\*)$/.test(value))) storedSyncAccounts = [...new Set(saved)]; } catch { /* Migrate previous source choices. */ }
 const state = { cardView: localStorage.getItem('savex-card-view') === 'grid' ? 'grid' : 'feed', topicsView: localStorage.getItem('savex-topics-view') === 'cards' ? 'cards' : 'folders', sidebarView: localStorage.getItem('savex-sidebar-view') === 'collections' ? 'collections' : 'accounts', syncAccounts: storedSyncAccounts, instagramCollections: [], instagramSaveLists: {}, topicCatalog: [], posts: [], runs: [], filters: defaultFilters(), query: '', archive: false, demo: false, busy: false, name: '', localMode: true, sync: null, bridge: null, syncChecking: false, pendingTargets: null, pendingSyncRequest: null, checkingSyncRequest: null, pendingMode: 'quick', source: localStorage.getItem('savex-source') || 'x', xAccount: localStorage.getItem('savex-x-account') || 'current' };
 let toastTimer, searchTimer, updatePoll, collectionVersion = 0, searchReturnView = null;
 let syncToastTimer, syncToastKey = '', previousSyncJob = null, completedToastJob = null;
@@ -213,19 +224,22 @@ function closeModal() {
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { modal.close(); return; }
   modal.dataset.closing = 'true';
   modal.classList.add('is-closing');
+  // Whichever comes first, the animation's end or the timer, finishes the close and cancels the other, so a
+  // dialog opened straight after isn't closed by this one's leftover listener.
   const finish = () => {
+    cancelModalClose();
     delete modal.dataset.closing;
     modal.classList.remove('is-closing');
     if (modal.open) modal.close();
   };
+  const onEnd = event => { if (event.target === modal) finish(); };
   const timer = setTimeout(finish, 200);
-  modal.addEventListener('animationend', event => {
-    if (event.target !== modal) return;
-    clearTimeout(timer);
-    finish();
-  }, { once: true });
+  modal.addEventListener('animationend', onEnd);
+  cancelModalClose = () => { clearTimeout(timer); modal.removeEventListener('animationend', onEnd); cancelModalClose = () => {}; };
 }
+let cancelModalClose = () => {};
 function showModal(content, wide = false) {
+  cancelModalClose();
   delete modal.dataset.closing;
   modal.classList.remove('is-closing');
   restoreModalToast();
@@ -233,8 +247,8 @@ function showModal(content, wide = false) {
   closeSelect(); closeAccountMenu(); closeCollectionPicker();
   flushActiveNote();
   disposeEmbeds(modal);
-  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; delete modal.dataset.sendDocument;
-  document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+  state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.sendDocument;
+  document.querySelectorAll('[data-action="sync-options"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   modal.innerHTML = `<button class="icon-button modal-close" aria-label="Close dialog">${icon('close')}</button>${content}`;
   modal.className = wide ? 'wide' : ''; if (!modal.open) modal.showModal();
   $('.modal-close', modal).onclick = () => closeModal();
@@ -243,9 +257,9 @@ function showModal(content, wide = false) {
 glideSize(modal, { enabled: () => modal.open && !modal.dataset.stacking && !modal.dataset.settling && !modal.dataset.closing });
 modal.addEventListener('cancel', e => { if (modal.querySelector('.organize-dialog')) return; e.preventDefault(); closeModal(); });
 modal.addEventListener('click', e => { if (e.target === modal) { const b = modal.getBoundingClientRect(); if (e.clientX < b.left || e.clientX > b.right || e.clientY < b.top || e.clientY > b.bottom) closeModal(); } });
-modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"],[data-action="scan-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.allSourcesScan; delete modal.dataset.sendDocument; });
+modal.addEventListener('close', () => { restoreModalToast(); closeSelect(); $('#open-filters')?.setAttribute('aria-expanded', 'false'); document.querySelectorAll('[data-action="sync-options"]').forEach(button => button.setAttribute('aria-expanded', 'false')); flushActiveNote(); disposeEmbeds(modal); state.pendingTargets = null; state.pendingSyncRequest = null; delete modal.dataset.syncSetup; delete modal.dataset.postId; delete modal.dataset.syncOptions; delete modal.dataset.sendDocument; });
 
-modal.addEventListener('close', () => clearInterval(updatePoll));
+modal.addEventListener('close', () => { clearInterval(updatePoll); aiActivity.flushAnnouncements(); });
 
 // The desktop app downloads and verifies new versions by itself; once one is ready,
 // a round button beside the name offers to install it.
@@ -289,7 +303,7 @@ async function boot() {
     if (!session.authenticated) return authScreen(session.setupRequired);
     if (!(await installMiniLM())) return;
     void loadAiSearch();
-    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); documentUi = mountDocuments({ icon, esc, toast }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
+    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); aiActivity.render(); documentUi = mountDocuments({ icon, esc, toast, onActivity: syncExternalActivity, onDialogClose: () => aiActivity.flushAnnouncements() }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
 }
 function authScreen(setup) {
@@ -349,12 +363,19 @@ async function loadAiSearch() {
     if (!noteAiJobs.size) {
       const { jobs = [] } = await api('/note-ai');
       for (const job of jobs) {
-        if (noteAiBusyState(job)) { noteAiJobs.set(job.post, job); paintNoteAi(job.post); }
-        else if (job.state === 'done' && !noteAiUndo.has(job.post)) { const post = allPosts().find(item => item.id === job.post), card = document.querySelector(`.save-card[data-post-id="${job.post}"]`); if (post && notes.value(post) === job.notes) { noteAiUndo.set(job.post, { before: job.before, after: job.notes }); if (card) showNoteAiUndo(card, post); } }
+        if (noteAiBusyState(job)) { noteAiJobs.set(job.post, job); paintNoteAi(job.post); syncNoteAiActivity(job); }
+        else if (job.state === 'done' || job.state === 'failed') {
+          if (job.state === 'done' && !noteAiUndo.has(job.post)) { const post = allPosts().find(item => item.id === job.post), card = document.querySelector(`.save-card[data-post-id="${job.post}"]`); if (post && notes.value(post) === job.notes) { noteAiUndo.set(job.post, { before: job.before, after: job.notes, jobId: job.id }); if (card) showNoteAiUndo(card, post); } }
+          syncNoteAiActivity(job);
+        }
       }
       if (noteAiJobs.size) void followNoteAi();
     }
-    if (!docAiJob) { const { job } = await api('/document-ai'); if (job?.state === 'running') { docAiJob = job; paintDocAiButtons(); void followDocAi(); } }
+    if (!docAiJob) {
+      const { job } = await api('/document-ai');
+      if (job?.state === 'running') { docAiJob = job; paintDocAiButtons(); syncDocAiActivity(job); void followDocAi(); }
+      else if (job && ['done', 'failed'].includes(job.state)) syncDocAiActivity(job);
+    }
     noteAiOpen.forEach(paintNoteAi);
   } catch { /* Search carries on without it. */ }
 }
@@ -373,6 +394,7 @@ function paintAiProgress(job) {
   const bar = $('.ai-progress-bar i'); if (bar) bar.style.width = `${Math.max(4, settling && job.settleTotal ? job.settleDone / job.settleTotal * 100 : checking && job.imagesTotal ? job.imagesDone / job.imagesTotal * 100 : job?.total ? job.done / job.total * 100 : 0)}%`;
   found.textContent = job?.matches?.length ? `${job.matches.length} found so far${checking ? ', more may appear' : ''}` : '';
   aiNames = job?.reading || aiNames; paintAiNames();
+  if (job?.id) syncAiSearchActivity(job, aiResults.query);
 }
 function paintAiNames() {
   const names = $('.ai-progress-names'); if (!names) return;
@@ -389,9 +411,9 @@ function paintSearchHint(running = aiBusy) {
   hint.innerHTML = `${AI_TOOL_ICONS[aiTool] || ''}<span>${running ? `${esc(aiToolName)} · ${esc(aiToolModel)} · searching` : searched ? `Searched with ${esc(aiToolModel)}` : `Search with ${esc(aiToolModel)}`}</span>`;
 }
 function stopAiSearch() {
-  const wasRunning = !!aiJob;
+  const prevJob = aiJob, wasRunning = !!prevJob;
   aiResults = { query: '', matches: new Map() }; aiJob = 0; showAiStatus(false);
-  if (wasRunning) void api('/ai-search', { method: 'DELETE', body: {} }).catch(() => {});
+  if (wasRunning) { aiActivity.remove(`search:${prevJob}`, { rememberDismissal: false }); void api('/ai-search', { method: 'DELETE', body: {} }).catch(() => {}); }
 }
 async function startAiSearch() {
   const query = state.query.trim();
@@ -407,7 +429,7 @@ async function startAiSearch() {
   try {
     const { job } = await api('/ai-search', { method: 'POST', body: { query, postIds, nudged } });
     if (aiResults.query !== query) return;
-    aiJob = job.id; void followAiSearch(job.id, query);
+    aiJob = job.id; syncAiSearchActivity({ id: job.id, state: 'running', matches: [] }, query); void followAiSearch(job.id, query);
   } catch (error) { aiResults = { query: '', matches: new Map() }; showAiStatus(false); renderResults(); toast(error.message, true, 'bottom-center'); }
 }
 // New results can land above the card someone's looking at, and the layout would follow that card down the list.
@@ -422,7 +444,371 @@ function renderAiResults() {
   hold();
 }
 // The AI that's on changing topics, from the Organize button. A topic's own row opens it, like a click would.
-const openOrganize = organizeTopics({ modal, showModal, api, toast, esc, icon, model: () => aiToolModel, refresh: () => refresh(true), askToScanImages, openTopic: name => [...document.querySelectorAll('[data-open-collection], #topic-navigation [data-nav-topic]')].find(item => (item.dataset.openCollection || item.dataset.navTopic) === name)?.click() });
+function postSummary(postId) {
+  const id = Number(postId);
+  const post = allPosts().find(item => item.id === id) || state.posts.find(item => item.id === id);
+  if (!post) return '';
+  const who = post.author ? `@${String(post.author).replace(/^@+/, '')}` : platformName(post.platform);
+  const snippet = String(post.title || post.text || '').replace(/\s+/g, ' ').trim();
+  return snippet ? `${who} — ${snippet.slice(0, 72)}${snippet.length > 72 ? '…' : ''}` : who;
+}
+let aiLocateTimer = 0, aiLocateStop = null;
+function highlightLocatedPost(card) {
+  clearTimeout(aiLocateTimer);
+  document.querySelectorAll('.save-card.is-ai-located').forEach(el => el.classList.remove('is-ai-located'));
+  card.classList.add('is-ai-located');
+  aiLocateTimer = setTimeout(() => card.classList.remove('is-ai-located'), 2400);
+}
+function stopLocateWatch() {
+  aiLocateStop?.();
+  aiLocateStop = null;
+}
+function postScrollTop(card) {
+  const toolbarHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--toolbar-height')) || 64;
+  return Math.max(0, window.scrollY + card.getBoundingClientRect().top - toolbarHeight - 20);
+}
+async function showLibraryPost(postId) {
+  const id = Number(postId);
+  stopLocateWatch();
+  closeModal();
+  closeSheet();
+  await dismissPost();
+  await documentUi?.close();
+  const post = state.posts.find(item => item.id === id);
+  if (!post) { toast('That post is no longer in your library.', true, 'bottom-center'); return; }
+  if (state.demo) state.demo = false;
+  let changedScope = false;
+  if (!!post.archived !== state.archive) { state.archive = !!post.archived; changedScope = true; }
+  if (showingCollectionFolders() || (state.sidebarView === 'collections' && state.topicsView === 'folders')) {
+    state.topicsView = 'cards';
+    try { localStorage.setItem('savex-topics-view', 'cards'); } catch { /* Keep cards view. */ }
+    changedScope = true;
+  }
+  if (changedScope || !filteredPosts().some(item => item.id === id)) {
+    stopAiSearch();
+    state.filters = defaultFilters();
+    state.query = '';
+    const search = $('#search'); if (search) search.value = '';
+    changedScope = true;
+    updateCollection();
+  }
+  const sequence = showsSiteList(state.filters), now = Date.now(), groups = new Map();
+  for (const candidate of resultsPosts) {
+    const group = sequence ? { key: 'source-sequence' } : addedTimeGroup(libraryAddedAt(candidate), now);
+    const count = (groups.get(group.key) || 0) + 1;
+    groups.set(group.key, count);
+    if (candidate.id === id) {
+      const needed = Math.max(resultsLimits.get(group.key) || CARD_BATCH_SIZE, count);
+      if ((resultsLimits.get(group.key) || CARD_BATCH_SIZE) < needed) {
+        resultsLimits.set(group.key, needed);
+        changedScope = true;
+        renderResultsPage();
+      }
+      break;
+    }
+  }
+  pauseReadingHold(1200);
+  if (changedScope) {
+    // Let newly mounted masonry cards, toolbar height, and initial ResizeObserver layout settle before measuring.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    pauseReadingHold(1000);
+  }
+  const findCard = () => document.querySelector(`.save-card[data-post-id="${id}"]`);
+  const card = findCard();
+  if (!card) { toast('Could not locate that post in the current view.', true, 'bottom-center'); return; }
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // A long way off, jump to just short of the post and glide only the last stretch: a long smooth scroll
+  // ends short when cards above grow as their images load on the way.
+  // The page can't scroll past its end, so a post near the bottom lands as far as it can go.
+  const reachable = top => Math.min(top, document.documentElement.scrollHeight - window.innerHeight);
+  const aim = top => {
+    const near = Math.abs(top - window.scrollY) < window.innerHeight * 1.5;
+    if (reduced) { window.scrollTo({ top, behavior: 'instant' }); return; }
+    if (!near) window.scrollTo({ top: top - Math.sign(top - window.scrollY) * window.innerHeight * .6, behavior: 'instant' });
+    // Chrome drops a smooth scroll asked for in the same frame as a jump, so the glide starts on the next one.
+    requestAnimationFrame(() => window.scrollTo({ top, behavior: 'smooth' }));
+  };
+  let lastTarget = reachable(postScrollTop(card));
+  aim(lastTarget);
+  highlightLocatedPost(card);
+  // Keep correcting until the post has stayed put for a moment, up to 4 seconds, or until the person scrolls.
+  let frame = 0, settledSince = 0, lastY = window.scrollY, stillSince = 0;
+  const started = performance.now();
+  const finish = () => {
+    cancelAnimationFrame(frame);
+    for (const evt of ['wheel', 'touchstart', 'keydown']) window.removeEventListener(evt, finish);
+    if (aiLocateStop === finish) aiLocateStop = null;
+  };
+  const watch = now => {
+    const targetCard = findCard();
+    if (!targetCard || now - started > 4000) { finish(); return; }
+    pauseReadingHold(600);
+    const nextTop = reachable(postScrollTop(targetCard));
+    if (window.scrollY !== lastY) { lastY = window.scrollY; stillSince = now; }
+    if (Math.abs(nextTop - lastTarget) > 12) { lastTarget = nextTop; aim(nextTop); settledSince = 0; }
+    else if (Math.abs(window.scrollY - lastTarget) < 4) {
+      if (!settledSince) settledSince = now;
+      else if (now - settledSince > 400) { finish(); return; }
+    } else {
+      settledSince = 0;
+      // Stopped short (a glide cut off or cards above grew after it ended): aim again.
+      if (now - (stillSince || started) > 150) { stillSince = now; aim(lastTarget); }
+    }
+    frame = requestAnimationFrame(watch);
+  };
+  frame = requestAnimationFrame(watch);
+  for (const evt of ['wheel', 'touchstart', 'keydown']) window.addEventListener(evt, finish, { passive: true });
+  aiLocateStop = finish;
+}
+// Everything AI is working on or has just finished, as the AI activity card lists it. Its posts make the
+// AI activity view under All saves, until each item is dismissed.
+let aiActivityList = [], aiActivityCollapsed = false, aiActivityShown = '';
+try { aiActivityCollapsed = localStorage.getItem('savex-ai-activity-collapsed') === 'true'; } catch { /* Start expanded. */ }
+const aiActivity = createAiActivity({
+  container: $('#ai-status'),
+  // AI search lists its results in place, so the sidebar leaves it out (user's decision).
+  onChange: list => { aiActivityList = list.filter(item => item.kind !== 'search'); renderAiActivityNavigation(); refreshAiTags(); },
+  esc,
+  icon,
+  dotLoader,
+  resolvePostLabel: postSummary,
+  isDialogOpen: () => modal.open || $('#sheet')?.open || $('#post-panel')?.open || !!documentUi?.isOpen?.(),
+  onAction: async (actionId, item, button) => {
+    if (actionId === 'open-document' && item.documentId) {
+      closeModal();
+      closeSheet();
+      await dismissPost();
+      await documentUi?.open(item.documentId);
+      return;
+    }
+    if (actionId === 'show-post' && item.postId) {
+      await showLibraryPost(item.postId);
+      return;
+    }
+    if (actionId === 'open-organize') {
+      closeSheet();
+      await dismissPost();
+      await documentUi?.close();
+      if (!modal.open || !modal.querySelector('.organize-dialog')) void openOrganize();
+      return;
+    }
+    if (actionId === 'show-search') {
+      closeModal();
+      closeSheet();
+      await dismissPost();
+      await documentUi?.close();
+      if (item.searchQuery && $('#search')) {
+        state.archive = false;
+        state.demo = false;
+        state.query = item.searchQuery;
+        $('#search').value = item.searchQuery;
+        updateCollection();
+      }
+      $('#search')?.focus({ preventScroll: true });
+      return;
+    }
+    if (actionId === 'cancel') {
+      button.disabled = true;
+      try {
+        if (item.kind === 'document' && docAiJob?.state === 'running') {
+          ({ job: docAiJob } = await api('/document-ai', { method: 'DELETE', body: {} }));
+          paintDocAiButtons();
+          syncDocAiActivity(docAiJob);
+        } else if (item.kind === 'note' && item.postId) {
+          const { job } = await api('/note-ai', { method: 'DELETE', body: { post: item.postId } });
+          if (job?.post === item.postId) noteAiJobs.set(item.postId, job);
+          paintNoteAi(item.postId);
+          syncNoteAiActivity(job || { id: item.serverRef?.split(':')[1], post: item.postId, state: 'cancelled' });
+        } else if (item.kind === 'organize') {
+          await api('/organize', { method: 'DELETE', body: {} });
+        } else if (item.kind === 'search') {
+          stopAiSearch();
+        } else if (typeof item.cancel === 'function') {
+          item.cancel();
+        }
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message, true, 'bottom-center');
+      }
+      return;
+    }
+    if (actionId === 'undo' && item.canUndo && !item.undone) {
+      button.disabled = true;
+      try {
+        if (item.kind === 'document' && item.changeId) {
+          await api('/document-ai/undo', { method: 'POST', body: { changeId: item.changeId } });
+          documentUi?.refresh();
+          documentUi?.reloadIfOpen(item.documentId);
+          aiActivity.upsert({ key: item.key, canUndo: false, undone: true, detail: `Undone · ${item.detail || item.documentTitle || ''}`.replace(/ · $/, '') });
+        } else if (item.kind === 'note' && item.postId) {
+          await undoNoteAi(item.postId, button);
+          aiActivity.upsert({ key: item.key, canUndo: false, undone: true, detail: 'Undone — restored previous note' });
+        } else if (item.kind === 'organize' && item.changeId) {
+          await openOrganize.undo(item.changeId);
+          aiActivity.upsert({ key: item.key, canUndo: false, undone: true, detail: 'Undone — topics restored' });
+        }
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message, true, 'bottom-center');
+      }
+    }
+  },
+});
+function syncDocAiActivity(job) {
+  if (!job) return;
+  const key = job.id ? `doc:${job.id}` : `doc:post:${job.post}`;
+  if (job.state === 'cancelled') { aiActivity.remove(key, { rememberDismissal: false }); return; }
+  const docName = job.documentTitle || 'Document';
+  const serverRef = job.id ? `doc:${job.id}` : '';
+  if (job.state === 'running') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'document', loaderKind: 'write', state: 'running',
+      title: `Sending to “${docName}”`,
+      detail: `${job.step || 'Reading this save'}…`,
+      postId: job.post, documentId: job.documentId, documentTitle: docName,
+      cancellable: true,
+    });
+    return;
+  }
+  if (job.state === 'done') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'document', loaderKind: 'write', state: 'done',
+      title: `Updated “${docName}”`,
+      detail: job.summary || (job.request ? `Added from “${job.request}”` : 'Saved note added to document.'),
+      postId: job.post, documentId: job.documentId, documentTitle: docName,
+      changeId: job.changeId || '', canUndo: Boolean(job.changeId), cancellable: false,
+    });
+    return;
+  }
+  if (job.state === 'failed') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'document', loaderKind: 'write', state: 'failed',
+      title: `Couldn’t update “${docName}”`,
+      detail: job.error || 'Sending to document failed.',
+      postId: job.post, documentId: job.documentId, documentTitle: docName,
+      cancellable: false,
+    });
+  }
+}
+function syncNoteAiActivity(job) {
+  if (!job) return;
+  const key = job.id ? `note:${job.id}` : `note:post:${job.post}`;
+  if (job.state === 'cancelled') { aiActivity.remove(key, { rememberDismissal: false }); return; }
+  const serverRef = job.id ? `note:${job.id}` : '';
+  if (job.state === 'waiting') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'note', loaderKind: 'write', state: 'waiting',
+      title: 'Filling note · queued',
+      detail: job.position ? `${job.position} ahead in queue` : 'Waiting to start',
+      postId: job.post, cancellable: true,
+    });
+    return;
+  }
+  if (job.state === 'running') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'note', loaderKind: 'write', state: 'running',
+      title: 'Filling note with AI',
+      detail: `${job.step || 'Reading this save'}…`,
+      postId: job.post, cancellable: true,
+    });
+    return;
+  }
+  if (job.state === 'done') {
+    const post = allPosts().find(item => item.id === job.post);
+    const canUndo = post ? noteAiUndo.has(job.post) && notes.value(post) === job.notes : Boolean(aiActivity.get(key)?.canUndo);
+    aiActivity.upsert({
+      key, serverRef, kind: 'note', loaderKind: 'write', state: 'done',
+      title: 'Note updated',
+      detail: job.request || 'Filled note with AI',
+      postId: job.post, canUndo, cancellable: false,
+    });
+    return;
+  }
+  if (job.state === 'failed') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'note', loaderKind: 'write', state: 'failed',
+      title: 'Couldn’t fill note',
+      detail: job.error || 'Note AI failed.',
+      postId: job.post, cancellable: false,
+    });
+  }
+}
+function syncOrganizeActivity(job, { stepText } = {}) {
+  if (!job) return;
+  const key = job.id ? `organize:${job.id}` : 'organize:current';
+  if (job.state === 'cancelled') { aiActivity.remove(key, { rememberDismissal: false }); return; }
+  const serverRef = job.id ? `organize:${job.id}` : '';
+  if (job.state === 'running') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'organize', loaderKind: 'organize', state: 'running',
+      title: 'Organizing topics',
+      detail: stepText || job.request || 'Working…',
+      cancellable: true,
+    });
+    return;
+  }
+  if (job.state === 'done') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'organize', loaderKind: 'organize', state: 'done',
+      title: job.undone ? 'Topics restored' : 'Topics organized',
+      detail: job.summary?.[0] || job.message || job.request || 'Done.',
+      changeId: job.changeId || '', canUndo: Boolean(job.changeId && !job.undone), undone: Boolean(job.undone),
+      cancellable: false,
+    });
+    return;
+  }
+  if (job.state === 'failed') {
+    aiActivity.upsert({
+      key, serverRef, kind: 'organize', loaderKind: 'organize', state: 'failed',
+      title: 'Couldn’t organize topics',
+      detail: job.error || 'Organizing topics failed.',
+      cancellable: false,
+    });
+  }
+}
+function syncAiSearchActivity(job, query = '') {
+  if (!job?.id) return;
+  const key = `search:${job.id}`, serverRef = key;
+  const searchQuery = query || job.query || '';
+  if (job.state === 'running' || job.state === 'asking') {
+    const checking = job.phase === 'images', settling = job.phase === 'settling';
+    const detail = job.state === 'asking'
+      ? 'Waiting for your answer'
+      : settling
+        ? `Checking saved descriptions · ${job.settleDone} of ${job.settleTotal}`
+        : checking
+          ? `Scanning images · ${job.imagesDone} of ${job.imagesTotal}`
+          : job.total
+            ? `Reading your saves · ${job.done} of ${job.total}`
+            : searchQuery ? `Searching for “${searchQuery}”` : 'Reading your saves';
+    aiActivity.upsert({
+      key, serverRef, kind: 'search', loaderKind: 'search', state: 'running',
+      title: 'Searching with AI',
+      detail, searchQuery, cancellable: true,
+    });
+    return;
+  }
+  if (job.error) {
+    aiActivity.upsert({
+      key, serverRef, kind: 'search', loaderKind: 'search', state: 'failed',
+      title: 'AI search failed', detail: job.error, searchQuery, cancellable: false,
+    });
+    return;
+  }
+  const count = job.matches?.length || 0;
+  aiActivity.upsert({
+    key, serverRef, kind: 'search', loaderKind: 'search', state: 'done',
+    title: 'AI search finished',
+    detail: `${count} ${count === 1 ? 'match' : 'matches'}${searchQuery ? ` for “${searchQuery}”` : ''}`,
+    searchQuery, cancellable: false,
+  });
+}
+function syncExternalActivity(entry) {
+  if (!entry?.key) return;
+  if (entry.state === 'cancelled') { aiActivity.remove(entry.key, { rememberDismissal: false }); return; }
+  aiActivity.upsert(entry);
+}
+const openOrganize = organizeTopics({ modal, showModal, api, toast, esc, icon, model: () => aiToolModel, refresh: () => refresh(true), askToScanImages, onActivity: syncOrganizeActivity, openTopic: name => [...document.querySelectorAll('[data-open-collection], #topic-navigation [data-nav-topic]')].find(item => (item.dataset.openCollection || item.dataset.navTopic) === name)?.click() });
 // A search that wants to read a lot of images asks first, because it's the person's plan it uses.
 function askToScanImages(count) {
   return new Promise(resolve => {
@@ -437,7 +823,7 @@ async function followAiSearch(id, query) {
   while (aiJob === id) {
     let job = null; try { ({ job } = await api(`/ai-search?job=${id}`)); } catch { /* Tried again below. */ }
     if (aiJob !== id) return;
-    if (!job) { aiJob = 0; showAiStatus(false); renderResults(); return; }
+    if (!job) { aiActivity.remove(`search:${id}`, { rememberDismissal: false }); aiJob = 0; showAiStatus(false); renderResults(); return; }
     const count = aiResults.matches.size; aiResults = { query, matches: new Map(job.matches) };
     paintAiProgress(job);
     if (job.state === 'asking') {
@@ -447,7 +833,7 @@ async function followAiSearch(id, query) {
       try { await api('/ai-search/images', { method: 'POST', body: { job: id, approve } }); } catch { /* The next check shows where it stands. */ }
       continue;
     }
-    if (job.state !== 'running') { aiJob = 0; showAiStatus(false); renderAiResults(); if (job.imagesDone) void refresh(true); if (job.error) toast(job.error, true, 'bottom-center'); else if (job.note) toast(job.note, false, 'bottom-center'); return; }
+    if (job.state !== 'running') { aiJob = 0; showAiStatus(false); syncAiSearchActivity(job, query); renderAiResults(); if (job.imagesDone) void refresh(true); if (job.error) toast(job.error, true, 'bottom-center'); else if (job.note) toast(job.note, false, 'bottom-center'); return; }
     if (aiResults.matches.size !== count) renderAiResults();
     await new Promise(resolve => setTimeout(resolve, 800));
   }
@@ -461,7 +847,8 @@ function relatedMatches() {
   return combined;
 }
 function filteredPosts() {
-  const posts = scopedPosts(), result = applyFilters(posts, state.filters, { query: state.query, topicScope: name => topicScope(state.topicCatalog, name), meaning: relatedMatches() });
+  const ai = state.filters.aiActivity && aiActivityPostIds();
+  const posts = ai ? scopedPosts().filter(post => ai.has(post.id)) : scopedPosts(), result = applyFilters(posts, state.filters, { query: state.query, topicScope: name => topicScope(state.topicCatalog, name), meaning: relatedMatches() });
   // Keep the card under the cursor while its edited note changes a search match.
   if (activeNote && activeNoteScope === resultsScopeKey() && !result.some(post => post.id === activeNote.id)) {
     const editing = posts.find(post => post.id === activeNote.id && post.url === activeNote.url);
@@ -472,7 +859,8 @@ function filteredPosts() {
 function selectedSource() { return state.filters.sources.length === 1 ? state.filters.sources[0] : 'all'; }
 const savesLabel = count => `${count} ${count === 1 ? 'save' : 'saves'}`;
 function savesNavigation(count) {
-  return `<button class="nav-item all-saves-nav" data-filter="all" data-nav-label="All saves" aria-label="All saves ${count}" title="Browse all saves">${icon('grid')}<span class="nav-label-text">All saves</span><span class="nav-count">${count}</span></button>`;
+  // A group like an account's, so AI activity can sit under it as a child row (renderAiActivityNavigation fills it).
+  return `<div class="source-account-group all-saves-group"><button class="nav-item account-nav-item all-saves-nav" data-filter="all" data-nav-label="All saves" aria-label="All saves ${count}" title="Browse all saves">${icon('grid', 'source-icon')}<span class="nav-label-text">All saves</span><span class="nav-count">${count}</span></button><div id="ai-activity-navigation"></div></div>`;
 }
 function navItem(filter, label, symbol, count) {
   return `<button class="nav-item ${(filter === 'all' ? !state.filters.sources.length : state.filters.sources.length === 1 && state.filters.sources[0] === filter) ? 'active' : ''}" data-filter="${filter}" data-nav-label="${label}" aria-label="${label} ${count}" title="${label}">${sourceIcon(filter)}<span class="nav-label-text">${filter === 'chrome' ? 'Chrome' : label}</span><span class="nav-count">${count}</span></button>`;
@@ -498,18 +886,61 @@ function renderNewSaves() {
     badge.textContent = `+${count}`; badge.title = `${count} new from the last sync`;
   }
 }
+const aiActivityPostIds = () => new Set(aiActivityList.map(item => Number(item.postId)).filter(Boolean));
+// AI activity is a view the app makes by itself, never a filter someone sets up: a child row of All saves
+// while AI is working on or has just finished something for a post, gone once those are dismissed.
+function renderAiActivityNavigation() {
+  const root = $('#ai-activity-navigation'); if (!root) return;
+  const posts = aiActivityPostIds(), key = [...posts].join();
+  // With nothing left to show, the AI activity view goes back to all saves. Redrawing the grid redraws this
+  // row too, so the posts are noted first and the grid is redrawn only once per change.
+  const changed = state.filters.aiActivity && aiActivityShown !== key;
+  aiActivityShown = key;
+  if (changed && !posts.size) state.filters = defaultFilters();
+  if (changed) updateCollection();
+  const working = aiActivityList.some(item => item.postId && ['running', 'waiting'].includes(item.state));
+  const html = posts.size ? `<button type="button" class="collection-toggle" data-ai-activity-toggle aria-label="Toggle AI activity" aria-expanded="${!aiActivityCollapsed}" aria-controls="ai-activity-list" title="${aiActivityCollapsed ? 'Expand' : 'Collapse'} AI activity">${icon('chevron')}</button><ul id="ai-activity-list" class="instagram-collections" aria-label="Under All saves" ${aiActivityCollapsed ? 'hidden' : ''}><li><button class="nav-item instagram-collection ai-activity-nav" type="button" data-ai-activity-nav aria-pressed="false" aria-label="AI activity ${posts.size}" title="Posts AI is working on or just finished"><span class="ai-activity-state" aria-hidden="true">${working ? dotLoader('write') : icon('sparkle')}</span><span class="collection-label">AI activity</span><span class="nav-count">${posts.size}</span></button></li></ul>` : '';
+  root.closest('.all-saves-group')?.classList.toggle('has-collections', !!posts.size);
+  if (root.dataset.html === html) return;
+  root.dataset.html = html; root.innerHTML = html;
+  updateSidebarSelection();
+}
+document.addEventListener('click', event => {
+  const target = event.target.closest?.('[data-ai-activity-nav],[data-ai-activity-toggle]');
+  if (!target) return;
+  event.preventDefault();
+  if (target.hasAttribute('data-ai-activity-toggle')) {
+    aiActivityCollapsed = !aiActivityCollapsed;
+    try { localStorage.setItem('savex-ai-activity-collapsed', String(aiActivityCollapsed)); } catch { /* Keep this session's choice. */ }
+    delete $('#ai-activity-navigation').dataset.html; renderAiActivityNavigation(); return;
+  }
+  state.archive = false; state.filters = { ...defaultFilters(), aiActivity: true }; state.query = ''; $('#search').value = '';
+  updateCollection(); window.scrollTo({ top: 0, behavior: 'instant' });
+});
+// Brings the cards' AI tags in line with AI activity.
+function refreshAiTags() {
+  const cards = document.querySelectorAll('#results .save-card[data-post-id]'); if (!cards.length) return;
+  const posts = new Map(allPosts().map(post => [post.id, post]));
+  for (const card of cards) { const post = posts.get(Number(card.dataset.postId)); if (post && $('.card-layout', card)) markNew(card, post); }
+}
+document.addEventListener('click', event => {
+  const ack = event.target.closest?.('[data-ai-ack]'); if (!ack) return;
+  event.preventDefault(); event.stopPropagation();
+  aiActivity.remove(ack.dataset.aiAck);
+}, true);
 function renderAccountNavigation() {
+  renderAiActivityNavigation();
   const accounts = navigationAccounts(), collections = state.demo ? [] : state.instagramCollections || [];
   const counts = new Map();
   for (const post of allPosts().filter(post => !post.archived)) for (const id of new Set((post.collections || []).map(collection => collection.id))) counts.set(id, (counts.get(id) || 0) + 1);
   const signature = JSON.stringify([accounts, collections, [...counts], state.instagramSaveLists]);
-  for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram'], ['#pinterest-navigation', 'pinterest']]) {
+  for (const [selector, platform] of [['#account-navigation', 'x'], ['#instagram-navigation', 'instagram'], ['#pinterest-navigation', 'pinterest'], ['#threads-navigation', 'threads']]) {
     const root = $(selector); if (!root || root.dataset.signature === signature) continue;
     const focused = root.contains(document.activeElement) ? { account: document.activeElement.dataset.navAccount, collection: document.activeElement.dataset.instagramCollection, toggle: document.activeElement.dataset.collectionsAccount } : null;
     root.innerHTML = accounts.filter(account => account.platform === platform).map(account => {
       const name = account.label === platformName(account.platform) ? account.label : `${platformName(account.platform)} ${account.label}`;
       const selection = instagramSaveList(account.value, state.instagramSaveLists), selected = selection.collectionIds;
-      const folders = account.platform === 'x' ? [] : collections.filter(collection => (collection.platform || 'instagram') === account.platform && account.value === `${account.platform}:${collection.account.toLowerCase()}` && (selected === null || selected.includes(collection.id)));
+      const folders = ['x', 'threads'].includes(account.platform) ? [] : collections.filter(collection => (collection.platform || 'instagram') === account.platform && account.value === `${account.platform}:${collection.account.toLowerCase()}` && (selected === null || selected.includes(collection.id)));
       const expanded = !collapsedInstagramAccounts.has(account.value), listId = `instagram-collections-${encodeURIComponent(account.value)}`;
       return `<div class="source-account-group ${folders.length ? 'has-collections' : ''}"><button class="nav-item account-nav-item" data-nav-account="${esc(account.value)}" aria-label="${esc(name)} ${account.count}" aria-pressed="false" ${folders.length ? `aria-expanded="${expanded}" aria-controls="${listId}"` : ''} title="${esc(name)}">${sourceIcon(account.platform)}<span class="nav-label-text ${account.label.startsWith('@') ? 'account-handle' : ''}">${esc(account.label)}</span><span class="nav-count">${account.count}</span></button>${folders.length ? `<button type="button" class="collection-toggle" data-action="toggle-collections" data-collections-account="${esc(account.value)}" aria-label="Toggle ${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" aria-expanded="${expanded}" aria-controls="${listId}" title="${expanded ? 'Collapse' : 'Expand'} ${account.platform === 'pinterest' ? 'boards' : 'collections'}">${icon('chevron')}</button><ul id="${listId}" class="instagram-collections" aria-label="${account.platform === 'pinterest' ? 'Pinterest boards' : 'Instagram collections'} for ${esc(account.label)}" ${expanded ? '' : 'hidden'}>${folders.map(collection => `<li><button class="nav-item instagram-collection" data-instagram-collection="${collection.id}" aria-pressed="false" aria-label="${esc(collection.name)} · ${esc(collection.account)} · ${counts.get(collection.id) || 0} saves" title="${esc(collection.name)}"><span class="collection-label">${esc(collection.name)}</span><span class="nav-count">${counts.get(collection.id) || 0}</span></button></li>`).join('')}</ul>` : ''}</div>`;
     }).join('');
@@ -518,17 +949,21 @@ function renderAccountNavigation() {
   }
   renderNewSaves();
 }
+function allSourcesRefreshRequest() {
+  return { targets: connectedTargets(['chrome', 'x', 'instagram', 'pinterest', 'threads']), xAccount: 'all' };
+}
 function accountRefreshRequest(value) {
   const [platform, handle] = value.split(':');
   return { targets: [platform], xAccount: platform === 'x' && handle.startsWith('@') ? handle : 'current', ...(platform === 'instagram' && handle.startsWith('@') ? { instagramAccount: handle } : {}), ...(platform === 'pinterest' && handle.startsWith('@') ? { pinterestAccount: handle } : {}) };
 }
 function accountMenu(trigger, point) {
   if (trigger.dataset.instagramCollection) return collectionRefreshMenu(trigger,point);
-  const value = trigger.dataset.navAccount || 'chrome:*';
-  const refresh = mode => { void startSync(mode, accountRefreshRequest(value)).catch(error => toast(error.message, true)); };
+  const all = trigger.dataset.filter === 'all';
+  const value = all ? 'all' : trigger.dataset.navAccount || 'chrome:*';
+  const refresh = mode => { void startSync(mode, all ? allSourcesRefreshRequest() : accountRefreshRequest(value)).catch(error => toast(error.message, true)); };
   const busy = state.syncChecking || ['queued', 'running'].includes(state.sync?.job?.status);
   const items = [{ label: 'Quick scan and refresh', disabled: busy, run: () => refresh('quick') }, { label: 'Deep scan and refresh', disabled: busy, run: () => refresh('deep') }];
-  if (/^(instagram|pinterest):@/.test(value)) items.push({ label: value.startsWith('pinterest:') ? 'Choose boards' : 'Choose collections', run: () => collectionsDialog(value) });
+  if (!all && /^(instagram|pinterest):@/.test(value)) items.push({ label: value.startsWith('pinterest:') ? 'Choose boards' : 'Choose collections', run: () => collectionsDialog(value) });
   closeSelect(); closeCollectionPicker(); openAccountMenu(trigger, items, point);
 }
 function collectionRefreshRequest(id) {
@@ -774,7 +1209,7 @@ function updateSidebarSelection() {
   const handles = state.filters.accounts.map(value => value.split(':')[1]).filter(handle => handle?.startsWith('@'));
   if (window.saveXDesktop?.browsingAccounts && handles.join() !== browsingHandles) { browsingHandles = handles.join(); void window.saveXDesktop.browsingAccounts(handles); }
   document.querySelectorAll('[data-filter]').forEach(button => {
-    const active = !state.archive && (button.dataset.filter === 'all' ? !state.filters.sources.length && !state.filters.accounts.length && !state.filters.topics.length && !state.filters.collections?.length && !state.filters.collection : state.filters.accounts.includes(`${button.dataset.filter}:*`) || !state.filters.accounts.length && state.filters.sources.length === 1 && state.filters.sources[0] === button.dataset.filter);
+    const active = !state.archive && (button.dataset.filter === 'all' ? !state.filters.aiActivity && !state.filters.sources.length && !state.filters.accounts.length && !state.filters.topics.length && !state.filters.collections?.length && !state.filters.collection : state.filters.accounts.includes(`${button.dataset.filter}:*`) || !state.filters.accounts.length && state.filters.sources.length === 1 && state.filters.sources[0] === button.dataset.filter);
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', active);
   });
   document.querySelectorAll('[data-nav-account]').forEach(button => {
@@ -791,6 +1226,7 @@ function updateSidebarSelection() {
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
   });
   const archive = $('.archive-nav'); if (archive) { archive.classList.toggle('active', state.archive); archive.setAttribute('aria-pressed', state.archive); }
+  const ai = $('[data-ai-activity-nav]'); if (ai) { const active = !state.archive && !!state.filters.aiActivity; ai.classList.toggle('active', active); ai.setAttribute('aria-pressed', String(active)); }
 }
 function renderSidebarMarkers() {
   const sidebar = $('.sidebar'), marks = $('.sidebar-selection-marks');
@@ -816,13 +1252,12 @@ function renderSidebarMarkers() {
     const all = item.dataset.filter === 'all';
     const value = all ? 'all' : collection ? `instagram-collection:${collection.id}` : item.dataset.navAccount || 'chrome:*';
     const [platform, handle] = collection ? [collection.platform || 'instagram',collection.account] : value.split(':');
-    const label = all ? 'all sources' : collection ? `${platformName(platform)} ${collection.account} · ${collection.name}` : ['x', 'pinterest'].includes(platform) && handle.startsWith('@') ? `${platformName(platform)} ${handle}` : platformName(platform);
+    const label = all ? 'all sources' : collection ? `${platformName(platform)} ${collection.account} · ${collection.name}` : ['x', 'pinterest', 'threads'].includes(platform) && handle.startsWith('@') ? `${platformName(platform)} ${handle}` : platformName(platform);
     const rect = item.getBoundingClientRect();
     let button = previous.get(value);
     if (!button) {
       button = document.createElement('button'); button.type = 'button';
-      button.className = 'sidebar-account-refresh'; button.dataset.action = all ? 'scan-options' : collection ? 'refresh-collection' : 'refresh-account'; button.dataset.syncAccount = value;
-      if (all) { button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', 'modal'); button.setAttribute('aria-expanded', 'false'); }
+      button.className = 'sidebar-account-refresh'; button.dataset.action = all ? 'refresh-all' : collection ? 'refresh-collection' : 'refresh-account'; button.dataset.syncAccount = value;
       if(collection)button.dataset.syncCollection=collection.id;
       button.innerHTML = icon('refresh');
     }
@@ -858,6 +1293,7 @@ function render() {
           ${navItem('chrome', 'Chrome bookmarks', 'bookmark', live.filter(p => p.platform === 'chrome').length)}
           <div id="instagram-navigation"></div>
           <div id="pinterest-navigation"></div>
+          <div id="threads-navigation"></div>
           </div>
           <div id="sidebar-collections-panel" role="tabpanel" aria-labelledby="sidebar-collections-tab" ${state.sidebarView === 'collections' ? '' : 'hidden'}><div id="topic-navigation"></div></div>
         </div>
@@ -868,7 +1304,7 @@ function render() {
     </aside>
     <main class="main">
       <div class="page-content">
-        <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
+        <h1 class="sr-only">${esc(state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', threads: 'Threads', chrome: 'Chrome bookmarks' }[selectedSource()]))}</h1>
         <div class="search-tools"><div class="search-scrim" aria-hidden="true"></div><div class="search-slot"><label class="search">${icon('search')}<input id="search" type="search" placeholder="Search" value="${esc(state.query)}" aria-label="Search saves" aria-keyshortcuts="${macKeyboard ? 'Meta' : 'Control'}+F"><button class="search-hint" type="button" hidden></button><button class="search-clear" type="button" aria-label="Clear search" title="Clear search">${icon('close')}</button><kbd aria-label="${macKeyboard ? 'Command' : 'Control'} F">${searchKeys}</kbd></label></div>
         <div class="view-toggle" role="group" aria-label="Post layout"><button type="button" data-action="topics-view" data-topics-view="folders" aria-label="Folder view" title="Folder view" hidden>${icon('folder')}</button>${['feed', 'grid'].map(view => `<button type="button" data-action="card-view" data-card-view="${view}" aria-label="${view === 'feed' ? 'Feed' : 'Grid'} view" title="${view === 'feed' ? 'Feed' : 'Grid'} view" aria-pressed="${state.cardView === view}">${icon(view)}</button>`).join('')}</div></div>
         <div class="collection-tools"><div class="toolbar-blur" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
@@ -960,20 +1396,34 @@ function showingChromeSetup() {
   return !!window.saveXDesktop?.chromeBookmarksFound && !!state.sync?.nativeSocial?.enabled && !state.demo && !state.archive && !state.query.trim()
     && selectedSource() === 'chrome' && !allPosts().some(post => post.platform === 'chrome' && !post.archived);
 }
+// What the Download step says, so it's clear the folder landed, or was brought up to date, and where.
+function chromeHelperSavedText() {
+  const saved = chromeSetup.saved;
+  if (!saved) return 'A folder named <b>saveXtension Chrome helper</b> goes to your Downloads.';
+  const where = '<b>Downloads › saveXtension Chrome helper</b>';
+  const also = saved.alsoUpdated?.length ? ` Also updated the copy Chrome already uses${saved.alsoUpdated.length > 1 ? ` (${saved.alsoUpdated.length} folders)` : ''}: press reload on saveXtension in Chrome’s extensions page.` : '';
+  const version = saved.version ? ` version ${esc(saved.version)}` : '';
+  const what = !saved.updated ? `Saved${version} to ${where}.`
+    : saved.previousVersion && saved.previousVersion !== saved.version ? `Updated ${where} from ${esc(saved.previousVersion)} to ${esc(saved.version)}.`
+    : `Replaced ${where} with a fresh copy of${version || ' this version'}.`;
+  return `${what}${also}`;
+}
 function chromeHelperSteps() {
   const step = (done, content, action = '') => `<li class="${done ? 'is-done' : ''}"><div class="chrome-setup-step"><div>${content}</div>${action}</div></li>`;
   return `<ol class="chrome-setup-steps">
-        ${step(chromeSetup.saved, `<strong>Download the extension</strong><p>${chromeSetup.saved ? 'Downloaded to <b>Downloads › saveXtension Chrome helper</b>.' : 'A folder named <b>saveXtension Chrome helper</b> goes to your Downloads.'}</p>`, `<button class="secondary" type="button" data-action="save-chrome-helper">${icon('download')}Download</button>`)}
+        ${step(chromeSetup.saved, `<strong>Download the extension</strong><p>${chromeHelperSavedText()}</p>`, `<div class="chrome-setup-actions"><button class="secondary ${chromeSetup.justSaved ? 'is-saved' : ''}" type="button" data-action="save-chrome-helper">${chromeSetup.justSaved ? `${icon('check')}Saved` : `${icon('download')}Download`}</button>${chromeSetup.saved ? `<button class="secondary" type="button" data-action="open-downloads">Show in ${/Win/.test(navigator.platform) ? 'Explorer' : 'Finder'}</button>` : ''}</div>`)}
         ${step(false, '<strong>Open Chrome’s extensions page</strong><p>Or type <code>chrome://extensions</code> in Chrome’s address bar.</p>', '<button class="secondary" type="button" data-action="open-chrome-extensions">Open in Chrome</button>')}
         ${step(false, '<strong>Turn on Developer mode</strong><p>It’s the switch in the top-right corner of that page.</p>')}
-        ${step(false, '<strong>Click Load unpacked and choose the folder</strong><p>Pick <b>saveXtension Chrome helper</b> from your Downloads.</p>', '<button class="secondary" type="button" data-action="open-downloads">Open Downloads folder</button>')}
+        ${step(false, '<strong>Click Load unpacked and choose the folder</strong><p>Pick <b>saveXtension Chrome helper</b> from your Downloads.</p>')}
       </ol>`;
 }
 function refreshSetupPanel() { renderChromeHelperPage(); renderChromeHelperSettings(); if ($('.source-connect')) renderSourceConnect(); else if (showingChromeSetup()) renderChromeSetup(); }
 // The Chrome helper shows as one small status line. Connecting it has its own page.
-function chromeHelperState() {
+function chromeHelperState(from = '') {
   const helper = state.sync?.chromeBrowser;
   if (!helper?.online) return 'disconnected';
+  // Deleting a bookmark needs a helper new enough to do it.
+  if (from === 'unsave' && !helper.bookmarkDelete) return 'outdated';
   return ['x', 'instagram', 'pinterest'].every(site => helper.chromeSessionSites?.includes(site)) ? 'connected' : 'outdated';
 }
 function chromeHelperRow(from) {
@@ -984,8 +1434,11 @@ function chromeHelperRow(from) {
 const chromeLinkVisual = () => `<span class="chrome-link-visual" aria-hidden="true"><span class="chrome-link-node">${sourceIcon('chrome')}</span><span class="chrome-link-path"><i></i><i></i><i></i></span><span class="chrome-link-node">${icon('bookmark')}</span></span>`;
 function renderChromeHelperSettings() {
   const status = $('#chrome-helper-settings'), about = $('#chrome-helper-about'); if (!status || !about) return;
-  const current = chromeHelperState(), label = { connected: 'Connected', outdated: 'Needs update', disconnected: 'Not connected' }[current];
-  const statusHtml = `<span class="chrome-helper-status is-${current}"><span class="chrome-setup-dot" aria-hidden="true"></span><span class="chrome-link-label">${label}</span></span>`;
+  const current = chromeHelperState(), checking = current !== 'disconnected' && !!state.sync?.chromeBrowser?.checking;
+  const label = checking ? 'Checking…' : { connected: 'Connected', outdated: 'Needs update', disconnected: 'Not connected' }[current];
+  // The app can't reach Chrome, only hear from it, so Check again waits for the helper's next check-in, a few seconds while it's running.
+  const again = current === 'disconnected' ? '' : `<button class="icon-button chrome-helper-refresh ${checking ? 'is-checking' : ''}" type="button" data-action="check-chrome-helper" aria-label="Check again" title="Check again" ${checking ? 'disabled' : ''}>${icon('refresh')}</button>`;
+  const statusHtml = `<span class="chrome-helper-status is-${checking ? 'checking' : current}"><span class="chrome-setup-dot" aria-hidden="true"></span><span class="chrome-link-label">${label}</span></span>${again}`;
   const aboutHtml = current === 'connected'
     ? '<p class="settings-panel-text">Adding an account now uses your sign-in in Chrome, with no password. For X, switch to that account in Chrome first.</p>'
     : `<p class="settings-panel-text">${current === 'outdated' ? 'Your extension needs a quick update before it can do this.' : 'Add accounts in one click using your Chrome logins, with no passwords.'}</p><button class="secondary" type="button" data-action="chrome-helper-page" data-from="settings">${current === 'outdated' ? 'Update extension' : 'Connect extension'}</button>`;
@@ -1013,11 +1466,12 @@ function signInPrompt() {
 let chromeHelperFrom = '';
 // A sheet slides up over whatever is open. Settings stays alive underneath, sunk back and dimmed.
 const sheet = $('#sheet');
+sheet.addEventListener('close', () => aiActivity.flushAnnouncements());
 glideSize(sheet);
 function chromeHelperPage(from) {
   chromeHelperFrom = from;
   const label = from === 'settings' ? 'Settings' : 'Back';
-  presentSheet(`<button class="text-button chrome-helper-back" type="button" data-action="chrome-helper-back" aria-label="${from === 'settings' ? 'Back to settings' : 'Back'}">${icon('chevron')}${label}</button><h2 id="sheet-title">Connect the Chrome extension</h2><div id="chrome-helper-page"></div>`);
+  presentSheet(`<button class="text-button chrome-helper-back" type="button" data-action="chrome-helper-back" aria-label="${from === 'settings' ? 'Back to settings' : 'Back'}">${icon('chevron')}${label}</button><h2 id="sheet-title">Connect the Chrome extension</h2>${from === 'unsave' ? '<p class="chrome-setup-lead">Deleting a Chrome bookmark goes through the saveXtension extension in Chrome, so it has to be connected.</p>' : ''}<div id="chrome-helper-page"></div>`);
   renderChromeHelperPage();
 }
 // The dialog below tucks behind the sheet like a stacked card: resized to the sheet's height and
@@ -1062,11 +1516,11 @@ sheet.addEventListener('cancel', event => { event.preventDefault(); closeSheet()
 sheet.addEventListener('click', event => { if (event.target !== sheet) return; const box = sheet.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeSheet(); });
 function renderChromeHelperPage() {
   const root = $('#chrome-helper-page'); if (!root) return;
-  const current = chromeHelperState();
+  const current = chromeHelperState(chromeHelperFrom);
   // Any connected extension can share bookmarks, so that page has done its job: show the import.
   if (chromeHelperFrom === 'bookmarks' && current !== 'disconnected') { closeSheet(); return; }
   const [title, detail] = {
-    connected: ['Connected to Chrome', 'Adding an account now uses your sign-in there. For X, switch to that account in Chrome first.'],
+    connected: ['Connected to Chrome', chromeHelperFrom === 'unsave' ? 'Close this and choose Delete from Chrome on the bookmark again.' : 'Adding an account now uses your sign-in there. For X, switch to that account in Chrome first.'],
     outdated: ['Your extension needs updating', 'Download it again and load that folder in place of the old one.'],
     disconnected: ['Waiting for Chrome', 'This connects by itself once the extension is loaded.']
   }[current];
@@ -1098,7 +1552,7 @@ function renderChromeSetup() {
 // Refreshing everything in the desktop app covers what is connected and skips the rest;
 // connecting is offered on each source's own empty page instead.
 function connectedTargets(targets) {
-  const native = state.sync?.nativeSocial; if (!native?.enabled) return targets.filter(target => target !== 'pinterest');
+  const native = state.sync?.nativeSocial; if (!native?.enabled) return targets.filter(target => !['pinterest', 'threads'].includes(target));
   const connected = new Set(native.accounts.filter(account => account.status === 'connected').map(account => account.platform));
   return targets.filter(target => target === 'chrome' || connected.has(target));
 }
@@ -1107,7 +1561,7 @@ const sourceConnect = { awaiting: null };
 function emptySourcePlatform() {
   if (!state.sync?.nativeSocial?.enabled || state.demo || state.archive || state.query.trim()) return null;
   const platform = selectedSource(), filters = state.filters;
-  if (!['x', 'instagram', 'pinterest'].includes(platform) || filters.topics.length || filters.collections?.length || filters.collection || filters.accounts.some(value => value.startsWith(`${platform}:@`))) return null;
+  if (!['x', 'instagram', 'pinterest', 'threads'].includes(platform) || filters.topics.length || filters.collections?.length || filters.collection || filters.accounts.some(value => value.startsWith(`${platform}:@`))) return null;
   return allPosts().some(post => post.platform === platform && !post.archived) ? null : platform;
 }
 function sourceSyncRequest(platform) { return { ...selectedSyncRequest(), targets: [platform], xAccount: platform === 'x' ? 'all' : 'current', instagramAccount: 'current', pinterestAccount: 'current' }; }
@@ -1258,7 +1712,7 @@ function renderFilterUI() {
   if (button) button.hidden = folders;
   syncViewToggle();
   const topicCount = folders ? localCollections().length : 0;
-  const heading = $('.page-content h1'); if (heading) { heading.textContent = folders ? `${topicCount} ${topicCount === 1 ? 'topic' : 'topics'}` : state.archive ? 'Archived' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive ? 'collection-heading' : 'sr-only'; }
+  const heading = $('.page-content h1'); if (heading) { heading.textContent = folders ? `${topicCount} ${topicCount === 1 ? 'topic' : 'topics'}` : state.archive ? 'Archived' : state.filters.aiActivity ? 'AI activity' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive ? 'collection-heading' : 'sr-only'; }
   renderSidebarMarkers();
 }
 function filterDialog() {
@@ -1339,7 +1793,7 @@ function bookmarkPreview(p) {
   const folders = (p.folders || []).filter(f => !/^(Other bookmarks|Bookmarks bar|Mobile bookmarks)$/i.test(f));
   return `<div class="bookmark-preview" data-website-url="${esc(p.url)}"><span class="bookmark-host"><span class="bookmark-browser" role="img" aria-label="Chrome bookmark">${sourceIcon('chrome')}</span><span>${esc(u.hostname.replace(/^www\./, ''))}</span></span><a class="bookmark-title" href="${esc(p.url)}" title="${esc(p.bookmarkTitle || p.title || p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.bookmarkTitle || u.hostname)}</a><a class="bookmark-media" href="${esc(p.url)}" aria-label="Open ${esc(p.bookmarkTitle || u.hostname)}" target="_blank" rel="noopener noreferrer" hidden><img alt="" decoding="async"></a><p class="bookmark-description" hidden></p></div><div class="bookmark-folders">${folders.map(f => `<span title="${esc(f)}">${esc(f)}</span>`).join('')}</div>`;
 }
-// Instagram and Pinterest cards leave out the block of hashtags that ends a caption, to keep them tidy. X cards keep all their text. Only the display changes: the saved
+// Instagram and Pinterest cards leave out the block of hashtags that ends a caption, to keep them tidy. X and Threads cards keep all their text. Only the display changes: the saved
 // text, search, MCP and the opened post all keep them. A single tag ending a sentence stays, as it's part of the sentence.
 function previewCaption(caption) {
   const tags = caption.match(/#[^\s#]+(?:\s*#[^\s#]+)*\s*$/u);
@@ -1362,8 +1816,10 @@ function scanButtonMarkup(id) {
 }
 async function scanImage(id) {
   if (scanningImages.has(id)) return;
+  const runId = Date.now(), activityKey = `scan:${id}:${runId}`;
   const place = () => document.querySelector(`.save-card[data-post-id="${id}"] [data-scan-post]`);
   scanningImages.add(id);
+  aiActivity.upsert({ key: activityKey, serverRef: activityKey, kind: 'scan', loaderKind: 'search', state: 'running', title: 'Scanning image', detail: 'Looking closely at the saved image…', postId: id });
   place()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: scanButtonMarkup(id) }).content);
   try {
     const { description, model } = await api('/ai-search/scan', { method: 'POST', body: { post: id } });
@@ -1371,10 +1827,12 @@ async function scanImage(id) {
     const post = state.posts.find(item => item.id === id);
     if (post) { post.imageDescription = description; post.imageDescriptionModel = model; }
     place()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: aiSeenMarkup({ id, imageDescription: description, imageDescriptionModel: model }, true) }).content);
+    aiActivity.upsert({ key: activityKey, serverRef: activityKey, kind: 'scan', loaderKind: 'search', state: 'done', title: 'Image described', detail: description || 'Ready for search.', postId: id });
     syncMeaningSearch();
   } catch (error) {
     scanningImages.delete(id);
     place()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: scanButtonMarkup(id) }).content);
+    aiActivity.upsert({ key: activityKey, serverRef: activityKey, kind: 'scan', loaderKind: 'search', state: 'failed', title: 'Couldn’t scan image', detail: error.message, postId: id });
     toast(error.message, true, 'bottom-center');
   }
 }
@@ -1416,12 +1874,14 @@ document.addEventListener('toggle', event => { const confirm = !event.target.ope
 function embedMetadata(p, savedCard = false, preview = false) {
   const handle = p.author ? `@${String(p.author).replace(/^@+/, '')}` : '';
   const name = p.authorName || handle || platformName(p.platform);
-  const fullCaption = p.text || (p.title !== p.authorName ? p.title : '') || '', caption = preview && p.platform !== 'x' ? previewCaption(fullCaption) : fullCaption;
+  const fullCaption = p.text || (p.title !== p.authorName ? p.title : '') || '', caption = preview && !['x', 'threads'].includes(p.platform) ? previewCaption(fullCaption) : fullCaption;
   const image = p.localImage || p.thumbnail || p.media?.[0];
   const published = Number.isFinite(Date.parse(p.publishedAt));
   const date = published ? p.publishedAt : libraryAddedAt(p);
   const dated = Number.isFinite(Date.parse(date));
-  return `<div class="embed-placeholder"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><strong>${esc(name)}</strong>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div><a class="icon-button embed-open-original" href="${esc(p.url)}" aria-label="Open original post" title="Open original" target="_blank" rel="noopener noreferrer">${icon('arrow')}</a></div>${image ? `${savedCard ? `<div class="embed-capture-image-wrap"><a class="embed-capture-image-link" href="${esc(p.url)}" aria-label="${p.kind === 'video' ? 'Play this video' : 'Open this post'}" target="_blank" rel="noopener noreferrer">` : ''}<img class="embed-capture-image" src="${esc(image)}" alt="" loading="${p.localImage ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer">${savedCard && p.kind === 'video' ? '<span class="embed-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg></span>' : ''}${savedCard ? `</a>${p.localImage ? `<span class="image-saved" tabindex="0" aria-label="Downloaded locally">${icon('double-tick')}<span class="image-saved-label">Downloaded locally</span></span>` : ''}${p.imageDescription ? aiSeenMarkup(p) : p.localImage ? scanButtonMarkup(p.id) : ''}</div>` : ''}` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated && !savedCard ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Added '}${esc(relative(date))}</time>` : ''}<div class="embed-loading" role="status"><span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading preview…</span></div></div>`;
+  const added = libraryAddedAt(p), addedTime = Date.parse(added);
+  const addedLabel = savedCard && Number.isFinite(addedTime) ? `<time class="embed-capture-added" datetime="${esc(added)}" title="Added to saveXtension on ${esc(new Date(addedTime).toLocaleString())}">${esc(addedWhen(added))}</time>` : '';
+  return `<div class="embed-placeholder"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><span class="embed-capture-name"><strong>${esc(name)}</strong>${addedLabel}</span>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div><a class="icon-button embed-open-original" href="${esc(p.url)}" aria-label="Open original post" title="Open original" target="_blank" rel="noopener noreferrer">${icon('arrow')}</a></div>${image ? `${savedCard ? `<div class="embed-capture-image-wrap"><a class="embed-capture-image-link" href="${esc(p.url)}" aria-label="${p.kind === 'video' ? 'Play this video' : 'Open this post'}" target="_blank" rel="noopener noreferrer">` : ''}<img class="embed-capture-image" src="${esc(image)}" alt="" loading="${p.localImage ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer">${savedCard && p.kind === 'video' ? '<span class="embed-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg></span>' : ''}${savedCard ? `</a>${p.localImage ? `<span class="image-saved" tabindex="0" aria-label="Downloaded locally">${icon('double-tick')}<span class="image-saved-label">Downloaded locally</span></span>` : ''}${p.imageDescription ? aiSeenMarkup(p) : p.localImage ? scanButtonMarkup(p.id) : ''}</div>` : ''}` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated && !savedCard ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Added '}${esc(relative(date))}</time>` : ''}<div class="embed-loading" role="status"><span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading preview…</span></div></div>`;
 }
 // An image link can expire before a copy is saved, so drop the picture instead of showing it broken.
 function watchSavedImages(cards) {
@@ -1467,10 +1927,10 @@ function feedCardSource(post) {
 }
 
 function card(p) {
-  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && native && (p.platform !== 'pinterest' || (p.collections || []).some(item => item.platform === 'pinterest')) && (p.accounts || []).some(account => /^@[\w.]+$/.test(account)), canDoc = state.localMode && !state.demo, docBusy = docAiRunning(p.id), docLabel = docBusy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
+  const native = p.platform !== 'chrome' && !!embedTarget(p.url), showNote = noteOpen(p), canUnsave = state.localMode && !state.demo && (p.platform === 'chrome' || native && p.platform !== 'threads' && (p.platform !== 'pinterest' || (p.collections || []).some(item => item.platform === 'pinterest')) && (p.accounts || []).some(account => /^@[\w.]+$/.test(account))), unsaveLabel = p.platform === 'chrome' ? 'Delete from Chrome' : `Unsave on ${platformName(p.platform)}`, canDoc = state.localMode && !state.demo, docBusy = docAiRunning(p.id), docLabel = docBusy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
   return `<article class="save-card ${p.platform} ${native ? 'has-native-embed' : ''}" data-post-id="${p.id}"><div class="card-content">
     <div class="card-body">
-    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button" data-action="copy-post-link" aria-label="Copy post link" title="Copy post link">${icon('link')}</button>${canDoc ? `<button class="icon-button" data-action="send-to-document" ${docBusy ? 'data-busy="true"' : ''} aria-label="${esc(docLabel)}" title="${esc(docLabel)}">${docBusy ? dotLoader('write') : icon('file')}</button>` : ''}${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="Unsave on ${platformName(p.platform)}" title="Unsave on ${platformName(p.platform)}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
+    <header class="card-header"><div class="card-actions"><button class="icon-button" data-action="copy-post" aria-label="Copy post reference" title="Copy post reference">${icon('copy')}</button><button class="icon-button" data-action="copy-post-link" aria-label="Copy post link" title="Copy post link">${icon('link')}</button>${canDoc ? `<button class="icon-button" data-action="send-to-document" ${docBusy ? 'data-busy="true"' : ''} aria-label="${esc(docLabel)}" title="${esc(docLabel)}">${docBusy ? dotLoader('write') : icon('file')}</button>` : ''}${native && LIVE_CARD_PREVIEWS ? `<button class="icon-button" data-action="retry-preview" aria-label="Retry post preview" title="Retry preview">${icon('refresh')}</button>` : ''}<button class="icon-button" data-archive="${p.id}" ${SHOW_ARCHIVE ? '' : 'hidden'} aria-label="${p.archived ? 'Restore save' : 'Archive save'}" title="${p.archived ? 'Restore to saves' : 'Archive'}">${icon(p.archived ? 'restore' : 'archive')}</button>${canUnsave ? `<button class="icon-button unsave-button" data-action="unsave" aria-label="${unsaveLabel}" title="${unsaveLabel}">${icon('unsave')}</button>` : ''}<button class="icon-button note-button" data-open="${p.id}" aria-label="Edit note" title="Edit note" aria-expanded="${showNote}" aria-controls="note-section-${p.id}">${icon('pencil')}</button></div>${cardPlatform(p)}</header>
     <div class="card-layout">${feedCardSource(p)}<section class="card-note" id="note-section-${p.id}" ${showNote ? '' : 'hidden'}><label class="sr-only" for="note-${p.id}">Note</label><div class="note-editor"><textarea class="note-input" id="note-${p.id}" name="notes" rows="3" maxlength="10000" placeholder="${state.cardView === 'feed' ? 'No notes added yet.' : 'Add a note…'}" ${state.demo || noteAiRunning(p.id) ? 'readonly' : ''}>${esc(notes.value(p))}</textarea><div class="note-link-preview" hidden></div></div><button type="button" class="note-more" data-action="toggle-note-preview" hidden>Read more</button>${noteFoot(p)}</section>
     <div class="card-preview">${nativePreview(p)}</div>
     <footer class="card-footer"><button type="button" class="collection-add" data-action="add-collection" aria-label="Add to topic" title="Add to topic" aria-haspopup="dialog" aria-controls="collection-picker" aria-expanded="false" ${state.demo ? 'disabled' : ''}>${icon('plus')}</button><div class="card-tags">${[...new Set(p.topics)].map(t => `<span class="tag-pill"><button type="button" class="tag-icon" data-action="remove-topic" data-topic-name="${esc(t)}" aria-label="Remove from “${esc(t)}”" title="Remove from this topic"${state.demo ? ' disabled' : ''}>${icon('folder', 'tag-folder')}${icon('close', 'tag-close')}</button><button class="tag" data-topic="${esc(t)}">${esc(t)}</button></span>`).join('')}</div></footer></div>
@@ -1603,7 +2063,7 @@ const noteAiOpen = new Set(), noteAiDrafts = new Map(), noteAiErrors = new Map()
 let noteAiModels = [];
 // Running or waiting: either way the note is spoken for.
 const noteAiRunning = id => noteAiBusyState(noteAiJobs.get(id));
-const noteAiWaitLabel = job => job.position > 1 ? `Waiting · ${job.position} notes ahead` : 'Waiting for the other note';
+const noteAiWaitLabel = job => job.position > 1 ? `Waiting · ${job.position} notes ahead` : job.waitingFor === 'document' ? 'Waiting for a document to finish' : 'Waiting for the other note';
 function noteAiBoxInner(id) {
   const job = noteAiJobs.get(id);
   if (job?.state === 'running') return `<div class="note-ai-working" role="status">${dotLoader('write')}<span class="note-ai-step">${esc(job.step || 'Starting')}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
@@ -1670,8 +2130,8 @@ async function followNoteAi() {
         const job = jobs.find(item => item.post === id && item.id === known.id) || { ...known, state: 'cancelled' };
         noteAiJobs.set(id, job);
         // A waiting note that starts, or moves up the line, is redrawn. A running one only updates its step.
-        if (job.state !== known.state || job.position !== known.position) { if (noteAiBusyState(job)) paintNoteAi(id); else finishNoteAi(job); }
-        else if (job.state === 'running' && job.step !== known.step) document.querySelectorAll(`[data-note-ai-box="${id}"] .note-ai-step`).forEach(step => { step.textContent = `${job.step}…`; });
+        if (job.state !== known.state || job.position !== known.position || job.waitingFor !== known.waitingFor) { if (noteAiBusyState(job)) { paintNoteAi(id); syncNoteAiActivity(job); } else finishNoteAi(job); }
+        else if (job.state === 'running' && job.step !== known.step) { document.querySelectorAll(`[data-note-ai-box="${id}"] .note-ai-step`).forEach(step => { step.textContent = `${job.step}…`; }); syncNoteAiActivity(job); }
       }
     }
   } finally { noteAiFollowing = false; }
@@ -1680,7 +2140,7 @@ function finishNoteAi(job) {
   const { post: id, state: outcome, notes: text, before, updatedAt, error } = job;
   if (outcome === 'failed') noteAiErrors.set(id, error);
   if (outcome === 'done') {
-    noteAiOpen.delete(id); noteAiDrafts.delete(id); noteAiErrors.delete(id); noteAiChoice.delete(id); noteAiUndo.set(id, { before, after: text });
+    noteAiOpen.delete(id); noteAiDrafts.delete(id); noteAiErrors.delete(id); noteAiChoice.delete(id); noteAiUndo.set(id, { before, after: text, jobId: job.id });
     state.posts = notes.overlay(state.posts.map(item => item.id === id ? { ...item, notes: text, updatedAt } : item));
     updateCollection();
     const post = allPosts().find(item => item.id === id), card = document.querySelector(`.save-card[data-post-id="${id}"]`);
@@ -1693,6 +2153,7 @@ function finishNoteAi(job) {
     if (panelField && noteViewPost?.id === id) { panelField.value = text; syncNoteLinks(panelField); showNoteAiUndo(postPanel, post); shineNote(panelField.closest('.card-note')); }
     syncMeaningSearch();
   }
+  syncNoteAiActivity(job);
   paintNoteAi(id);
   if (outcome === 'failed') focusNoteAi(id);
 }
@@ -1709,12 +2170,13 @@ async function startNoteAi(id, request) {
     const { job } = await api('/note-ai', { method: 'POST', body: { post: id, request, model: noteAiChoice.get(id) } });
     noteAiJobs.set(id, job);
     noteAiUndo.delete(id); document.querySelectorAll(`[data-note-ai-undo="${id}"]`).forEach(button => button.remove());
-    paintNoteAi(id); void followNoteAi();
+    syncNoteAiActivity(job); paintNoteAi(id); void followNoteAi();
   } catch (error) { noteAiErrors.set(id, error.message); paintNoteAi(id); focusNoteAi(id); }
 }
 async function undoNoteAi(id, button) {
   const post = allPosts().find(item => item.id === id), undo = noteAiUndo.get(id);
   noteAiUndo.delete(id); document.querySelectorAll(`[data-note-ai-undo="${id}"]`).forEach(control => control.remove());
+  if (undo?.jobId) aiActivity.upsert({ key: `note:${undo.jobId}`, canUndo: false, undone: true, detail: 'Undone — restored previous note' });
   if (!post || !undo || notes.value(post) !== undo.after) return;
   notes.edit(post, undo.before); state.posts = notes.overlay(state.posts);
   const card = document.querySelector(`.save-card[data-post-id="${id}"]`), current = allPosts().find(item => item.id === id);
@@ -1734,7 +2196,7 @@ document.addEventListener('click', event => {
   } else if (cancel) {
     event.preventDefault();
     const id = Number(cancel.closest('[data-note-ai-box]')?.dataset.noteAiBox); cancel.disabled = true;
-    void api('/note-ai', { method: 'DELETE', body: { post: id } }).then(({ job }) => { if (job?.post === id) noteAiJobs.set(id, job); paintNoteAi(id); focusNoteAi(id); }).catch(error => { cancel.disabled = false; toast(error.message, true, 'bottom-center'); });
+    void api('/note-ai', { method: 'DELETE', body: { post: id } }).then(({ job }) => { if (job?.post === id) noteAiJobs.set(id, job); syncNoteAiActivity(job || { id: noteAiJobs.get(id)?.id, post: id, state: 'cancelled' }); paintNoteAi(id); focusNoteAi(id); }).catch(error => { cancel.disabled = false; toast(error.message, true, 'bottom-center'); });
   } else if (undo) { event.preventDefault(); void undoNoteAi(Number(undo.dataset.noteAiUndo), undo); }
   // The button has become the box, so clicking away is what closes it. What was typed is kept for next time.
   if (toggle || !event.target.isConnected || event.target.closest?.('.select-menu')) return;
@@ -1783,6 +2245,7 @@ function paintSendDocumentRunning() {
     try {
       ({ job: docAiJob } = await api('/document-ai', { method: 'DELETE', body: {} }));
       paintDocAiButtons();
+      syncDocAiActivity(docAiJob);
       if (postId) await openSendToDocument(postId); else modal.close();
     } catch (error) { event.currentTarget.disabled = false; toast(error.message, true, 'bottom-center'); }
   };
@@ -1797,7 +2260,7 @@ async function openSendToDocument(postId) {
   try {
     const [{ documents }, { job }] = await Promise.all([api('/documents'), api('/document-ai')]);
     if (job?.state === 'running') {
-      docAiJob = job; paintDocAiButtons(); paintSendDocumentRunning(); void followDocAi();
+      docAiJob = job; paintDocAiButtons(); syncDocAiActivity(job); paintSendDocumentRunning(); void followDocAi();
       return;
     }
     if (!documents.length) {
@@ -1855,7 +2318,7 @@ async function openSendToDocument(postId) {
       try {
         await notes.flush(post);
         ({ job: docAiJob } = await api('/document-ai', { method: 'POST', body: { post: id, documentId: docAiLastDocument, request: requestField.value, model: modelSelect?.value || chosenModel } }));
-        paintDocAiButtons(); paintSendDocumentRunning(); void followDocAi();
+        paintDocAiButtons(); syncDocAiActivity(docAiJob); paintSendDocumentRunning(); void followDocAi();
       } catch (error) {
         docAiError = error.message;
         await openSendToDocument(id);
@@ -1877,6 +2340,7 @@ async function followDocAi() {
       if (job?.state === 'running') {
         if (stepChanged) {
           paintDocAiButtons();
+          syncDocAiActivity(job);
           if (modal.open && modal.dataset.sendDocument) {
             const step = $('.send-document-step', modal);
             if (step) step.textContent = `${job.step}…`;
@@ -1890,31 +2354,18 @@ async function followDocAi() {
   } finally { docAiFollowing = false; }
 }
 function finishDocAi(job) {
+  if (job.state === 'cancelled') { syncDocAiActivity(job); return; }
   if (job.state === 'failed') {
     docAiError = job.error || 'Couldn’t update that document.';
+    syncDocAiActivity(job);
     if (modal.open && modal.dataset.sendDocument) void openSendToDocument(job.post);
-    else toast(docAiError, true, 'bottom-center');
     return;
   }
   if (job.state !== 'done') return;
   docAiError = ''; docAiDrafts.delete(job.post);
   documentUi?.refresh(); documentUi?.reloadIfOpen(job.documentId);
   if (modal.open && modal.dataset.sendDocument) modal.close();
-  const actions = [{ label: 'Open document', onClick: () => { hideToast(); void documentUi?.open(job.documentId); } }];
-  if (job.changed && job.changeId) {
-    actions.push({
-      label: 'Undo',
-      onClick: async button => {
-        button.disabled = true;
-        try {
-          await api('/document-ai/undo', { method: 'POST', body: { changeId: job.changeId } });
-          documentUi?.refresh(); documentUi?.reloadIfOpen(job.documentId);
-          toast('Undone.', false, 'bottom-center');
-        } catch (error) { toast(error.message, true, 'bottom-center'); }
-      }
-    });
-  }
-  toastWithActions(job.summary || `Updated “${job.documentTitle}”.`, actions);
+  syncDocAiActivity(job);
 }
 function syncCardNote(card, post, immediate = false, preview = true) {
   const section = $('.card-note',card), field = $('.note-input',card), label = $('.note-status',card);
@@ -1979,10 +2430,26 @@ function editNote(id) {
 window.addEventListener('resize', () => { if (!CSS.supports('field-sizing','content')) document.querySelectorAll('.note-input').forEach(sizeNote); }, {passive:true});
 // Preserve the iframe itself while background sync refreshes metadata around it.
 const cardVersions = new WeakMap();
-// Posts first added today carry a small "New" tag on the post's top edge.
+// The latest AI job on a post, while it's in AI activity.
+function aiPostItem(id) { let latest = null; for (const item of aiActivityList) if (Number(item.postId) === id && (!latest || (item.createdAt || 0) >= (latest.createdAt || 0))) latest = item; return latest; }
+function aiTagMarkup(item) {
+  const active = item.state === 'running' || item.state === 'waiting';
+  const mark = item.state === 'running' ? dotLoader(item.loaderKind || 'write') : icon(item.state === 'waiting' ? 'clock' : item.state === 'failed' ? 'warning' : 'sparkle');
+  return `<span class="ai-tag-icon" aria-hidden="true">${mark}</span><span class="ai-tag-text">${esc(item.title)}</span>${active ? '' : `<button type="button" class="ai-tag-ack" data-ai-ack="${esc(item.key)}" aria-label="Got it: ${esc(item.title)}" title="Got it">${icon('check')}</button>`}`;
+}
+// Posts first added today carry a small "New" tag on the post's top edge. While AI works on a post, or has
+// just finished, that spot says what it's doing or did instead, and its tick dismisses it (user's decision).
 function markNew(card, post) {
-  const fresh = addedTimeGroup(libraryAddedAt(post)).key === 'added-today', layout = $('.card-layout', card);
+  const fresh = addedTimeGroup(libraryAddedAt(post)).key === 'added-today', layout = $('.card-layout', card), ai = aiPostItem(post.id);
   let tag = $(':scope > .new-tag', layout);
+  if (ai) {
+    if (!tag?.classList.contains('ai-tag')) { tag?.remove(); tag = document.createElement('span'); tag.className = 'new-tag ai-tag'; layout.prepend(tag); }
+    const html = aiTagMarkup(ai);
+    if (tag.dataset.html !== html) { tag.innerHTML = html; tag.dataset.html = html; }
+    tag.dataset.state = ai.state; tag.title = [ai.title, ai.detail].filter(Boolean).join(' · ');
+    return;
+  }
+  if (tag?.classList.contains('ai-tag')) { tag.remove(); tag = null; }
   if (!fresh) { tag?.remove(); return; }
   if (!tag) { tag = document.createElement('span'); tag.className = 'new-tag'; tag.textContent = 'New'; tag.title = 'Added to saveXtension today'; layout.prepend(tag); }
 }
@@ -2046,7 +2513,7 @@ function reconcileCards(sections) {
 function updateCollection() {
   if (!$('#results')) return render();
   const posts = allPosts(), live = posts.filter(p => !p.archived);
-  const counts = { all: live.length, x: live.filter(p => p.platform === 'x').length, instagram: live.filter(p => p.platform === 'instagram').length, chrome: live.filter(p => p.platform === 'chrome').length };
+  const counts = { all: live.length, x: live.filter(p => p.platform === 'x').length, instagram: live.filter(p => p.platform === 'instagram').length, threads: live.filter(p => p.platform === 'threads').length, chrome: live.filter(p => p.platform === 'chrome').length };
   document.querySelectorAll('[data-filter]').forEach(button => { const count = button.querySelector('.nav-count'); if (count) { count.textContent = counts[button.dataset.filter]; button.setAttribute('aria-label', `${button.dataset.navLabel} ${counts[button.dataset.filter]}`); } });
   const archive = $('.archive-nav'); if (archive) { const count = posts.length - live.length; $('.nav-count', archive).textContent = count; archive.setAttribute('aria-label', `Archived ${count}`); }
   renderResults();
@@ -2073,7 +2540,7 @@ async function handleUnsaveStatus(job) {
           state.posts=state.posts.filter(post=>post.id!==job.post_id);
         }else state.posts=state.posts.map(post=>post.id===job.post_id?{...post,accounts:post.accounts.filter(account=>account.toLowerCase()!==job.account.toLowerCase()),collections:(post.collections||[]).filter(collection=>collection.account?.toLowerCase()!==job.account.toLowerCase())}:post);
         collectionVersion++;updateCollection();await refresh(true);
-        const message = job.verify_only ? job.message : job.phase === 'checking' ? job.deleted ? 'Removed from saveXtension.' : `Removed from ${job.account}’s saves.` : `Unsaved on ${platformName(job.platform)}.`;
+        const message = job.verify_only || job.platform === 'chrome' ? job.message : job.phase === 'checking' ? job.deleted ? 'Removed from saveXtension.' : `Removed from ${job.account}’s saves.` : `Unsaved on ${platformName(job.platform)}.`;
         toast(message,false,'bottom-center');
       }else if(!job.verify_only)toast(job.message||'Couldn’t verify the unsave. Check the original post.',true,'bottom-center');
     }
@@ -2101,7 +2568,7 @@ function renderUnsaving() {
     }
     if (!active) { overlay?.remove(); continue; }
     if (!overlay) { overlay = document.createElement('div'); overlay.className = 'unsave-overlay'; overlay.setAttribute('role', 'status'); target.append(overlay); }
-    const text = job.verify_only ? `Checking on ${platformName(job.platform)}…` : `Unsaving on ${platformName(job.platform)}…`;
+    const text = job.platform === 'chrome' ? 'Deleting from Chrome…' : job.verify_only ? `Checking on ${platformName(job.platform)}…` : `Unsaving on ${platformName(job.platform)}…`;
     if (overlay.textContent !== text) overlay.innerHTML = `<span class="unsave-label"><span class="embed-loading-spinner" aria-hidden="true"></span>${esc(text)}</span>`;
   }
 }
@@ -2241,6 +2708,7 @@ postPanel.addEventListener('close', () => { for (const animation of postPanel.ge
     noteViewPost = null;
     if (post && card) syncCardNote(card, post);
   }
+  aiActivity.flushAnnouncements();
 });
 // Dragging either side edge resizes the panel, which stays against the right of the window. A double-click restores the default.
 postPanel.addEventListener('pointerdown', event => {
@@ -2262,6 +2730,9 @@ const unsaveLine = [];
 let startingUnsave = false;
 async function openUnsave(button) {
   const post=allPosts().find(post=>post.id===Number(button.closest('[data-post-id]').dataset.postId));if(!post||state.demo)return;
+  // A bookmark is deleted by the extension in Chrome, so without it this only explains how to connect it.
+  const helper=state.sync?.chromeBrowser;
+  if(post.platform==='chrome'&&window.saveXDesktop&&state.sync?.nativeSocial&&(!helper?.online||!helper.bookmarkDelete)){chromeHelperPage('unsave');return;}
   await unsaveDialog(post,{api,showModal,modal,esc,icon,sourceIcon,onConfirm:account=>{
     if(!unsaveLine.some(item=>item.postId===post.id))unsaveLine.push({postId:post.id,account});
     renderSync();void nextUnsave();
@@ -2354,7 +2825,7 @@ function setupDialog(mode, targets, download = false, syncMode = 'quick', reques
     showModal('<h2>Connect accounts</h2><p>Sign in once. Your accounts stay connected on this computer.</p><section id="native-connect-panel" class="section-gap"></section><p class="setup-status" id="setup-status" role="status">Your scan starts after your accounts are connected.</p>');
     modal.dataset.syncSetup = mode; state.pendingTargets = targets; state.pendingSyncRequest = request; state.pendingMode = syncMode;
     const handles = value => Array.isArray(value) ? value : value?.startsWith('@') ? [value] : [];
-    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, connect: options => connectAccount(options), platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount), pinterest: handles(request.pinterestAccount) }, onChange: () => void syncStatus() });
+    mountSocialAccounts($('#native-connect-panel'), { esc, icon, sourceIcon, connect: options => connectAccount(options), platforms, expected: { x: handles(request.xAccount), instagram: handles(request.instagramAccount), pinterest: handles(request.pinterestAccount), threads: [] }, onChange: () => void syncStatus() });
     return;
   }
   const missing = mode === 'missing', offline = mode === 'offline', chromeBookmarks = targets.includes('chrome');
@@ -2397,12 +2868,6 @@ async function checkSetup() {
 function saveSyncAccounts(selected) {
   state.syncAccounts = [...new Set(selected)];
   localStorage.setItem('savex-sync-accounts', JSON.stringify(state.syncAccounts));
-}
-function allSourcesScanDialog() {
-  const withPinterest = !!state.sync?.nativeSocial?.enabled;
-  showModal(`<h2>Refresh all sources</h2><div class="scan-source-summary" role="img" aria-label="${withPinterest ? 'X, Instagram, Pinterest and Chrome' : 'X, Instagram and Chrome'}">${sourceIcon('x')}${sourceIcon('instagram')}${withPinterest ? sourceIcon('pinterest') : ''}${sourceIcon('chrome')}</div><div class="scan-choices"><button class="scan-choice" data-action="scan-all" data-scan-mode="quick" aria-label="Quick scan" aria-describedby="quick-scan-description"><strong>Quick scan</strong><span id="quick-scan-description">New saves</span></button><button class="scan-choice" data-action="scan-all" data-scan-mode="deep" aria-label="Deep scan" aria-describedby="deep-scan-description"><strong>Deep scan</strong><span id="deep-scan-description">Full history · takes longer</span></button></div>`);
-  modal.dataset.syncOptions = 'true'; modal.dataset.allSourcesScan = 'true'; modal.classList.add('all-sources-scan-dialog');
-  $('[data-action="scan-options"]')?.setAttribute('aria-expanded', 'true'); renderSync();
 }
 function syncOptionsDialog() {
   showModal(`<h2 id="sync-options-heading">Sync accounts</h2><fieldset class="sync-account-fieldset"><legend>Accounts</legend><div class="filter-choices" id="sync-account-choices"></div></fieldset><div class="sync-options-actions"><div class="deep-scan-control" id="deep-scan-control"><button class="secondary" data-action="deep-sync">Deep scan</button><button type="button" class="icon-button deep-scan-info" aria-label="About deep scans" aria-describedby="deep-scan-tooltip">${icon('info')}</button><span class="deep-scan-tooltip" id="deep-scan-tooltip" role="tooltip">Checks older saves across your selected accounts. Large libraries can take a while; you can keep browsing while it runs.</span></div><button class="primary" data-action="sync">${icon('refresh')} Sync now</button></div>`);
@@ -2450,13 +2915,13 @@ function renderSync() {
   void nextUnsave();
   styleSelects(app); if (modal.dataset.syncOptions) styleSelects(modal);
   const options = $('[data-action="sync-options"]'); if (options) options.disabled = !!busy || state.syncChecking;
-  const allRefresh = $('[data-action="scan-options"]'); if (allRefresh) { allRefresh.disabled = !!busy || unsaveBusy || state.syncChecking; allRefresh.setAttribute('aria-busy', String(!!busy || unsaveBusy || state.syncChecking)); }
+  const allRefresh = $('[data-action="refresh-all"]'); if (allRefresh) { allRefresh.disabled = !!busy || unsaveBusy || state.syncChecking; allRefresh.setAttribute('aria-busy', String(!!busy || unsaveBusy || state.syncChecking)); }
   const timestamp = lastSyncTime(state.sync, state.runs), age = syncAge(timestamp);
-  document.querySelectorAll('[data-action="sync"],[data-action="deep-sync"],[data-action="scan-all"]').forEach(button => {
-    button.disabled = !!busy || state.syncChecking || (button.dataset.action !== 'scan-all' && !sourceTargets().length);
+  document.querySelectorAll('[data-action="sync"],[data-action="deep-sync"]').forEach(button => {
+    button.disabled = !!busy || state.syncChecking || !sourceTargets().length;
     button.setAttribute('aria-busy', String(!!busy || state.syncChecking));
     if (button.dataset.action === 'deep-sync') { button.hidden = !sourceTargets().some(target => target !== 'chrome'); $('#deep-scan-control').hidden = button.hidden; return; }
-    if (button.dataset.action !== 'scan-all') button.title = timestamp ? `Last synced ${new Date(timestamp).toLocaleString()} · Click to sync` : 'Sync your saves';
+    button.title = timestamp ? `Last synced ${new Date(timestamp).toLocaleString()} · Click to sync` : 'Sync your saves';
   });
   const label = $('#last-sync-label');
   if (label) label.textContent = state.syncChecking ? 'Checking…' : busy ? job.status === 'queued' ? 'Sync queued…' : job.mode === 'deep' ? 'Deep scanning…' : 'Syncing…' : age ? `Synced ${age}` : 'Not synced yet';
@@ -2576,7 +3041,7 @@ function renderSyncToast(job, busy, message) {
   }
   clearTimeout(syncToastTimer); syncReportTimers.clear();
   const targets = checking ? ['chrome'] : job?.targets || [];
-  const active = /instagram/i.test(message) ? 'instagram' : /pinterest/i.test(message) ? 'pinterest' : /\bX\b|twitter/i.test(message) ? 'x' : /chrome/i.test(message) ? 'chrome' : targets.length === 1 ? targets[0] : '';
+  const active = /threads/i.test(message) ? 'threads' : /instagram/i.test(message) ? 'instagram' : /pinterest/i.test(message) ? 'pinterest' : /\bX\b|twitter/i.test(message) ? 'x' : /chrome/i.test(message) ? 'chrome' : targets.length === 1 ? targets[0] : '';
   const sources = active ? [active] : targets;
   const sourceName = active ? platformName(active) : 'saves';
   const title = checking ? 'Connecting to Chrome' : job.status === 'queued' ? 'Sync queued' : busy ? `${job.mode === 'deep' ? 'Deep scanning' : 'Syncing'} ${sourceName}` : job.status === 'failed' ? 'Sync needs attention' : job.status === 'partial' ? 'Sync finished with a few issues' : 'Sync complete';
@@ -2850,7 +3315,7 @@ export function parseImport(content, name = '') {
     if (typeof url !== 'string') return;
     if (metadata.platform === 'chrome') { try { const u = new URL(url); if (['http:', 'https:'].includes(u.protocol) && !u.username && !u.password) found.set('chrome:' + u.href, { ...metadata, url: u.href }); } catch {} return; }
     const normalized = url.replace(/&amp;/g, '&');
-    if (!/^https?:\/\/(?:www\.|mobile\.)?(?:(?:x|twitter)\.com\/(?:\w+|i\/web)\/status\/\d+|instagram\.com\/(?:p|reels?|tv)\/[\w-]+)/i.test(normalized) && !isPinterestPin(normalized)) return;
+    if (!/^https?:\/\/(?:www\.|mobile\.)?(?:(?:x|twitter)\.com\/(?:\w+|i\/web)\/status\/\d+|instagram\.com\/(?:p|reels?|tv)\/[\w-]+|threads\.(?:com|net)\/@[\w.]+\/post\/[\w-]+)/i.test(normalized) && !isPinterestPin(normalized)) return;
     const p = { ...metadata, url: normalized }; found.set(normalized.split('?')[0], { ...found.get(normalized.split('?')[0]), ...p });
   }
   if (/\.html?$/i.test(name)) {
@@ -2873,7 +3338,7 @@ export function parseImport(content, name = '') {
 }
 
 function accountMenuTrigger(target) {
-  return target.closest('[data-instagram-collection]') || target.closest('.source-account-group')?.querySelector('[data-nav-account]') || target.closest('[data-filter="chrome"]');
+  return target.closest('[data-instagram-collection]') || target.closest('.source-account-group')?.querySelector('[data-nav-account]') || target.closest('[data-filter="all"],[data-filter="chrome"]');
 }
 document.addEventListener('contextmenu', event => {
   const collection = event.target.closest('[data-collection-id]');
@@ -2897,12 +3362,12 @@ document.addEventListener('click', async e => {
   }
   try {
     if (e.shiftKey && (button.dataset.navAccount || button.dataset.instagramCollection || button.dataset.navTopic || button.dataset.filter === 'chrome')) { toggleSidebarPick(button); return; }
-    if (button.dataset.filter) { if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; } state.filters.sources = button.dataset.filter === 'all' ? [] : [button.dataset.filter]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.accounts = []; state.filters.topics = []; updateCollection(); renderSync(); }
+    if (button.dataset.filter) { if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; } state.filters.aiActivity = false; state.filters.sources = button.dataset.filter === 'all' ? [] : [button.dataset.filter]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.accounts = []; state.filters.topics = []; updateCollection(); renderSync(); }
     else if (button.dataset.navAccount) {
       if (state.archive) { state.archive = false; state.filters = defaultFilters(); state.query = ''; $('#search').value = ''; }
       const value = button.dataset.navAccount;
       if (/^(?:instagram|pinterest):/.test(value)) toggleInstagramCollections(value);
-      state.filters.sources = [value.split(':')[0]]; state.filters.accounts = [value]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.topics = [];
+      state.filters.aiActivity = false; state.filters.sources = [value.split(':')[0]]; state.filters.accounts = [value]; state.filters.folder = ''; state.filters.collection = ''; state.filters.collectionName = ''; state.filters.topics = [];
       updateCollection();
     }
     else if (button.dataset.instagramCollection) {
@@ -2959,11 +3424,12 @@ document.addEventListener('click', async e => {
       case 'toggle-settings-panel': toggleSettingsPanel(button); break;
       case 'organize-topics': void openOrganize(); break;
       case 'chrome-helper-page': chromeHelperPage(button.dataset.from || ''); break;
+      case 'check-chrome-helper': button.disabled = true; await api('/sync/chrome-check', { method: 'POST', body: {} }); await syncStatus(); break;
       case 'chrome-helper-back': if (chromeHelperFrom === 'signin' && pendingSignIn) signInPrompt(); else closeSheet(); break;
       case 'close-sheet': closeSheet(); break;
       case 'continue-sign-in': { const pending = pendingSignIn; closeSheet(); await pending?.start(); break; }
-      case 'save-chrome-helper': try { chromeSetup.saved = (await window.saveXDesktop.saveHelper()).path; refreshSetupPanel(); } catch (failure) { toast(failure.message, true); } break;
-      case 'open-downloads': try { await window.saveXDesktop.openDownloads(); } catch (failure) { toast(failure.message, true); } break;
+      case 'save-chrome-helper': try { const saved = await window.saveXDesktop.saveHelper(); chromeSetup.saved = typeof saved === 'object' ? saved : { path: saved }; chromeSetup.justSaved = true; refreshSetupPanel(); clearTimeout(chromeSetup.savedTimer); chromeSetup.savedTimer = setTimeout(() => { chromeSetup.justSaved = false; refreshSetupPanel(); }, 2500); toast(chromeSetup.saved.updated ? 'Extension folder replaced in Downloads' : 'Extension folder saved to Downloads'); } catch (failure) { toast(failure.message, true); } break;
+      case 'open-downloads': try { await window.saveXDesktop.revealHelper(); } catch (failure) { toast(failure.message, true); } break;
       case 'open-chrome-extensions': try { await window.saveXDesktop.openExtensions(); } catch (failure) { toast(failure.message, true); } break;
       case 'install-update': try { await window.saveXDesktop?.installUpdate(); } catch (failure) { toast(failure.message, true); } finally { void refreshUpdate(); } break;
       case 'copy-post': await copyPostReference(button); break;
@@ -2988,8 +3454,7 @@ document.addEventListener('click', async e => {
         const request=collectionRefreshRequest(button.dataset.syncCollection);if(request)await startSync('quick',request);
         break;
       }
-      case 'scan-options': allSourcesScanDialog(); break;
-      case 'scan-all': await startSync(button.dataset.scanMode === 'deep' ? 'deep' : 'quick', { targets: connectedTargets(['chrome', 'x', 'instagram', 'pinterest']), xAccount: 'all' }); break;
+      case 'refresh-all': await startSync('quick', allSourcesRefreshRequest()); break;
       case 'sync-options': syncOptionsDialog(); break;
       case 'sync': await startSync(); break;
       case 'deep-sync': await startSync('deep'); break;

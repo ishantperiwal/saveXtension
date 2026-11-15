@@ -38,3 +38,10 @@ test('explicit account subsets persist and cannot be claimed by helpers that wou
     assert.equal(queue.claim('updated-helper', true, { selectedAccounts: true }).id, job.id);
   } finally { store.close(); }
 });
+
+test('Threads appears as a sync choice once the library has Threads saves, and becomes its own target', () => {
+  const thread = { platform: 'threads', accounts: ['@me'], archived: false };
+  assert.equal(syncAccountOptions([], {}).some(option => option.platform === 'threads'), false);
+  assert.deepEqual(syncAccountOptions([thread], {}).find(option => option.platform === 'threads'), { value: 'threads:current', platform: 'threads', label: 'Threads', count: 1 });
+  assert.deepEqual(syncSelectionRequest(['threads:current', 'x:current']).targets, ['x', 'threads']);
+});

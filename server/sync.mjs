@@ -40,7 +40,15 @@ export function syncQueue(store, { native = false } = {}) {
     store.db.prepare("UPDATE sync_runs SET status='partial',message='Sync was interrupted. Imported saves are kept.',finished_at=? WHERE status='running'").run(now);
   }
   let browser = null;
+  // When someone asks to check the Chrome helper again. The app can't reach Chrome, only hear from it.
+  let chromeCheckAt = 0;
+  // While Chrome's helper can reach the app it checks in every 2 seconds, so when someone asks, a few missed
+  // check-ins mean it's gone (removed, or Chrome closed). Unasked, it gets longer, since a scan can keep it busy
+  // for a while. On its 30-second alarm, waits stay long.
+  const chromeWaits = helper => helper.pace && helper.pace < 5000 ? { gone: 45000, check: 6000 } : { gone: 90000, check: 40000 };
   try { browser = JSON.parse(store.get('sync_browser') || 'null'); } catch { /* First launch. */ }
+  // After a restart the helper may still be on its slow retry, so its pace is learned again.
+  if (browser) browser.pace = 0;
   let setupRequest = null;
   let accountScanRequested = false;
   let xAccounts = null;
@@ -59,7 +67,9 @@ export function syncQueue(store, { native = false } = {}) {
       if (job && ['queued', 'running'].includes(job.status) && Date.now() - Date.parse(job.updated_at) > (job.status === 'queued' ? 5 : 25) * 60000) {
         store.db.prepare("UPDATE sync_jobs SET status='failed', message='Sync was interrupted. Click Sync to try again.' WHERE id=?").run(job.id);
       }
-      const chrome = browser && { ...browser, online: Date.now() - browser.seenAt < 90000 };
+      const unanswered = browser && chromeCheckAt > browser.seenAt;
+      const waits = browser && chromeWaits(browser), heard = browser && Date.now() - browser.seenAt < waits.gone;
+      const chrome = browser && { ...browser, online: heard && !(unanswered && Date.now() - chromeCheckAt > waits.check), checking: heard && !!unanswered && Date.now() - chromeCheckAt <= waits.check };
       const nativeOnline = !!nativeBrowser && Date.now() - nativeBrowser.seenAt < 90000;
       const connected = nativeAccounts.filter(account => account.status === 'connected');
       return { job: latest(), browser: native ? { ...chrome, name: 'saveXtension', online: nativeOnline, ready: nativeOnline && connected.length > 0, unsave: nativeOnline, bookmarksSupported: true, bookmarksReady: nativeOnline, accountSwitching: true, selectedAccounts: true, syncModes: true, instagramCollections: true, instagramSaveLists: true } : chrome, ...(native ? { nativeSocial: { enabled: true, online: nativeOnline, accounts: nativeAccounts }, chromeBrowser: chrome, chromeBookmarkTreeAt: store.get('chrome_bookmark_tree_at') || null } : {}), xAccounts, accountScanRequested, lastSyncedAt: lastSync.get().at || null };
@@ -103,6 +113,7 @@ export function syncQueue(store, { native = false } = {}) {
     configureNativeAccounts(accounts) { nativeAccounts = accounts.map(({ id, platform, handle, name, status }) => ({ id, platform, handle, name, status })); },
     nativeHeartbeat(input) { nativeBrowser = { seenAt: Date.now() }; if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, input.instance); },
     nativeStopped() { nativeBrowser = null; },
+    checkChrome() { chromeCheckAt = Date.now(); return this.status().chromeBrowser || null; },
     // The last scan someone asked for, which background checks repeat.
     chosenJob: chosen,
     // What the library shows. A background check stays out of sight unless it found new saves,
@@ -138,7 +149,8 @@ export function syncQueue(store, { native = false } = {}) {
       return latest();
     },
     heartbeat(input) {
-      browser = { chromeSession: input.chromeSession === true, chromeSessionSites: Array.isArray(input.chromeSessionSites) ? input.chromeSessionSites.filter(site => Object.hasOwn(SESSION_SITES, site)) : [], unsave: input.unsave === true, desktopBookmarks: input.desktopBookmarks === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true };
+      const pace = browser?.seenAt ? Date.now() - browser.seenAt : 0;
+      browser = { pace, chromeSession: input.chromeSession === true, chromeSessionSites: Array.isArray(input.chromeSessionSites) ? input.chromeSessionSites.filter(site => Object.hasOwn(SESSION_SITES, site)) : [], unsave: input.unsave === true, desktopBookmarks: input.desktopBookmarks === true, seenAt: Date.now(), ready: input.ready === true, name: text(input.name, 80) || 'Chrome', instance: text(input.instance, 100), version: text(input.version, 30), accountSwitching: input.accountSwitching === true, selectedAccounts: input.selectedAccounts === true, syncModes: input.syncModes === true, instagramCollections: input.instagramCollections === true, instagramSaveLists: input.instagramSaveLists === true, bookmarksSupported: input.bookmarksSupported === true, bookmarksReady: input.bookmarksReady === true, bookmarkDelete: input.bookmarkDelete === true };
       store.set('sync_browser', JSON.stringify(browser));
       if (input.jobId) store.db.prepare("UPDATE sync_jobs SET updated_at=? WHERE id=? AND status='running' AND owner=?").run(new Date().toISOString(), input.jobId, browser.instance);
       return browser;

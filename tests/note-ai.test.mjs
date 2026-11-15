@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { noteAi } from '../server/note-ai.mjs';
+import { aiLine } from '../server/ai-line.mjs';
 import { readNote, noteArguments, codexNoteArguments } from '../server/ai-search.mjs';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { imagesToFiles } from '../server/mcp.mjs';
@@ -131,4 +132,17 @@ test('a second note waits its turn, starts by itself, and can be cancelled while
   assert.equal(ai.all().find(job => job.post === 2).state, 'running');
   finishers[1](reply('two')); await ai.idle();
   assert.equal(posts.get(2).notes, 'two'); assert.equal(posts.get(3).notes, ''); assert.deepEqual(visits, [1, 2]);
+});
+test('a note waits while a document holds the shared line, then runs', async () => {
+  const line = aiLine(), post = { id: 1, notes: '' }, visits = [];
+  const store = { post: () => post, updatePost: (id, input) => Object.assign(post, input, { updatedAt: 'now' }) };
+  const mcp = { forNote: id => { visits.push(id); return { close: async () => {}, handle() {} }; } };
+  const release = await line.take('document');
+  const ai = noteAi({ store, mcp, line, baseUrl: 'http://127.0.0.1:1', visiblePost: () => true, tool: () => ({ name: 'Claude Code', model: 'Haiku 5.5' }), run: async () => reply('added') });
+  const job = ai.start(1, 'x');
+  assert.equal(job.state, 'waiting'); assert.equal(job.waitingFor, 'document');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(visits, []);
+  release(); await ai.idle();
+  assert.equal(post.notes, 'added'); assert.equal(line.holder(), null);
 });

@@ -135,3 +135,39 @@ test('Pinterest finds boards and unorganized pins, and tells an empty list from 
   assert.equal(empty.window.SaveXExtractors.diagnose(empty.window.document, 'pinterest'), 'empty');
   empty.window.close();
 });
+test('Threads reads saved posts: author, caption, carousel, video cover, and keeps a quoted post and a link preview apart', async () => {
+  const dom = await fixture('threads', 'https://www.threads.com/saved');
+  const { document, SaveXExtractors: parser, location } = dom.window;
+  assert.deepEqual({ ...parser.pageInfo(document, location) }, { platform: 'threads', account: '@my.account', valid: true });
+  const posts = parser.extract(document, 'threads');
+  assert.deepEqual(Array.from(posts, post => post.url), ['https://www.threads.com/@maker.studio/post/DfCarousel1', 'https://www.threads.com/@clip.person/post/DfVideo2', 'https://www.threads.com/@writer/post/DfQuote3', 'https://www.threads.com/@linker/post/DfLink5']);
+  const [carousel, video, quote, link] = posts;
+  assert.equal(carousel.author, 'maker.studio');
+  // Counts, topic tags and the author's name are not the caption; a mention inside it is.
+  assert.equal(carousel.text, 'A tiny type specimen tool\nBuilt with @friend over a weekend');
+  assert.equal(carousel.kind, 'carousel'); assert.equal(carousel.media.length, 2); assert.doesNotMatch(carousel.thumbnail, /-19\//);
+  assert.equal(carousel.publishedAt, '2026-11-09T23:31:10.000Z');
+  assert.equal(video.kind, 'video'); assert.match(video.thumbnail, /5_n\.jpg$/); assert.equal(video.kindSure, true);
+  // A quoted post's words and picture stay with it, and it isn't read as a saved post of its own.
+  assert.equal(quote.text, 'This is the best thread on the subject'); assert.equal(quote.kind, 'text'); assert.equal(quote.media.length, 0); assert.match(quote.thumbnail, /8_n\.jpg$/);
+  // A link's preview picture shows on the card, but the post itself is text.
+  assert.equal(link.kind, 'text'); assert.equal(link.kindSure, false); assert.match(link.thumbnail, /9\.jpg$/);
+  assert.equal(parser.diagnose(document, 'threads'), '');
+  dom.window.close();
+});
+test('Threads finds one post on its own page, and fails closed on whose saved page it is', async () => {
+  const dom = await fixture('threads', 'https://www.threads.com/@clip.person/post/DfVideo2');
+  const { document, SaveXExtractors: parser, location } = dom.window;
+  assert.equal(parser.pageInfo(document, location).valid, false);
+  assert.equal(parser.detail(document, 'threads', 'https://www.threads.com/@clip.person/post/DfVideo2').text, 'Me after today');
+  assert.equal(parser.detail(document, 'threads', 'https://www.threads.com/@x/post/Missing'), null);
+  // A second profile link in the navigation means the account can't be told, so none is given.
+  document.querySelector('.nav').insertAdjacentHTML('beforeend', '<a href="/@someone.else"><svg></svg></a>');
+  assert.equal(parser.threadsAccount(document), '');
+  document.querySelectorAll('.nav a').forEach(anchor => anchor.remove());
+  assert.equal(parser.threadsAccount(document), '');
+  // Post boxes that can no longer be read are a layout change, not an empty list.
+  document.querySelectorAll('[data-pressable-container] a[href*="/post/"]').forEach(anchor => anchor.removeAttribute('href'));
+  assert.equal(parser.diagnose(document, 'threads'), 'unreadable');
+  dom.window.close();
+});

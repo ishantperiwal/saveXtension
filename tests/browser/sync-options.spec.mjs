@@ -12,10 +12,10 @@ test('sidebar shows per-account counts and global refresh offers both modes with
  await expect(page.locator('[data-nav-account="x:@one"] .nav-count')).toHaveText('1');
  await expect(page.locator('[data-nav-account="x:@two"] .nav-count')).toHaveText('2');
  await expect(page.locator('[data-nav-account="x:@three"] .nav-count')).toHaveText('0');
+ await page.locator('[data-filter="all"]').click({button:'right'});
+ await expect(page.getByRole('menuitem',{name:'Deep scan and refresh',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
  await page.getByRole('button',{name:'Refresh all sources',exact:true}).click();
- await expect(page.locator('#modal select,#modal [role="combobox"]')).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Deep scan',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Quick scan',exact:true}).click();
  await expect.poll(()=>state.queued).toEqual([{targets:['chrome','x','instagram'],xAccount:'all',mode:'quick'}]);
 });
 test('account context menu offers a deep scan for only that account without changing browsing',async({page})=>{
@@ -28,9 +28,9 @@ test('account context menu offers a deep scan for only that account without chan
 });
 test('closing reconnect setup cancels the pending scan and refresh options fit a phone',async({page})=>{
  const state=await setup(page);state.browser.online=false;await page.setViewportSize({width:390,height:844});
- await page.getByRole('button',{name:'Refresh all sources',exact:true}).click();
+ await page.locator('[data-filter="all"]').click({button:'right'});
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
- await page.getByRole('button',{name:'Quick scan',exact:true}).click();
+ await page.getByRole('menuitem',{name:'Quick scan and refresh',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Open Chrome to sync.',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close dialog',exact:true}).click();state.browser.online=true;
  await expect(page.getByRole('button',{name:'Refresh all sources',exact:true})).toBeEnabled();expect(state.queued).toHaveLength(0);

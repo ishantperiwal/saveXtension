@@ -154,6 +154,12 @@ function layoutRect(state, preview) {
 
 const plannedHeights = card => [...card.querySelectorAll('[data-layout-height]')].map(section => section.dataset.layoutHeight).join();
 
+export function pauseReadingHold(ms = 1200) {
+  if (!active) return;
+  stopReadingHold(active);
+  active.holdOffUntil = performance.now() + ms;
+}
+
 export function disposeCardLayout() {
   if (!active) return;
   active.observer.disconnect(); cancelAnimationFrame(active.frame); cancelAnimationFrame(active.settleFrame); stopReadingHold(active); stopMovement(active); active = null;
@@ -197,7 +203,7 @@ function arrange(state, before, resized = false) {
   // Capture the most visible preview before moving any absolute-positioned
   // cards. Use a pixel offset, not a height ratio: growing the focused preview
   // should reveal more below it without moving the text already being read.
-  const holdReading = resized && grid.dataset.view === 'feed' && !state.anchor && performance.now() > state.moveUntil;
+  const holdReading = resized && grid.dataset.view === 'feed' && !state.anchor && performance.now() > state.moveUntil && !(state.holdOffUntil > performance.now());
   if (holdReading) readingPosition(state);
   // Retarget from the current visual position if native players report a new
   // height during a view change. The original deadline prevents endless motion.

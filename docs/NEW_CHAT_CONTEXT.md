@@ -6,7 +6,7 @@ For how things work and why, read only the section you need in `docs/ARCHITECTUR
 
 ## What this is
 
-A local Electron app (Node 24+, SQLite via `node:sqlite`, no framework) that keeps Instagram saves, X bookmarks, Pinterest pins and Chrome bookmarks in one library, with MCP for LLMs. Beside them, documents: the person's own Markdown pages. It uses **no platform APIs**: hidden windows, signed in as you, read the sites' own pages.
+A local Electron app (Node 24+, SQLite via `node:sqlite`, no framework) that keeps Instagram saves, X bookmarks, Pinterest pins, Threads saves and Chrome bookmarks in one library, with MCP for LLMs. Beside them, documents: the person's own Markdown pages. It uses **no platform APIs**: hidden windows, signed in as you, read the sites' own pages.
 
 Four folders:
 - `public/`: the UI
@@ -63,6 +63,8 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | X post fields, video and quote logic | `extension/extractors.js` | `function xPosts` |
 | Instagram grid | `extension/extractors.js` | `function instagramPosts` |
 | Pinterest pins | `extension/extractors.js` | `function pinterestPosts` |
+| Threads saved posts, and a post's own page | `extension/extractors.js` | `function threadsPosts` |
+| Whose Threads saved page it is | `extension/extractors.js` | `function threadsAccount` |
 | A single post's page | `extension/extractors.js` | `function detail` |
 | Is this a saved list, and whose | `extension/extractors.js` | `function pageInfo` |
 | Spotting a layout change | `extension/extractors.js` | `function diagnose` |
@@ -81,6 +83,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | X deep scan missing-post check | `extension/background.js` | `function verifyMissing` |
 | Performing an unsave | `extension/unsave-worker.js` | `function performUnsave` |
 | Performing a Pinterest unsave | `extension/unsave-worker.js` | `function performPinterestUnsave` |
+| Deleting a Chrome bookmark, in real Chrome | `extension/bookmark-delete.js` | `function deleteBookmark` |
 | The fake `chrome.*` API | `desktop/social-worker.mjs` | `function storage` |
 
 ### Desktop
@@ -94,6 +97,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Hidden windows | `desktop/social.mjs` | `function makeWindow` |
 | Checking the signed-in account | `desktop/social.mjs` | `function verify` |
 | Connecting an account | `desktop/social.mjs` | `function connect` |
+| Threads reusing the Instagram sign-in | `desktop/social.mjs` | `function shareInstagramSignIn` |
 | Post panel | `desktop/social.mjs` | `function openPost` |
 | Keeping the panel's page running | `desktop/social.mjs` | `function warmView` |
 | Moving to the next post in that page | `desktop/social.mjs` | `function moveWarmView` |
@@ -103,6 +107,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Spotting saves and unsaves in the panel | `desktop/runtime.mjs` | `function panelRequestKind` |
 | Which account opens a post | `desktop/runtime.mjs` | `function panelAccount` |
 | Reading Chrome's bookmark file | `desktop/chrome-bookmarks.mjs` | `function readChromeBookmarks` |
+| Counting a bookmark across Chrome profiles | `desktop/chrome-bookmarks.mjs` | `function countChromeBookmarks` |
 
 ### Server
 
@@ -139,6 +144,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Checking unsure posts' images, saving descriptions | `server/ai-search.mjs` | `current.readImages` |
 | Asking before a large image scan | `public/app.js` | `function askToScanImages` |
 | Filling a note with AI: the job | `server/note-ai.mjs` | `export function noteAi` |
+| One line shared by notes and Send to document | `server/ai-line.mjs` | `export function aiLine` |
 | The tools it gets for that one post | `server/mcp.mjs` | `function noteServer` |
 | Its prompt and tool arguments | `server/ai-search.mjs` | `export function noteArguments` |
 | Its button and box | `public/app.js` | `function noteFoot` |
@@ -179,6 +185,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | AI search settings, one on at a time | `public/app.js` | `function mountAiSearchSettings` |
 | Organize dialog | `public/organize.js` | `export function organizeTopics` |
 | Running that AI search on Enter | `public/app.js` | `async function startAiSearch` |
+| AI activity view under All saves | `public/app.js` | `function renderAiActivityNavigation` |
 | Sync controls | `public/app.js` | `function renderSync` |
 | Finished-scan cards | `public/app.js` | `function syncReportCards` |
 | Scanning pill | `public/app.js` | `function renderSyncToast` |
@@ -202,9 +209,11 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 ## Open items (as of 2026-11-06)
 
 **Built but not yet proven on the real sites:**
+- Threads (added 2026-11-15). Its post markup was read from threads.com's public pages, but the signed-in saved page wasn't seen yet: whether `/saved` lists saved posts in the same post boxes, the navigation's profile link that names the account, the empty-list page, and scrolling to the end are all unproven. So are sign-in through "Continue with Instagram" with the copied Instagram sign-in, and the panel's save request name. Threads has no Unsave and nothing removes a Threads save yet: a post missing from the list is never checked.
 - Instagram save and unsave request names. X saves and unsaves, and Pinterest saves (`RepinResource/create`), are confirmed.
 - X's quoted post detection
 - Recent-unsave detection during scans, and Instagram's deep scan check
+- Delete from Chrome (added 2026-11-15) hasn't been tried against real Chrome yet, including a bookmark in two profiles.
 - Instagram's All posts check, which assumes every new save appears at the top of All posts
 - Pinterest's All pins check, which assumes the same, and that the page's order matches what the grid shows
 - AI open items are in `docs/AI.md`, including filling a note on real posts.
@@ -218,7 +227,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 **Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, restoring from a backup.
 
 **Offered, not built:**
-- A Chrome bookmark delete button (extension only), and noticing bookmarks deleted in Chrome
+- Noticing bookmarks deleted in Chrome directly (see Unsaves in `docs/ARCHITECTURE.md` for why it waits)
 - Filter pill bug: measure in `fitFilterChips` after the toolbar is shown
 
 ## Keeping this current

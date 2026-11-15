@@ -43,7 +43,7 @@ const when = iso => {
   return new Date(then).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: new Date(then).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 };
 
-export function mountDocuments({ icon, esc, toast }) {
+export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) {
   if (document.querySelector('.documents-notch')) return;
   const docIcon = doc => doc?.icon ? `<span class="documents-emoji" aria-hidden="true">${esc(doc.icon)}</span>` : DOC_ICON;
   const edge = document.createElement('aside');
@@ -219,13 +219,19 @@ export function mountDocuments({ icon, esc, toast }) {
     error.hidden = true;
     if (!title && !description) { error.textContent = 'Give it a name or jot down a few words first.'; error.hidden = false; form.elements.title.focus(); return; }
     const wasGenerated = newAiButton.dataset.generated === 'true';
+    const actionLabel = description && !wasGenerated ? 'Refining document description' : 'Drafting document description';
+    const doneLabel = description && !wasGenerated ? 'Refined document description' : 'Drafted document description';
+    const activityKey = `doc-describe:new:${Date.now()}`;
+    onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'running', title: actionLabel, detail: title || 'New document' });
     newAiButton.disabled = true; newAiButton.innerHTML = `${dotLoader('write')}<span>${description && !wasGenerated ? 'Refining…' : 'Drafting…'}</span>`;
     try {
       const result = await request('/documents/describe', { method: 'POST', body: { title, description } });
+      onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'done', title: doneLabel, detail: title || 'New document' });
       form.elements.description.value = result.description;
       form.elements.description.focus();
       newAiButton.disabled = false; syncNewAiLabel(true);
     } catch (failure) {
+      onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'failed', title: 'Couldn’t draft description', detail: failure.message });
       error.textContent = failure.message; error.hidden = false;
       newAiButton.disabled = false; syncNewAiLabel(wasGenerated);
     }
@@ -401,16 +407,31 @@ export function mountDocuments({ icon, esc, toast }) {
         if (running) return;
         last = field.value.trim(); error.hidden = true;
         running = new AbortController();
-        const idle = foot.innerHTML;
+        const targetId = open.id, targetTitle = open.titleField?.value.trim() || open.title || 'Untitled';
+        const activityKey = `doc-refine:${targetId}:${Date.now()}`, idle = foot.innerHTML;
+        onActivity?.({
+          key: activityKey, kind: 'document-refine', loaderKind: 'write', state: 'running',
+          title: `Refining “${targetTitle}”`, detail: last || 'Polishing selected text',
+          documentId: targetId, documentTitle: targetTitle, cancellable: true,
+          cancel: () => running?.abort(),
+        });
         foot.innerHTML = `<span class="document-refine-working" role="status">${dotLoader('write')}<span>Refining…</span></span><button class="document-refine-cancel" type="button">Cancel</button>`;
         foot.querySelector('.document-refine-cancel').onclick = () => { running?.abort(); };
         field.disabled = true;
         try {
           const { text } = await request('/documents/refine', { method: 'POST', body: { documentId: open.id, text: passage, request: last }, signal: running.signal });
           builder.editor.action(ctx => apply(editor, from, to, original, text, ctx.get(m.parserCtx), m));
+          onActivity?.({
+            key: activityKey, kind: 'document-refine', loaderKind: 'write', state: 'done',
+            title: `Refined “${targetTitle}”`, detail: last || 'Updated selected text',
+            documentId: targetId, documentTitle: targetTitle, cancellable: false, cancel: null,
+          });
           running = null; close();
         } catch (failure) {
           const stopped = running?.signal.aborted; running = null;
+          onActivity?.(stopped
+            ? { key: activityKey, state: 'cancelled' }
+            : { key: activityKey, kind: 'document-refine', loaderKind: 'write', state: 'failed', title: `Couldn’t refine “${targetTitle}”`, detail: failure.message, documentId: targetId, documentTitle: targetTitle, cancellable: false, cancel: null });
           if (box !== thisBox) return;
           foot.innerHTML = idle; field.disabled = false; field.focus({ preventScroll: true });
           if (!stopped) { error.textContent = failure.message; error.hidden = false; }
@@ -462,7 +483,7 @@ export function mountDocuments({ icon, esc, toast }) {
     try { doc = await request(`/documents/${id}`); } catch (error) { toast(error.message, true); return void refresh(); }
     open = { ...doc, timer: null, saving: null, markdown: () => doc.body };
     view.innerHTML = `<header class="document-head">
-        <div class="document-name"><button class="document-head-icon" type="button" data-doc-action="icon" aria-label="Change document icon" title="Choose an emoji">${docIcon(doc)}</button><h2 class="document-name-text">${esc(doc.title)}</h2><button class="icon-button document-rename" type="button" data-doc-action="rename" aria-label="Rename document" title="Rename">${icon('pencil')}</button><input class="document-title" value="${esc(doc.title)}" maxlength="120" aria-label="Document name" spellcheck="false" hidden><span class="document-status" role="status" aria-live="polite">Saved</span></div>
+        <div class="document-name"><button class="document-head-icon" type="button" data-doc-action="icon" aria-label="Change document icon" title="Choose an emoji">${docIcon(doc)}</button><h2 class="document-name-text">${esc(doc.title)}</h2><button class="icon-button document-rename" type="button" data-doc-action="rename" aria-label="Rename document" title="Rename">${icon('pencil')}</button><input class="document-title" value="${esc(doc.title)}" maxlength="120" aria-label="Document name" spellcheck="false" hidden></div>
         <button class="secondary document-conflict" type="button" data-doc-action="reload" title="Show the newer version and drop your changes" hidden>Reload</button>
         <button class="secondary document-conflict" type="button" data-doc-action="keep" title="Save your version over the newer one" hidden>Keep mine</button>
         <div class="document-mode-toggle" role="group" aria-label="Document view"><button type="button" data-doc-action="mode-editor" aria-pressed="true">Editor</button><button type="button" data-doc-action="mode-raw" aria-pressed="false" title="Show the Markdown">Markdown</button></div>
@@ -485,7 +506,7 @@ export function mountDocuments({ icon, esc, toast }) {
         </div>
       </div>
       <div class="document-body"><p class="document-loading">Opening…</p></div>
-      <footer class="document-foot">${macKeyboard ? '⌘' : 'Ctrl'}-click a link to open it. A saved post’s link opens in the post panel.</footer>`;
+      <footer class="document-foot"><span class="document-foot-hint">${macKeyboard ? '⌘' : 'Ctrl'}-click a link to open it. A saved post’s link opens in the post panel.</span><span class="document-status" role="status" aria-live="polite">Saved</span></footer>`;
     const title = view.querySelector('.document-title'); open.titleField = title;
     // The name is plain text with a rename button beside it. Renaming swaps in a field that fits the name; Enter or clicking away keeps it, Escape undoes it.
     title.addEventListener('keydown', event => {
@@ -553,9 +574,14 @@ export function mountDocuments({ icon, esc, toast }) {
       event.stopPropagation();
       if (!open || aboutAi.disabled) return;
       const targetDoc = open, saved = targetDoc.descriptionDraft ?? targetDoc.description, draft = !aboutBody.hidden ? aboutField.value.trim() : saved;
-      aboutAi.disabled = true; aboutAi.innerHTML = `${dotLoader('write')}<span>${!aboutBody.hidden && draft && draft !== saved ? 'Refining…' : 'Drafting…'}</span>`;
+      const refining = !aboutBody.hidden && draft && draft !== saved;
+      const docTitle = targetDoc.titleField.value.trim() || targetDoc.title || 'Untitled';
+      const activityKey = `doc-describe:${targetDoc.id}:${Date.now()}`;
+      onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'running', title: refining ? 'Refining document description' : 'Drafting document description', detail: docTitle, documentId: targetDoc.id, documentTitle: docTitle });
+      aboutAi.disabled = true; aboutAi.innerHTML = `${dotLoader('write')}<span>${refining ? 'Refining…' : 'Drafting…'}</span>`;
       try {
         const result = await request('/documents/describe', { method: 'POST', body: { title: targetDoc.titleField.value.trim(), description: draft, body: targetDoc.markdown() } });
+        onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'done', title: refining ? 'Refined document description' : 'Drafted document description', detail: docTitle, documentId: targetDoc.id, documentTitle: docTitle });
         if (open !== targetDoc) return;
         const fromHeight = aboutBox.offsetHeight;
         aboutField.value = result.description;
@@ -565,6 +591,7 @@ export function mountDocuments({ icon, esc, toast }) {
         animateAbout(fromHeight);
         aboutField.focus();
       } catch (error) {
+        onActivity?.({ key: activityKey, kind: 'document-describe', loaderKind: 'write', state: 'failed', title: 'Couldn’t draft description', detail: `${docTitle} — ${error.message}`, documentId: targetDoc.id, documentTitle: docTitle });
         toast(error.message, true, 'bottom-center');
         if (open === targetDoc) { aboutAi.disabled = false; syncAboutAi(false); aboutField.focus(); }
       }
@@ -663,5 +690,7 @@ export function mountDocuments({ icon, esc, toast }) {
     } catch { /* The conflict banner handles any mismatch on next edit. */ }
   }
   window.addEventListener('beforeunload', () => { if (open?.timer) void save(); });
-  return { open: openDocument, openNew: onCreated => showNewModal(true, onCreated), refresh, showDrawer, reloadIfOpen };
+  view.addEventListener('close', () => onDialogClose?.());
+  newModal.addEventListener('close', () => onDialogClose?.());
+  return { open: openDocument, close: closeDocument, openNew: onCreated => showNewModal(true, onCreated), refresh, showDrawer, reloadIfOpen, isOpen: () => view.open || newModal.open };
 }

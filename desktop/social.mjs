@@ -12,17 +12,19 @@ import { expandShortLinks, pageLinks, panelAccount, panelRequestKind, panelReque
 import { findChrome, openChrome, waitForCookieSave, quitChrome, quitProfileChrome, readChromeCookies, electronCookie, extensionCookie } from './chrome-signin.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const platforms = new Set(['x', 'instagram', 'pinterest']);
-const platformLabel = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram';
+const platforms = new Set(['x', 'instagram', 'pinterest', 'threads']);
+const platformLabel = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : platform === 'threads' ? 'Threads' : 'Instagram';
 const files = new Set(['extractors.js', 'collector.js', 'unsave-dom.js', 'x-accounts.js', 'background-render.js']);
 const handlePattern = platform => platform === 'x' ? /^@[A-Za-z0-9_]{1,30}$/ : platform === 'pinterest' ? /^@[\w.-]{1,100}$/ : /^@[\w.]{1,100}$/;
-const home = platform => platform === 'x' ? 'https://x.com/i/bookmarks' : platform === 'pinterest' ? 'https://www.pinterest.com/login/' : 'https://www.instagram.com/';
+const home = platform => platform === 'x' ? 'https://x.com/i/bookmarks' : platform === 'pinterest' ? 'https://www.pinterest.com/login/' : platform === 'threads' ? 'https://www.threads.com/login' : 'https://www.instagram.com/';
 export function socialUrl(value, platform, login = false) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
     const host = url.hostname.replace(/^www\./, '');
     if (platform === 'pinterest' && isPinterestHost(host)) return true;
+    // Threads signs in with Instagram, so signing in can pass through Instagram's own pages, and Facebook's for an Instagram account linked to it.
+    if (platform === 'threads') return ['threads.com', 'threads.net'].includes(host) || login && (/^(?:[\w-]+\.)?instagram\.com$/.test(host) || ['facebook.com', 'm.facebook.com'].includes(host));
     return (platform === 'x' ? ['x.com', 'twitter.com'] : ['instagram.com']).includes(host) || login && ['accounts.google.com', 'facebook.com', 'm.facebook.com'].includes(host);
   } catch { return false; }
 }
@@ -34,6 +36,16 @@ function pageIdentity(platform) {
       const user = JSON.parse(document.getElementById('__PWS_DATA__')?.textContent || '{}').context?.user;
       return user?.username ? { handle: `@${user.username}`, name: user.full_name || '' } : null;
     } catch { return null; }
+  }
+  if (platform === 'threads') {
+    // The navigation's profile link, drawn as an icon, outside every post. A post's author links sit inside a post box.
+    const handles = new Set();
+    for (const anchor of document.querySelectorAll('a[href^="/@"]')) {
+      if (anchor.closest('[data-pressable-container]') || !anchor.querySelector('svg') || !anchor.getClientRects().length) continue;
+      const handle = anchor.getAttribute('href').match(/^\/@([\w.]{1,100})\/?$/)?.[1];
+      if (handle) handles.add(handle.toLowerCase());
+    }
+    return handles.size === 1 ? { handle: `@${[...handles][0]}`, name: '' } : null;
   }
   if (platform === 'x') {
     const profile = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
@@ -110,7 +122,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     win.webContents.setWindowOpenHandler(({ url }) => { if (socialUrl(url, profile.platform)) void win.loadURL(url).catch(onError); else outside(url); return { action: 'deny' }; });
     win.on('closed', () => browsers.delete(id));
     browsers.set(id, win);
-    void win.loadURL(profile.platform === 'x' ? 'https://x.com/home' : profile.platform === 'pinterest' ? 'https://www.pinterest.com/' : 'https://www.instagram.com/').catch(() => {});
+    void win.loadURL(profile.platform === 'x' ? 'https://x.com/home' : profile.platform === 'pinterest' ? 'https://www.pinterest.com/' : profile.platform === 'threads' ? 'https://www.threads.com/' : 'https://www.instagram.com/').catch(() => {});
     return true;
   }
   const chromeProfile = () => join(app.getPath('userData'), 'chrome-sign-in');
@@ -313,7 +325,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     host.contentView.addChildView(view);
     if (reused) void moveWarmView(opened, entry, url); else void entry.load(url);
     contents.focus();
-    if (owners && ['x', 'instagram'].includes(platform)) void correctLabel(opened, platform, url).catch(onError);
+    if (owners && ['x', 'instagram', 'threads'].includes(platform)) void correctLabel(opened, platform, url).catch(onError);
     if (owner && !owners.archived && ['x', 'instagram'].includes(platform)) void checkStillSaved(opened, { url, platform, account: profile.handle }, () => onUnsaved({ platform, account: profile.handle, externalId })).catch(onError);
   }
   const openPostInBrowser = () => post && shell.openExternal(post.url);
@@ -571,7 +583,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     // A sign-in page, check page or sign-in link means the session ended.
     // Anything else is a page saveXtension can no longer read; reconnecting would not help.
     const loginPage = /\/accounts\/login|\/challenge|\/checkpoint|\/i\/flow\/login|^\/login/.test(new URL(value.win.webContents.getURL() || 'about:blank').pathname);
-    const signedOut = loginPage || await evaluate(value, `!!document.querySelector('a[href^="/accounts/login"],a[href="/login"],a[href^="/i/flow/login"],a[href^="/i/flow/signup"],[data-test-id="login-button"],[data-test-id="unauth-header"]')`).catch(() => true);
+    const signedOut = loginPage || await evaluate(value, `!!document.querySelector('a[href^="/accounts/login"],a[href="/login"],${platform === 'threads' ? 'a[href^="/login?"],' : ''}a[href^="/i/flow/login"],a[href^="/i/flow/signup"],[data-test-id="login-button"],[data-test-id="unauth-header"]')`).catch(() => true);
     if (!seen && !signedOut) {
       throw new Error(`${platformLabel(platform)} loaded, but saveXtension couldn’t confirm the signed-in account. The site’s layout may have changed, so saveXtension needs an update. No posts were changed.`);
     }
@@ -698,8 +710,24 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     blocked: () => closed || !process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS && powerMonitor.getSystemIdleTime() >= 5 * 60 || logins.size > 0 || ['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy(),
     ...(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS ? { delay: Number(process.env.SAVEX_DESKTOP_RECOVERY_DELAY_MS), gap: 200, jitter: 0, poll: 200, idle: 200 } : {})
   });
+  // Threads signs in through Instagram. A connected Instagram account's sign-in is copied into the new Threads session,
+  // so Threads' "Continue with Instagram" needs one click instead of a password. Only instagram.com cookies are copied,
+  // from the account with the same handle, or the only connected one. With none, sign-in is as usual.
+  async function shareInstagramSignIn(profile) {
+    const connected = accounts.filter(item => item.platform === 'instagram' && item.status === 'connected');
+    const source = connected.find(item => profile.handle && item.handle.toLowerCase() === profile.handle.toLowerCase()) || (connected.length === 1 ? connected[0] : null);
+    if (!source) return;
+    const cookies = (await profileSession(source).cookies.get({})).filter(cookie => /^\.?(?:[\w-]+\.)?instagram\.com$/.test(cookie.domain || ''));
+    const target = profileSession(profile);
+    await Promise.allSettled(cookies.map(cookie => target.cookies.set({
+      url: `https://${cookie.domain.replace(/^\./, '')}${cookie.path || '/'}`, name: cookie.name, value: cookie.value, path: cookie.path,
+      ...(cookie.hostOnly ? {} : { domain: cookie.domain }), secure: cookie.secure, httpOnly: cookie.httpOnly,
+      ...(cookie.session ? {} : { expirationDate: cookie.expirationDate }), ...(cookie.sameSite && cookie.sameSite !== 'unspecified' ? { sameSite: cookie.sameSite } : {})
+    })));
+    await target.cookies.flushStore();
+  }
   async function connect({ platform, id, expectedHandle } = {}) {
-    if (!platforms.has(platform)) throw new Error('Choose X, Instagram or Pinterest.');
+    if (!platforms.has(platform)) throw new Error('Choose X, Instagram, Pinterest or Threads.');
     if (expectedHandle && !handlePattern(platform).test(expectedHandle)) throw new Error('Choose a valid account handle.');
     library.sync.giveWay();
     if (['queued', 'running'].includes(library.sync.status().job?.status) || library.unsaves.busy()) throw new Error(BUSY.connect.title);
@@ -729,6 +757,8 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     };
     login.timer = setInterval(() => void verifyLogin(), 750);
     win.on('closed', () => { clearInterval(login.timer); logins.delete(profile.id); login.chromeChild?.kill(); publish(); });
+    if (platform === 'threads') await shareInstagramSignIn(profile).catch(onError);
+    if (win.isDestroyed()) return publicAccounts();
     void win.loadURL(home(platform)).catch(() => {});
     void signInFromHelper(login).catch(onError);
     return publicAccounts();

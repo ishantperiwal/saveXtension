@@ -1,14 +1,14 @@
 import { app, BrowserWindow, Menu, dialog, shell, ipcMain, clipboard, session, powerMonitor, safeStorage } from 'electron';
-import { mkdir, readFile, appendFile, cp } from 'node:fs/promises';
+import { mkdir, readFile, appendFile, cp, rm, rename } from 'node:fs/promises';
 import { mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDesktopLibrary, isLibraryFrame, isWebLink, instagramPost, pinterestPost, threadsPost, xPost, importSnapshot, readDatabaseSnapshot } from './runtime.mjs';
 import { openSyncBrowser, focusSyncBrowser } from './browser.mjs';
 import { createUpdater } from './updates.mjs';
 import { createNativeSocial } from './social.mjs';
 import { BUSY } from '../public/busy-messages.js';
-import { readChromeBookmarks } from './chrome-bookmarks.mjs';
+import { readChromeBookmarks, loadedHelperFolders } from './chrome-bookmarks.mjs';
 import { backgroundChecks } from '../server/background-checks.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -40,6 +40,27 @@ else {
 }
 
 const helperFolder = () => join(app.getPath('downloads'), 'saveXtension Chrome helper');
+// Copies this version of the helper into the Downloads folder (when asked, or when it's already there) and into
+// any folder Chrome has loaded it from, so reloading the extension in Chrome picks up this version.
+const helperVersion = folder => readFile(join(folder, 'manifest.json'), 'utf8').then(text => JSON.parse(text), () => null);
+// Builds the new copy beside the old one, then swaps it in, so the folder holds exactly this version
+// (no leftover files) and shows as new in Finder. A same-named folder that isn't the helper is never removed.
+async function replaceHelper(destination) {
+  const temp = join(dirname(destination), `.${basename(destination)}.updating`);
+  await rm(temp, { recursive: true, force: true });
+  await cp(library.helperPath, temp, { recursive: true });
+  const current = await helperVersion(destination);
+  if (existsSync(destination) && !current?.name?.startsWith('saveXtension')) { await rm(temp, { recursive: true, force: true }); await cp(library.helperPath, destination, { recursive: true, force: true }); return; }
+  await rm(destination, { recursive: true, force: true });
+  await rename(temp, destination);
+}
+async function refreshHelpers(saveToDownloads = false) {
+  const downloads = helperFolder(), before = await helperVersion(downloads);
+  const loaded = (await loadedHelperFolders().catch(() => [])).filter(path => path !== downloads);
+  for (const destination of [...(saveToDownloads || before ? [downloads] : []), ...loaded]) await replaceHelper(destination);
+  // Read back from the folder itself, so what the app reports is what's really there.
+  return { path: downloads, updated: !!before, previousVersion: before?.version || '', version: (await helperVersion(downloads))?.version || '', alsoUpdated: loaded };
+}
 async function log(error) {
   try { await mkdir(userData, { recursive: true }); await appendFile(join(userData, 'desktop.log'), `${new Date().toISOString()} ${error?.stack || error}\n`); } catch { /* Keep the startup error visible even if the log cannot be written. */ }
 }
@@ -53,8 +74,7 @@ async function start() {
     legacyDatabasePath: app.isPackaged ? undefined : join(root, 'data', 'savextension.sqlite'), nativeTransport
   });
   // A saved helper copy is refreshed so Chrome's next reload loads this version.
-  const saved = helperFolder();
-  if (existsSync(join(saved, 'manifest.json'))) await cp(library.helperPath, saved, { recursive: true, force: true }).catch(log);
+  await refreshHelpers().catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
   library.mcp.setPostViewer((post, options) => social.viewPost(post, options));
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
@@ -76,11 +96,8 @@ async function start() {
       case 'openExtensions': await openSyncBrowser('chrome://extensions/'); return true;
       case 'chromeBookmarksFound': return readChromeBookmarks().then(() => true, () => false);
       case 'openDownloads': { const error = await shell.openPath(app.getPath('downloads')); if (error) throw new Error(error); return true; }
-      case 'saveHelper': {
-        const destination = helperFolder();
-        await cp(library.helperPath, destination, { recursive: true, force: true });
-        return { path: destination };
-      }
+      case 'saveHelper': return refreshHelpers(true);
+      case 'revealHelper': { const folder = helperFolder(); if (existsSync(folder)) shell.showItemInFolder(folder); else { const error = await shell.openPath(app.getPath('downloads')); if (error) throw new Error(error); } return true; }
       case 'connect': return connect(message.type);
       case 'socialAccounts': return social.status();
       case 'connectSocial': return social.connect(message.options);

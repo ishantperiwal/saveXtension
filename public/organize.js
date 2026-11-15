@@ -24,10 +24,11 @@ export function shortSummary(lines) {
   }
   return short;
 }
-export function organizeTopics({ modal, showModal, api, toast, esc, icon, model, refresh, openTopic, askToScanImages }) {
+export function organizeTopics({ modal, showModal, api, toast, esc, icon, model, refresh, openTopic, askToScanImages, onActivity }) {
   const showing = () => modal.open && !!modal.querySelector('.organize-dialog');
   const show = body => showModal(`<div class="organize-dialog"><h2 class="sr-only">Organize topics</h2>${body}</div>`);
   const progress = job => job.phase === 'planning' ? 'Working out what to do…' : job.phase === 'applying' ? 'Making the changes…' : `Reading your saves${job.steps > 1 ? ` (${job.step} of ${job.steps})` : ''}${job.total ? `: ${Math.round(job.done / job.total * 100)}%` : '…'}`;
+  const notify = (job, stepText) => onActivity?.(job, { stepText: stepText || progress(job) });
   // The button says how a run is going, because it carries on after the box closes.
   // A result stays until someone presses Okay on it, however often the box is closed, and no new request can start before that.
   let pending = null;
@@ -49,7 +50,7 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
     const go = async () => {
       const request = input.value.trim(); if (request.length < 3) { input.focus(); return; }
       start.disabled = true;
-      try { const { job } = await api('/organize', { method: 'POST', body: { request } }); mark('running'); running(job); void follow(job.id); }
+      try { const { job } = await api('/organize', { method: 'POST', body: { request } }); mark('running'); notify(job); running(job); void follow(job.id); }
       catch (error) { start.disabled = false; toast(error.message, true, 'bottom-center'); }
     };
     start.onclick = go;
@@ -74,9 +75,15 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
     if (open) open.onclick = () => { acknowledge(job); modal.close(); openTopic(job.open); };
     if (undo) undo.onclick = async () => {
       undo.disabled = true;
-      try { await api('/organize/undo', { method: 'POST', body: { changeId: job.changeId } }); job.undone = true; await refresh(); finished(job); }
+      try { await undoJob(job); finished(job); }
       catch (error) { undo.disabled = false; toast(error.message, true, 'bottom-center'); }
     };
+  }
+  async function undoJob(job) {
+    await api('/organize/undo', { method: 'POST', body: { changeId: job.changeId } });
+    job.undone = true;
+    notify(job);
+    await refresh();
   }
   // The box opens from the button and goes back into it.
   const button = () => { const item = document.querySelector('.organize-button'); return item?.offsetParent ? item : null; };
@@ -131,21 +138,23 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
           // It's the person's plan, so a lot of images are only read if they say so.
           if (job.askImages && !asked) {
             asked = true;
+            notify(job, 'Waiting for your answer');
             const approve = await askToScanImages(job.askImages);
             try { await api('/ai-search/images', { method: 'POST', body: { job: job.searchJob, approve } }); } catch { /* It has moved on. */ }
             if (stillHere) running(job);
             continue;
           }
           if (!job.askImages) asked = false;
+          notify(job);
           const text = modal.querySelector('.organize-progress-text');
           if (stillHere && text) text.textContent = progress(job);
         } else {
           following = 0;
           if (job.state === 'done' && job.changeId) await refresh();
-          if (job.state === 'cancelled') { acknowledge(job); if (showing()) ask(job.request); return; }
+          if (job.state === 'cancelled') { acknowledge(job); notify(job); if (showing()) ask(job.request); return; }
           hold(job);
-          if (showing()) { ended(job); return; }
-          if (job.state === 'failed') toast(job.error, true, 'bottom-center'); else toast(job.summary[0] || job.message || 'Done.');
+          notify(job);
+          if (showing()) ended(job);
           return;
         }
       }
@@ -165,10 +174,14 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
   open.resume = async () => {
     if (following || pending) return;
     const { job } = await api('/organize');
-    if (job?.state === 'running') { mark('running'); void follow(job.id); return; }
+    if (job?.state === 'running') { mark('running'); notify(job); void follow(job.id); return; }
     let last = '';
     try { last = sessionStorage.getItem(ACKNOWLEDGED) || ''; } catch { /* Treated as not yet acknowledged. */ }
-    if (job && ['done', 'failed'].includes(job.state) && jobKey(job) !== last) hold(job);
+    if (job && ['done', 'failed'].includes(job.state) && jobKey(job) !== last) { hold(job); notify(job); }
+  };
+  open.undo = async changeId => {
+    if (pending?.changeId === changeId) { await undoJob(pending); return; }
+    await undoJob({ id: `undo:${changeId}`, request: '', state: 'done', changeId, summary: [] });
   };
   return open;
 }

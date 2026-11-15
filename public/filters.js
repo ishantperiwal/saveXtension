@@ -34,14 +34,15 @@ export function dateRangeSummary(filters, now = new Date()) {
 
 export function accountOptions(posts, catalog = [], { pinterest = false } = {}) {
   const result = [];
-  // Pinterest syncs from the desktop app, so elsewhere it appears only if a library already has pins.
-  for (const platform of ['instagram', 'x', ...(pinterest || posts.some(post => post.platform === 'pinterest') ? ['pinterest'] : [])]) {
+  // Pinterest and Threads sync from the desktop app, so elsewhere they appear only if a library already has their saves.
+  const desktopOnly = platform => pinterest || posts.some(post => post.platform === platform) ? [platform] : [];
+  for (const platform of ['instagram', 'x', ...desktopOnly('pinterest'), ...desktopOnly('threads')]) {
     const saved = posts.filter(p => p.platform === platform), handles = new Map();
     for (const handle of [...saved.flatMap(p => p.accounts || []), ...(platform === 'x' ? catalog.map(a => a.handle) : [])]) {
       if (handle) handles.set(handle.toLowerCase(), handle);
     }
     for (const [key, label] of [...handles].sort(([a], [b]) => a.localeCompare(b))) result.push({ value: `${platform}:${key}`, platform, label });
-    if (!handles.size) result.push({ value: `${platform}:*`, platform, label: platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : 'Instagram' });
+    if (!handles.size) result.push({ value: `${platform}:*`, platform, label: SOURCE_NAMES[platform] });
     else if (saved.some(p => !(p.accounts || []).length)) result.push({ value: `${platform}:`, platform, label: 'Unassigned' });
   }
   result.push({ value: 'chrome:*', platform: 'chrome', label: 'Chrome' });
@@ -125,7 +126,7 @@ export function applyFilters(posts, filters = defaultFilters(), { query = '', no
   return ordered.map(p => [likelihood(p), p]).sort((a, b) => b[0] - a[0]).map(([, p]) => p);
 }
 
-const SOURCE_NAMES = { x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', chrome: 'Chrome' };
+const SOURCE_NAMES = { x: 'X', instagram: 'Instagram', pinterest: 'Pinterest', threads: 'Threads', chrome: 'Chrome' };
 export function filterChips(filters, { collectionName = () => '', collectionPlatform = () => 'instagram', collectionAccount = () => '' } = {}) {
   const chips = [], folderKind = platform => platform === 'pinterest' ? 'Pinterest board' : 'Instagram collection';
   if (filters.date !== 'any') chips.push({ key: 'date', label: filters.date === 'timeline' ? dateRangeSummary(filters) : datePresets.find(([key]) => key === filters.date)?.[1] || 'Date', title: 'Date added' });

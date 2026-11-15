@@ -15,9 +15,9 @@ test('deep scans are explicit and the selected mode survives helper setup', asyn
   });
   await page.goto('/');
   expect(queued).toHaveLength(0);
-  await expect(page.getByRole('button', { name: 'Deep scan', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toHaveCount(0);
   await openSyncOptions(page);
-  await page.getByRole('button', { name: 'Deep scan', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Open Chrome to sync.' })).toBeVisible();
   browser = { online: true, ready: true, syncModes: true, bookmarksSupported:true, bookmarksReady:true };
   await expect.poll(() => queued.length, { timeout: 8000 }).toBe(1);
@@ -85,8 +85,10 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     expect(saved.some(p => p.externalId === gap)).toBe(false);
     expect(saved.some(p => p.externalId === unsaved)).toBe(true);
     expect(detailVisits).toHaveLength(0);
+    await expect(page.locator('.sidebar-account-refresh:disabled')).toHaveCount(0, { timeout: 6000 });
     await openSyncOptions(page);
-    await expect(page.getByRole('button', { name: 'Deep scan', exact: true })).toBeEnabled();
+    await expect(page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toBeEnabled();
+    await page.keyboard.press('Escape');
     const previous = (await status()).id;
     await startDeepSync(page);
     await expect.poll(async () => (await status())?.id).not.toBe(previous);
@@ -101,8 +103,10 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     expect(foreground).toBe(`${baseURL}/`);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await expect(page.locator('.sidebar-account-refresh:disabled')).toHaveCount(0, { timeout: 6000 });
     await openSyncOptions(page);
-    await expect(page.getByRole('button', { name: 'Deep scan', exact: true })).toBeEnabled();
+    await expect(page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toBeEnabled();
+    await page.keyboard.press('Escape');
     await expect(page.locator('.sidebar')).toHaveCount(1);
     await page.screenshot({ path: testInfo.outputPath('manual-deep-scan-mobile.png') });
   } finally { await context.close(); await rm(profile, { recursive: true, force: true }); }

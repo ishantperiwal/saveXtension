@@ -99,7 +99,7 @@ button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation
 button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: wait; }
 a { color: inherit; text-decoration: none; }
-button:focus, a:focus, input:focus, textarea:focus, select:focus, summary:focus { outline: none; }
+button:focus, a:focus, input:focus, textarea:focus, select:focus, summary:focus, dialog:focus, dialog:focus-visible { outline: none; }
 button:focus-visible:not(.primary):not(.sidebar-sync):not(.sidebar-sync-options):not(.select-trigger):not(.modal-close):not([role="tab"][aria-selected="true"]), summary:focus-visible { background-color: var(--hover); }
 .primary:focus-visible, .sidebar-sync:focus-visible, .sidebar-sync-options:focus-visible { background-color: var(--accent-hover); }
 button.select-trigger:focus-visible { background-color: var(--hover); }
@@ -165,7 +165,7 @@ button svg, a svg { pointer-events: none; }
 @keyframes sidebar-sync-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sidebar-sync[aria-busy="true"] > .icon { animation: none; } }
 .sidebar-sync > span { min-width: 0; font-size: 12px; line-height: 18px; white-space: nowrap; }
-.nav-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 8px 12px; margin: 0 0 4px; border: 0; border-radius: 14px; background: none; text-align: left; font-size: 13px; line-height: 20px; color: var(--secondary); }
+.nav-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 8px 12px; margin: 0 0 4px; border: 0; border-radius: 14px; background: none; text-align: left; font-size: 13px; line-height: 20px; color: var(--secondary); user-select: none; }
 /* Hover and selection get a soft top-lit gradient so rows read as shapes, not flat fills. */
 .nav-item:hover { background: linear-gradient(to bottom, color-mix(in srgb, var(--hover-soft) 45%, var(--paper)), var(--hover-soft)); box-shadow: inset 0 1px 0 var(--highlight); color: var(--ink); }
 .nav-item.active .account-handle { font-weight: 600; font-synthesis-weight: auto; }
@@ -175,7 +175,7 @@ button svg, a svg { pointer-events: none; }
 .account-nav-item .nav-label-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .account-nav-item .nav-count { flex-shrink: 0; }
 .source-icon { width: 22px; height: 22px; flex: 0 0 22px; display: block; }
-.source-icon-x { padding: 2px; color: var(--ink); }
+.source-icon-x, .source-icon-threads { padding: 2px; color: var(--ink); }
 .nav-item > .icon { width: 22px; height: 22px; padding: 2px; }
 .nav-new { margin-left: -6px; color: var(--new); font: 500 12px/20px var(--mono); font-variant-numeric: tabular-nums; }
 .source-account-group > .account-nav-item > .nav-new { grid-column: 6; margin: 0 0 0 6px; }
@@ -183,7 +183,6 @@ button svg, a svg { pointer-events: none; }
 .source-account-group:not(.has-collections) > .account-nav-item > .nav-label-text { grid-column: 2 / 5; max-width: none; }
 .nav-count { margin-left: auto; font-size: 12px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .source-nav { padding: 0; margin: 0; }
-.all-saves-nav { margin-bottom: 8px; }
 .scan-source-summary { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .scan-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
 .scan-choice { display: flex; flex-direction: column; gap: 6px; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); text-align: left; }
@@ -368,7 +367,13 @@ button svg, a svg { pointer-events: none; }
 .chrome-link-text { display: grid; gap: 1px; min-width: 0; }
 .chrome-link-text strong { font-size: 14px; font-weight: 600; }
 .chrome-link-text span { color: var(--secondary); font-size: 12px; line-height: 18px; }
-#chrome-helper-settings { display: flex; align-items: center; }
+#chrome-helper-settings { display: flex; align-items: center; gap: 6px; }
+.chrome-helper-refresh { width: 26px; height: 26px; min-width: 26px; padding: 0; border-radius: 8px; color: var(--muted); }
+.chrome-helper-refresh svg { width: 14px; height: 14px; }
+.chrome-helper-refresh:hover:not(:disabled) { color: var(--ink, currentColor); }
+.chrome-helper-refresh.is-checking { opacity: 1; cursor: default; }
+.chrome-helper-refresh.is-checking svg { animation: sidebar-sync-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .chrome-helper-refresh.is-checking svg { animation: none; } }
 .chrome-link-label { color: var(--muted); font-size: 12px; line-height: 16px; white-space: nowrap; }
 .chrome-helper-status.is-connected .chrome-link-label { color: var(--accent); }
 .chrome-helper-status.is-outdated .chrome-link-label { color: #a56e1f; }
@@ -422,6 +427,62 @@ button svg, a svg { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .sync-dismiss-progress > span { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .sync-dots span { animation: none; opacity: 1; } }
 
+.ai-toast { position: relative; display: flex; flex-direction: column; width: auto; max-width: min(380px, calc(100vw - 32px)); max-height: min(62vh, 460px); overflow: hidden; border: 0; border-radius: 999px; background: linear-gradient(115deg, color-mix(in srgb, #b9dc6e 22%, transparent), color-mix(in srgb, #f5d66b 14%, transparent) 44%, color-mix(in srgb, #f4a07c 20%, transparent) 74%, color-mix(in srgb, #e98fb4 22%, transparent)), linear-gradient(145deg, color-mix(in srgb, var(--paper) 58%, transparent), color-mix(in srgb, var(--paper) 38%, transparent)); -webkit-backdrop-filter: blur(22px) saturate(1.7); backdrop-filter: blur(22px) saturate(1.7); color: var(--ink); font-size: 13px; line-height: 1.4; box-shadow: 0 10px 32px #2931202e, 0 1px 3px #2931201a, 0 4px 20px var(--ai-glow), inset 0 1px 0 color-mix(in srgb, #fff 75%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 22%, transparent); transition: box-shadow 180ms ease; }
+.ai-toast::before { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: inherit; padding: 1px; background: var(--ai-edge); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); pointer-events: none; }
+.ai-toast[hidden] { display: none; }
+.ai-toast[data-expanded="true"] { width: min(380px, calc(100vw - 32px)); border-radius: 18px; }
+.ai-toast-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; }
+.ai-toast[data-expanded="true"] .ai-toast-head { padding: 9px 12px; border-bottom: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); }
+.ai-toast-toggle { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; min-height: 30px; margin-right: auto; padding: 3px 10px 3px 4px; border: 0; border-radius: 999px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; transition: background-color 140ms ease; }
+.ai-toast-toggle:is(:hover, :focus-visible) { background: var(--ai-chip); }
+.ai-toast-brand { display: grid; flex: none; place-items: center; width: 22px; height: 22px; border-radius: 999px; background: linear-gradient(135deg, color-mix(in srgb, #b9dc6e 38%, var(--paper)), color-mix(in srgb, #f4a07c 38%, var(--paper))); color: var(--ai-spark); box-shadow: inset 0 1px 0 var(--ai-shine); }
+.ai-toast-brand > .icon, .ai-toast-chevron > .icon { width: 13px; height: 13px; }
+.ai-toast-brand .dot-loader { color: var(--ai-spark); }
+.ai-toast-heading { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; color: var(--ink); }
+.ai-toast-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--ai-soft-text); }
+.ai-toast-chevron { display: inline-flex; flex: none; color: var(--ai-soft-text); transition: rotate 180ms ease; }
+.ai-toast[data-expanded="true"] .ai-toast-chevron { rotate: 180deg; }
+.ai-toast-clear { flex: none; min-height: 26px; padding: 3px 10px; border: 1px solid var(--ai-edge-soft); border-radius: 999px; background: var(--ai-chip); color: var(--ink); font: inherit; font-size: 12px; font-weight: 500; line-height: 18px; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease; }
+.ai-toast-clear:is(:hover, :focus-visible) { border-color: var(--ai-edge-soft); background: var(--ai-shine); }
+.ai-toast-panel { display: flex; flex-direction: column; min-height: 0; }
+.ai-toast-panel[hidden] { display: none; }
+.ai-toast-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+.ai-toast-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); }
+.ai-toast-item:first-child { border-top: 0; }
+.ai-toast-item[data-tone="warning"] { background: color-mix(in srgb, var(--warning-bg) 44%, transparent); }
+.ai-toast-icon { display: grid; flex: none; place-items: center; width: 22px; height: 22px; margin-top: 1px; border-radius: 999px; background: var(--icon-surface); color: var(--accent); box-shadow: inset 0 1px 0 var(--ai-shine); }
+.ai-toast-icon > .icon { width: 13px; height: 13px; }
+.ai-toast-icon .dot-loader { color: var(--ai-spark); }
+.ai-toast-item[data-tone="active"] .ai-toast-icon { background: linear-gradient(135deg, #f5d66b47, #f4a07c47); color: var(--ai-spark); }
+.ai-toast-item[data-tone="success"] .ai-toast-icon { background: linear-gradient(135deg, #b9dc6e52, #9ad37d42); color: var(--accent); }
+.ai-toast-item[data-tone="warning"] .ai-toast-icon { background: var(--warning-line); color: var(--danger); }
+.ai-toast-body { min-width: 0; flex: 1 1 auto; }
+.ai-toast-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.ai-toast-title { min-width: 0; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.ai-toast-detail, .ai-toast-subline { margin: 2px 0 0; font-size: 12px; line-height: 1.38; color: var(--ai-soft-text); overflow-wrap: anywhere; }
+.ai-toast-subline { opacity: 0.85; }
+.ai-toast-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.ai-toast-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 26px; padding: 3px 10px; border: 1px solid var(--ai-edge-soft); border-radius: 999px; background: var(--ai-chip); color: var(--ink); font: inherit; font-size: 12px; font-weight: 500; line-height: 18px; cursor: pointer; transition: border-color 140ms ease, background-color 140ms ease, filter 140ms ease; }
+.ai-toast-btn:hover { background: var(--ai-shine); }
+.ai-toast-btn.is-primary { border-color: transparent; background: linear-gradient(135deg, #c44421, #b83b65); color: #fff; box-shadow: 0 2px 10px color-mix(in srgb, #d9552b 28%, transparent); }
+.ai-toast-btn.is-primary:hover { filter: brightness(1.06); }
+.ai-toast-dismiss { width: 24px; height: 24px; margin: -2px -4px 0 0; flex: none; color: var(--ai-soft-text); }
+.ai-toast-dismiss:hover { background: var(--ai-chip); color: var(--ink); }
+.ai-toast-dismiss > .icon { width: 13px; height: 13px; }
+.save-card.is-ai-located { box-shadow: 0 0 0 2px var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); animation: ai-locate-pulse 1.6s ease-out; }
+@keyframes ai-locate-pulse {
+  0% { box-shadow: 0 0 0 0 var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); }
+  35% { box-shadow: 0 0 0 4px var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+:root[data-theme="dark"] .ai-toast { box-shadow: 0 12px 32px #00000066, inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 6%, transparent); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ai-toast { box-shadow: 0 12px 32px #00000066, inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 6%, transparent); } }
+@media (prefers-reduced-transparency: reduce) { .ai-toast { background: linear-gradient(115deg, color-mix(in srgb, #b9dc6e 18%, transparent), color-mix(in srgb, #f5d66b 12%, transparent) 44%, color-mix(in srgb, #f4a07c 16%, transparent) 74%, color-mix(in srgb, #e98fb4 18%, transparent)), var(--paper); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-toast, .ai-toast-toggle, .ai-toast-chevron, .ai-toast-clear, .ai-toast-btn { transition: none; }
+  .save-card.is-ai-located { animation: none; outline: 2px solid var(--ai-spark); outline-offset: 2px; }
+}
+
 /* Content supplies the variety: live posts, links and the reader's annotations. */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); align-items: start; gap: 16px; }
 .cards.is-masonry { display: block; position: relative; overflow-x: clip; }
@@ -444,6 +505,19 @@ button svg, a svg { pointer-events: none; }
 .native-connect-actions > button { flex: none; white-space: nowrap; }
 .new-tag { position: absolute; top: 0; right: 16px; z-index: 4; padding: 1px 8px; border: 1px solid #46613a; border-radius: 999px; background: #46613a; color: #fff; font: 500 10px/16px var(--mono); letter-spacing: .04em; text-transform: uppercase; transform: translateY(-50%); pointer-events: none; }
 .cards[data-view="feed"] .new-tag { position: static; grid-column: 1; grid-row: 1; justify-self: end; align-self: start; margin-right: 16px; }
+/* In the New tag's place while AI works on a post or has just finished: what it's doing, and a tick to dismiss. */
+.new-tag.ai-tag { display: inline-flex; align-items: center; gap: 6px; max-width: min(260px, calc(100% - 32px)); padding: 2px 3px 2px 8px; border: 1px solid transparent; background: linear-gradient(112deg, #b9dc6e38, #f5d66b24 45%, #f4a07c2e 75%, #e98fb433) padding-box, linear-gradient(var(--paper), var(--paper)) padding-box, var(--ai-edge) border-box; color: var(--ink); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 18px; letter-spacing: 0; text-transform: none; pointer-events: auto; }
+.new-tag.ai-tag:not(:has(.ai-tag-ack)) { padding-right: 9px; }
+.ai-tag-icon { display: grid; place-items: center; flex: 0 0 14px; width: 14px; height: 14px; color: var(--ai-spark); }
+.ai-tag-icon .icon { width: 13px; height: 13px; }
+.ai-tag-icon .dot-loader { transform: scale(.75); }
+.ai-tag[data-state="waiting"] .ai-tag-icon { color: var(--muted); }
+.ai-tag[data-state="failed"] .ai-tag-icon { color: #c9892e; }
+.ai-tag-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-tag-ack { display: grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--paper); cursor: pointer; }
+.ai-tag-ack .icon { width: 12px; height: 12px; stroke-width: 2.4; }
+.ai-tag-ack:hover { filter: brightness(1.1); }
+.ai-tag-ack:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .is-masonry > :is(.save-card, .save-time-separator, .more-saves) { position: absolute; top: 0; left: 0; }
 /* Paging sentinels move immediately to avoid loading extra batches mid-animation. */
 .is-masonry > .can-move:not(.more-saves) { transition: transform 320ms cubic-bezier(.22,.68,.2,1); }
@@ -460,9 +534,14 @@ button svg, a svg { pointer-events: none; }
 .feed-source-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed-source-pill .source-icon { width: 15px; height: 15px; }
 .cards[data-view="feed"][data-side-notes="true"] .feed-source-pill { right: 270px; max-width: 472px; }
-.cards[data-view="feed"] .card-body { position: relative; padding-left: 40px; border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.cards[data-view="feed"] .card-body { position: relative; padding-left: 40px; border: 0; border-radius: 0; background: transparent; overflow: visible; --feed-actions: 1; --feed-rail-min: calc(24px + var(--feed-actions) * 32px + (var(--feed-actions) - 1) * 6px); }
+.cards[data-view="feed"] .card-body:has(.card-actions > .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button)) { --feed-actions: 2; }
+.cards[data-view="feed"] .card-body:has(.card-actions > .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button)) { --feed-actions: 3; }
+.cards[data-view="feed"] .card-body:has(.card-actions > .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button)) { --feed-actions: 4; }
+.cards[data-view="feed"] .card-body:has(.card-actions > .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button)) { --feed-actions: 5; }
+.cards[data-view="feed"] .card-body:has(.card-actions > .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button) ~ .icon-button:not([hidden]):not(.note-button)) { --feed-actions: 6; }
 .cards[data-view="feed"] .card-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
-.cards[data-view="feed"] .card-preview { grid-column: 1; grid-row: 1; min-width: 0; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); overflow: hidden; }
+.cards[data-view="feed"] .card-preview { grid-column: 1; grid-row: 1; min-width: 0; min-height: var(--feed-rail-min); border: 1px solid var(--line); border-radius: 20px; background: var(--paper); overflow: hidden; }
 .cards[data-view="feed"] .card-note { grid-column: 1; grid-row: 2; min-width: 0; border: 1px solid #ece1a8; border-radius: 16px; }
 .cards[data-view="feed"] .card-footer { grid-column: 1; grid-row: 3; align-self: start; min-width: 0; padding: 0; border: 0; background: transparent; }
 .cards[data-view="feed"] .card-header { position: absolute; top: 12px; left: 0; right: auto; display: block; width: 32px; min-height: 0; padding: 0; border: 0; background: transparent; }
@@ -477,8 +556,8 @@ button svg, a svg { pointer-events: none; }
 .cards[data-side-notes="true"] .card-note { grid-column: 2; grid-row: 1; margin-top: 8px; }
 .cards[data-side-notes="true"] .card-footer { grid-column: 2; grid-row: 2; }
 /* Every card is the same width, so edges and notes line up. A tall picture sits centred on a tinted fill. */
-.cards[data-view="feed"] :is(.instagram, .pinterest, .x) .saved-preview .embed-capture-image-link:not([hidden]) { display: flex; justify-content: center; border-radius: 12px; background: var(--surface-soft); }
-.cards[data-view="feed"] :is(.instagram, .pinterest, .x) .saved-preview .embed-capture-image { width: auto; max-width: 100%; max-height: 615px; }
+.cards[data-view="feed"] :is(.instagram, .pinterest, .x, .threads) .saved-preview .embed-capture-image-link:not([hidden]) { display: flex; justify-content: center; border-radius: 12px; background: var(--surface-soft); }
+.cards[data-view="feed"] :is(.instagram, .pinterest, .x, .threads) .saved-preview .embed-capture-image { width: auto; max-width: 100%; max-height: 615px; }
 .cards[data-view="feed"] :is(.instagram, .pinterest) .native-embed { max-width: 440px; margin-inline: auto; }
 /* The band of light that crosses a note an AI has just changed. It starts and ends off the note. */
 .note-shine { position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; background: linear-gradient(135deg, #fff0 43%, #b9dc6e73 46.5%, #fffffff2 50%, #f4a07c73 53.5%, #fff0 57%) 100% 100% / 300% 300% no-repeat; }
@@ -552,7 +631,7 @@ button svg, a svg { pointer-events: none; }
 .save-card .embed-capture-image { max-height: 180px; }
 .save-card .embed-capture-text { -webkit-line-clamp: 5; }
 /* The words are the point of a post on X, so its card shows far more of them, stopping only for very long threads and lists. */
-.save-card.x .embed-capture-text { -webkit-line-clamp: 14; }
+.save-card.x .embed-capture-text, .save-card.threads .embed-capture-text { -webkit-line-clamp: 14; }
 .embed-capture-header { display: flex; align-items: center; gap: 10px; }
 .embed-open-original { flex: none; margin-left: auto; width: 28px; height: 28px; padding: 6px; border-radius: 50%; background: var(--surface-soft); color: var(--muted); }
 .native-embed[data-embed-state="failed"] .embed-open-original { display: none; }
@@ -560,6 +639,11 @@ button svg, a svg { pointer-events: none; }
 .embed-capture-author strong { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
 .embed-capture-author span, .embed-capture-date { color: var(--muted); font-size: 12px; line-height: 18px; }
 .embed-capture-author span { font-family: var(--mono); overflow-wrap: anywhere; }
+/* The name, then when the post was added, after a grey dot. */
+.embed-capture-author .embed-capture-name { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0; font-family: inherit; color: inherit; font-size: inherit; line-height: inherit; }
+.embed-capture-name strong { min-width: 0; }
+.embed-capture-added { flex: none; color: var(--muted); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.embed-capture-added::before { content: '·'; margin-right: 6px; }
 .embed-capture-image { display: block; width: 100%; aspect-ratio: 16 / 10; max-height: 280px; object-fit: cover; border-radius: 12px; background: var(--surface-soft); }
 /* On a saved card the picture is the content, so it keeps its own shape instead of being cropped. */
 .embed-capture-image-link { display: block; border-radius: 12px; transition: opacity .16s; }
@@ -623,6 +707,9 @@ button svg, a svg { pointer-events: none; }
 .chrome-setup-steps p { margin: 6px 0 0; color: var(--secondary); font-size: 13px; line-height: 20px; }
 .chrome-setup-steps code { padding: 1px 5px; border-radius: 5px; background: var(--surface-soft); font-size: 12px; }
 .chrome-setup-steps button { flex-shrink: 0; white-space: nowrap; }
+.chrome-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chrome-setup-steps button.is-saved { color: var(--accent); }
+.chrome-setup-steps button.is-saved svg { stroke-width: 2.4; }
 .chrome-setup-steps button .icon { width: 15px; height: 15px; margin-right: 6px; vertical-align: -3px; }
 .chrome-setup-status { display: flex; align-items: center; gap: 10px; margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-soft); font-size: 13px; line-height: 20px; }
 .chrome-setup-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -899,6 +986,13 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .collection-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-label small { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 10px; line-height: 14px; color: var(--muted); }
 .instagram-collection .nav-count { flex-shrink: 0; }
+/* All saves is a group like an account's, so AI activity can sit under it as a child row. */
+.all-saves-group > #ai-activity-navigation { display: contents; }
+.all-saves-group > #ai-activity-navigation > .instagram-collections { grid-column: 1 / -1; grid-row: 2; }
+.all-saves-group:not(.has-collections) > .all-saves-nav { margin-bottom: 8px; }
+.ai-activity-state { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; color: var(--ai-spark, var(--accent)); }
+.ai-activity-state .icon { width: 14px; height: 14px; }
+.ai-activity-state .dot-loader { transform: scale(.8); }
 @media (max-width: 640px) {
   .source-account-group { grid-template-columns: 38px fit-content(14ch) 28px minmax(8px, 1fr) max-content max-content 8px; }
   .source-account-group > .account-nav-item > .source-icon { margin-left: 8px; }
@@ -965,7 +1059,7 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .unsave-summary { padding: 14px 16px; margin-bottom: 20px; border-radius: 16px; background: var(--surface-soft); }
 .unsave-summary strong { font-size: 13px; }
 .unsave-summary img { display: block; width: 100%; max-height: 160px; object-fit: cover; margin-bottom: 12px; border-radius: 10px; }
-.unsave-summary p { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; margin: 6px 0 0; }
+.unsave-summary p { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
 .unsave-accounts { margin: 0 0 18px; padding: 0; border: 0; }
 .unsave-accounts legend { margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 .unsave-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
@@ -980,7 +1074,7 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 @media (prefers-reduced-motion: reduce) { .unsave-overlay { animation: none; } }
 .unsave-button:hover { color: var(--danger); }
 .cards[data-view="feed"] .unsave-button:hover { color: var(--danger); background: var(--warning-bg); }
-.cards[data-view="feed"] .has-native-embed .card-preview { min-height: 160px; }
+.cards[data-view="feed"] .has-native-embed .card-preview { min-height: max(160px, var(--feed-rail-min)); }
 
 /* Nested topic folders: parent rows reuse the Instagram collection tree. */
 .topic-group > .account-nav-item > .icon { grid-column: 1; margin-left: 12px; }
@@ -1128,8 +1222,8 @@ body.topic-dragging iframe { pointer-events: none; }
 @keyframes preview-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
 @media (prefers-reduced-motion: reduce) { .native-embed .embed-stage::after { animation: none; opacity: 0; } }
 /* X posts brighten their own card on hover, so the space around them follows to white. */
-.cards[data-view="grid"] .save-card.x .card-preview { transition: background-color 160ms ease-out; }
-.cards[data-view="grid"] .save-card.x .card-preview:hover { background: var(--paper); }
+.cards[data-view="grid"] :is(.save-card.x, .save-card.threads) .card-preview { transition: background-color 160ms ease-out; }
+.cards[data-view="grid"] :is(.save-card.x, .save-card.threads) .card-preview:hover { background: var(--paper); }
 /* Compact sync report: one tight header, counts as a quiet second line, details as a
    small inline link, and the auto-dismiss countdown as a hairline on the card's edge. */
 .sync-platform-card { padding: 10px 12px 12px; border-radius: 14px; overflow: hidden; box-shadow: 0 6px 20px #2931201a, 0 1px 2px #2931200d; }
@@ -1369,8 +1463,9 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 .search.is-centred:not(.is-leaving) .search-hint .ai-tool-icon { width: 16px; height: 16px; }
 
 /* Shown where an AI's cards will appear. */
-.ai-results-loader { position: sticky; top: calc(var(--toolbar-height, 70px) + 6px); z-index: 3; display: flex; justify-content: center; margin-bottom: 16px; text-align: left; }
-.ai-results-loader.is-alone { position: static; align-items: center; min-height: 55dvh; margin: 0; padding: 0 16px; text-align: center; }
+.ai-results-loader { position: sticky; top: calc(var(--toolbar-height, 70px) + 6px); z-index: 6; display: flex; justify-content: center; margin-bottom: 16px; text-align: left; }
+.search-tools:has(:is(.search-scrim.is-on, .search.is-centred)) ~ .ai-results-loader { z-index: 3; }
+.ai-results-loader.is-alone { position: relative; align-items: center; min-height: 55dvh; margin: 0; padding: 0 16px; text-align: center; }
 /* A glass card with a small stack of saves being flipped through. */
 .ai-progress-card { --glass-tint: var(--paper); display: flex; align-items: center; gap: 18px; width: min(560px, 100%); padding: 12px 20px; border: 1px solid color-mix(in srgb, #fff 55%, transparent); border-radius: 20px; background: linear-gradient(145deg, color-mix(in srgb, var(--glass-tint) 82%, transparent), color-mix(in srgb, var(--glass-tint) 58%, transparent)); -webkit-backdrop-filter: blur(22px) saturate(1.7); backdrop-filter: blur(22px) saturate(1.7); box-shadow: 0 16px 40px -8px #2931202e, 0 1px 3px #2931201a, inset 0 1px 0 color-mix(in srgb, #fff 70%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 20%, transparent); }
 :root[data-theme="dark"] .ai-progress-card { border-color: color-mix(in srgb, #fff 16%, transparent); box-shadow: 0 16px 40px -8px #00000080, inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent); }

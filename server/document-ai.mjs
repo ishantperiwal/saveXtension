@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { HttpError } from './domain.mjs';
 import { readDocumentEdit, readStructured, runDocumentTool, runPlanTool, signedOutMessage } from './ai-search.mjs';
 import { withoutRepeats } from './note-ai.mjs';
+import { aiLine } from './ai-line.mjs';
 
 const REQUEST_LIMIT = 2000;
 const DESCRIBE_SCHEMA = '{"type":"object","properties":{"description":{"type":"string"}},"required":["description"],"additionalProperties":false}';
@@ -27,11 +28,16 @@ const REFINE_SYSTEM = [
 
 // Sends what belongs from one saved post into one of the person's documents, respecting the document's description and structure.
 // One job at a time. The edit is recorded in the journal so Undo can take it back.
-export function documentAi({ store, documents, topics, tool, visiblePost, mcp, baseUrl, run = runDocumentTool, plan = runPlanTool }) {
+export function documentAi({ store, documents, topics, tool, visiblePost, mcp, baseUrl, run = runDocumentTool, plan = runPlanTool, line = aiLine() }) {
   let job = null, lastId = 0;
   const view = current => current && { id: current.id, post: current.post, documentId: current.documentId, documentTitle: current.documentTitle, request: current.request, state: current.state, step: current.step, error: current.error, summary: current.summary, changeId: current.changeId, updatedAt: current.updatedAt, model: current.model };
   async function work(current, chosen) {
     const url = `${baseUrl}/mcp/note/${current.token}`;
+    // A note being filled goes first; this waits its turn in the line they share, and can be cancelled meanwhile.
+    if (line.holder()) current.step = line.holder() === 'note' ? 'Waiting for a note to finish' : 'Waiting its turn';
+    const release = line.now('document') || await line.take('document');
+    if (current.state !== 'running') { release(); await current.handler?.close().catch(() => {}); current.handler = null; return; }
+    current.step = 'Starting';
     try {
       const doc = documents.get(current.documentId), beforeUpdatedAt = doc.updatedAt;
       const post = store.post(current.post), note = post?.notes || '';
@@ -66,6 +72,7 @@ export function documentAi({ store, documents, topics, tool, visiblePost, mcp, b
     } finally {
       const handler = current.handler; current.handler = null; current.token = '';
       await handler?.close().catch(() => {});
+      release();
     }
   }
   return {

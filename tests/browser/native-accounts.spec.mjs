@@ -58,7 +58,6 @@ const xPost = { id: 1, platform: 'x', accounts: ['@one'], url: 'https://x.com/cr
 test('refreshing all saves syncs only what is connected instead of asking to connect more', async ({ page }) => {
   const { queued } = await desktopLibrary(page, [{ id: 's1', platform: 'x', handle: '@one', status: 'connected' }], [xPost]);
   await page.getByRole('button', { name: 'Refresh all sources', exact: true }).click();
-  await page.getByRole('button', { name: 'Quick scan', exact: true }).click();
   await expect.poll(() => queued.length).toBe(1);
   expect(queued[0]).toMatchObject({ targets: ['chrome', 'x'], mode: 'quick' });
   await expect(page.getByRole('heading', { name: 'Connect accounts', exact: true })).toHaveCount(0);
@@ -188,7 +187,9 @@ test('Settings shows the extension’s state in one line and opens setup as its 
   await expect(page.locator('#sheet')).not.toBeVisible();
   await expect(page.locator('#modal')).not.toHaveClass(/is-behind/);
   await expect(row).toContainText('Connected');
-  await expect(row.getByRole('button')).toHaveCount(0);
+  // Connected, the only button is Check again.
+  await expect(row.getByRole('button')).toHaveCount(1);
+  await expect(row.getByRole('button', { name: 'Check again', exact: true })).toBeVisible();
   await expect(page.locator('.native-account-settings')).toContainText('@one');
   // A connected account opens its own window rather than offering another sign-in.
   await expect(page.locator('.native-account-settings').getByRole('button', { name: 'Reconnect' })).toHaveCount(0);

@@ -71,3 +71,14 @@ test('a pin gone from All pins means reading the boards, including for its secon
   clear(); pinRemember(store, ['1', '2']); store.set('pin-missing:4:3', String(Date.now()));
   assert.equal(pinGate(store, ['1', '2'], { reachedEnd: true }), true, 'waiting on its second board read');
 });
+
+test('a Threads saved list shows in its order, and a post missing from it is never sent to be checked for removal', t => {
+  const store = new Store(':memory:'); t.after(() => store.close());
+  const link = id => `https://www.threads.com/@author/post/${id}`, scan = id => ({ id, platform: 'threads', account: '@me', collection_id: null, mode: 'quick' });
+  const read = (run, ids) => { const posts = ids.map(id => ({ url: link(id), text: id, sourceAccount: '@me' })); store.importPosts(posts); listReadSoFar(store, run, posts); listScanFinished(store, run, 'completed'); return missingFromList(store, run, { status: 'completed', seenIds: ids, reachedEnd: true }); };
+  assert.deepEqual(read(scan('one'), ['c', 'b', 'a']), []);
+  // 'b' is gone from the top of the list. Instagram would check it; Threads only forgets its place.
+  assert.deepEqual(read(scan('two'), ['d', 'c', 'a']), []);
+  assert.deepEqual(orderLibraryPosts(store.posts(), { accounts: ['threads:@me'] }).map(post => post.externalId), ['d', 'c', 'a', 'b']);
+  assert.equal(store.posts().length, 4);
+});
