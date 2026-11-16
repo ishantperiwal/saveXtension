@@ -34,8 +34,7 @@ test('desktop imports Chrome bookmarks from Chrome\'s own file without opening a
     const security = await desktop.evaluate(({ BrowserWindow }) => { const prefs = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences(); return { nodeIntegration: prefs.nodeIntegration, contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox }; });
     assert.deepEqual(security, { nodeIntegration: false, contextIsolation: true, sandbox: true });
     await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'App version', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'App version', exact: true }).click();
+    await expect(page.getByRole('heading', { name: /^App version/ })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     await page.route('**/api/posts/*/website-preview',route=>route.fulfill({json:{available:false}}));

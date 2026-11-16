@@ -287,7 +287,7 @@ export function readImageResults(output, batch) {
 }
 
 export function aiSearch({ store, visiblePosts, find = findFile, isSignedIn = signedIn, run = runTool, act = runAction, hasLocal = () => false, images = { has: () => false, read: async () => null }, keys = null, apiBase = '' }) {
-  let job = null, lastId = 0, action = null, actionError = null;
+  let job = null, lastId = Date.now(), action = null, actionError = null;
   const scanning = new Map();
   // For scanning one post by hand: the AI that's on if it can see, otherwise the first installed one that can. The local model can't.
   const vision = () => { const on = selected(); return on?.imageArguments ? on : tools().find(tool => tool.imageArguments) || null; };

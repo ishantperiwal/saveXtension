@@ -173,7 +173,15 @@ test('tracks multiple AI jobs in one bottom-right list, shows Open document + Sh
   // 2. Start Note AI on post 101 while scan is still running.
   const card101 = page.locator('.save-card[data-post-id="101"]');
   await card101.locator('[data-open="101"]').click();
-  await card101.locator('[data-note-ai="101"]').click();
+  const noteAiBtn = card101.locator('[data-note-ai="101"]');
+  const btnStyle = await noteAiBtn.evaluate(el => {
+    const s = getComputedStyle(el);
+    return { borderRadius: s.borderRadius, borderTopWidth: s.borderTopWidth, backgroundImage: s.backgroundImage };
+  });
+  expect(btnStyle.borderRadius).toBe('50%');
+  expect(btnStyle.borderTopWidth).toBe('1px');
+  expect(btnStyle.backgroundImage).toContain('linear-gradient');
+  await noteAiBtn.click();
   const noteInput = card101.locator('.note-ai-input');
   await noteInput.fill('Summarize the core idea');
   await noteInput.press('Enter');
@@ -361,4 +369,38 @@ test('Show post scrolls to a distant X post in one click when switching out of a
     expect(rect.top).toBeGreaterThanOrEqual(0);
     expect(rect.top).toBeLessThan(rect.vh - 60);
   }).toPass({ timeout: 4000 });
+});
+
+test('Running document AI job appears under All saves AI activity even when doc:1 was previously dismissed', async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('test-seeded')) {
+      sessionStorage.setItem('test-seeded', '1');
+      localStorage.setItem('savex-ai-dismissed', JSON.stringify(['doc:1']));
+    }
+  });
+  const docJobState = { nextId: 1, current: null, pollAdvance: 0, pollCount: 0 };
+  await setupAiFixture(page, {
+    posts: [makePost(101)],
+    doc: { id: 'doc-design', title: 'Design Notes', description: 'UI references', body: '', updatedAt: '2026-11-15T09:00:00Z' },
+    docJobState,
+    noteJobsState: { nextId: 1, jobs: [] },
+    scanHandler: route => route.fulfill({ json: { description: 'Clean layout', model: 'vision-1' } }),
+  });
+
+  await page.goto('/');
+  await page.locator('.save-card[data-post-id="101"] [data-action="send-to-document"]').click();
+  await expect(page.locator('#send-document-form')).toBeVisible();
+  await page.locator('#send-document-form button[type="submit"]').click();
+
+  // Visible immediately under All saves > AI activity while still running.
+  const aiNav = page.locator('#ai-activity-navigation [data-ai-activity-nav]');
+  await expect(aiNav).toBeVisible();
+  await expect(aiNav).toContainText('AI activity');
+  await expect(aiNav.locator('.nav-count')).toHaveText('1');
+  await expect(page.locator('#ai-status')).toBeVisible();
+  await expect(page.locator('#ai-status .ai-toast-summary')).toContainText('1 running');
+
+  docJobState.pollAdvance = 1;
+  await expect(page.locator('#ai-status .ai-toast-summary')).toContainText('1 done');
+  await expect(aiNav.locator('.nav-count')).toHaveText('1');
 });

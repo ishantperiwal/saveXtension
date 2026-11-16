@@ -27,7 +27,7 @@ export function withoutRepeats(before, note, postText = '') {
 // One runs at a time, so the site only ever sees one visit. A note asked for meanwhile waits its turn and starts by itself
 // (user's decision): each one was still asked for on its own post. The AI only returns text: this adds it below the note, or replaces the note if the person asked for a rewrite. Undo in the app puts it back.
 export function noteAi({ store, tool, visiblePost, mcp, baseUrl, run = runNoteTool, line = aiLine() }) {
-  let job = null, lastId = 0, drained = null;
+  let job = null, lastId = Date.now(), drained = null;
   // Every post's latest job, running, waiting or finished, so the app can follow them all. Oldest first.
   const jobs = new Map();
   const view = current => current && { id: current.id, post: current.post, request: current.request, state: current.state, waitingFor: current.waitingFor || '', position: current.state === 'waiting' ? [...jobs.values()].filter(item => item.state === 'waiting').indexOf(current) + 1 : 0, step: current.step, error: current.error, notes: current.notes, before: current.before, updatedAt: current.updatedAt, model: current.model };

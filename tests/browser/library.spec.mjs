@@ -47,7 +47,6 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
   await page.screenshot({ path: 'test-results/local-library-mobile.png', fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: 'Settings & backups' }).click();
-  await page.getByRole('button', { name: 'Backup', exact: true }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: 'Export library' }).click()]);
   const backup = JSON.parse(await readFile(await download.path(), 'utf8')); expect(backup.posts.find(post => post.id === fixture.id).notes).toBe('Try on Sunday');
   expect(errors).toEqual([]);

@@ -250,7 +250,11 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
 
   function upsert(entry) {
     if (!entry?.key) return null;
-    if (entry.serverRef && dismissedRefs.has(entry.serverRef)) return null;
+    if (entry.serverRef && dismissedRefs.has(entry.serverRef)) {
+      if (!isActive(entry.state)) return null;
+      // Server job IDs restart from low counters or may be reused across sessions; an active job is always new work.
+      dismissedRefs.delete(entry.serverRef);
+    }
     if (entry.serverRef) {
       const existing = [...items.values()].find(item => item.serverRef === entry.serverRef && item.key !== entry.key);
       if (existing) {

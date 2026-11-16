@@ -62,3 +62,24 @@ test('an unorganized card creates and adds a collection inline, retries failure 
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.reload();await page.locator('[data-open-collection="Personal <ideas>"]').click();await expect(item.locator('.tag')).toHaveText(['Available collection','Personal <ideas>']);
 });
+
+test('overflowing topic lists softly fade at clipped scroll edges', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const topics = Array.from({ length: 12 }, (_, i) => ({ id: `t-${i}`, name: `Topic ${String(i + 1).padStart(2, '0')}` }));
+  await page.route('**/api/posts?scope=all', route => route.fulfill({
+    json: {
+      topics,
+      runs: [],
+      posts: [{ id: 501, platform: 'chrome', url: 'https://example.org/soft-fade', bookmarkTitle: 'Soft fade', topics: [], accounts: [], notes: '', archived: false, savedAt: '2026-11-10T10:00:00Z' }],
+    },
+  }));
+  await page.goto('/');
+  await page.locator('.save-card[data-post-id="501"] [data-action="add-collection"]').click();
+  const list = page.locator('#collection-picker .collection-picker-list');
+  await expect(list).toHaveAttribute('data-more-below', '');
+  await expect(list).not.toHaveAttribute('data-more-above');
+  const maskAtTop = await list.evaluate(el => getComputedStyle(el).maskImage);
+  expect(maskAtTop).toContain('linear-gradient');
+  await list.evaluate(el => { el.scrollTop = 40; });
+  await expect(list).toHaveAttribute('data-more-above', '');
+});

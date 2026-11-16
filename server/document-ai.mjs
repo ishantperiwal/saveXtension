@@ -29,7 +29,7 @@ const REFINE_SYSTEM = [
 // Sends what belongs from one saved post into one of the person's documents, respecting the document's description and structure.
 // One job at a time. The edit is recorded in the journal so Undo can take it back.
 export function documentAi({ store, documents, topics, tool, visiblePost, mcp, baseUrl, run = runDocumentTool, plan = runPlanTool, line = aiLine() }) {
-  let job = null, lastId = 0;
+  let job = null, lastId = Date.now();
   const view = current => current && { id: current.id, post: current.post, documentId: current.documentId, documentTitle: current.documentTitle, request: current.request, state: current.state, step: current.step, error: current.error, summary: current.summary, changeId: current.changeId, updatedAt: current.updatedAt, model: current.model };
   async function work(current, chosen) {
     const url = `${baseUrl}/mcp/note/${current.token}`;

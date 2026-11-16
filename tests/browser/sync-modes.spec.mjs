@@ -103,9 +103,11 @@ test('extension quick sync skips known history; manual deep scan finds gaps and 
     expect(foreground).toBe(`${baseURL}/`);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-    await expect(page.locator('.sidebar-account-refresh:disabled')).toHaveCount(0, { timeout: 6000 });
-    await openSyncOptions(page);
-    await expect(page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toBeEnabled();
+    await expect.poll(async () => {
+      await page.keyboard.press('Escape');
+      await openSyncOptions(page);
+      return page.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true }).isEnabled();
+    }, { timeout: 6000 }).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.locator('.sidebar')).toHaveCount(1);
     await page.screenshot({ path: testInfo.outputPath('manual-deep-scan-mobile.png') });

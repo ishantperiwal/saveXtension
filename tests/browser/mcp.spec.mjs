@@ -44,8 +44,11 @@ test('Settings enables local MCP, copies a universal connection prompt, reflects
   expect(prompt).toContain('A direct HTTP request, curl check, separate SDK connection');
   expect(prompt).toContain('Configured; verification pending');
   expect(prompt).toContain('unless I explicitly stop you');
+  const mcpPanel = page.locator('.settings-panel[data-panel="mcp"]');
+  await expect(mcpPanel.locator('.settings-panel-chevron')).toHaveCount(0);
+  await expect(mcpPanel.locator('button.settings-panel-toggle')).toHaveCount(0);
   await expect(copyButton).not.toHaveClass(/is-copied/);
-  await expect(copyButton).toHaveAttribute('aria-label', 'Copy connection prompt');
+  await expect(copyButton).toHaveText('Copy connection prompt');
   await expect(page.locator('#toast')).toContainText('Connection copied');
   await expect(page.locator('#toast .toast-detail')).toHaveText('Paste into any MCP-compatible AI app on this computer.');
   await expect(page.locator('#toast')).toHaveClass(/bottom-center/);

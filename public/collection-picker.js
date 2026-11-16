@@ -3,7 +3,7 @@ const key = text => text.normalize('NFKC').trim().toLocaleLowerCase('en-US');
 export function closeCollectionPicker(restoreFocus = false) {
   if (!current) return;
   const picker = current; current = null;
-  cancelAnimationFrame(picker.frame); picker.root.remove(); picker.trigger.setAttribute('aria-expanded', 'false');
+  cancelAnimationFrame(picker.frame); picker.measure?.disconnect(); picker.root.remove(); picker.trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus) picker.restoreFocus();
 }
 // Lists every topic with a folder icon; the post's own topics are ticked and
@@ -21,6 +21,13 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
   form.append(input,list,hint,create,error); root.append(form); document.body.append(root);
   const assigned = new Set((post.topics || []).map(key)), catalog = [...topics.filter(topic=>assigned.has(key(topic.name))), ...topics.filter(topic=>!assigned.has(key(topic.name)))];
   const picker = { root, trigger, restoreFocus, busy:false, frame:0 }; current = picker; trigger.setAttribute('aria-expanded','true');
+  const edges = () => {
+    list.toggleAttribute('data-more-above', list.scrollTop > 2);
+    list.toggleAttribute('data-more-below', list.scrollTop + list.clientHeight < list.scrollHeight - 2);
+  };
+  list.addEventListener('scroll', edges, { passive: true });
+  picker.measure = typeof ResizeObserver === 'function' ? new ResizeObserver(edges) : null;
+  picker.measure?.observe(list);
   function position() {
     if (!trigger.isConnected) { closeCollectionPicker(); return; }
     // Sizes without the opening animation, which starts it slightly smaller. It grows out of the + button, whichever side it opens on.
@@ -59,7 +66,7 @@ export function openCollectionPicker({ trigger, post, topics, onAdd, onRemove, r
     const exists = catalog.some(topic=>key(topic.name)===query);
     create.hidden = !query || exists || assigned.has(query);
     create.textContent = query ? `Create “${input.value.trim()}”` : '';
-    error.textContent = ''; position();
+    error.textContent = ''; position(); edges(); requestAnimationFrame(edges);
   }
   input.oninput = render;
   form.onsubmit = event => {

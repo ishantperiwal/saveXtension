@@ -85,27 +85,158 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     x: cookie => cookie.name === 'auth_token' && !!cookie.value,
     instagram: cookie => cookie.name === 'sessionid' && !!cookie.value
   };
+  const overlayPlatformIcon = {
+    pinterest: '<svg width="21" height="21" viewBox="0 0 24 24"><path fill="#e60023" d="M12.017 0C5.396 0 .029 5.367.029 11.987c0 5.079 3.158 9.417 7.618 11.162-.105-.949-.199-2.403.041-3.439.219-.937 1.406-5.957 1.406-5.957s-.359-.72-.359-1.781c0-1.663.967-2.911 2.168-2.911 1.024 0 1.518.769 1.518 1.688 0 1.029-.653 2.567-.992 3.992-.285 1.193.6 2.165 1.775 2.165 2.128 0 3.768-2.245 3.768-5.487 0-2.861-2.063-4.869-5.008-4.869-3.41 0-5.409 2.562-5.409 5.199 0 1.033.394 2.143.889 2.741.099.12.112.225.085.345-.09.375-.293 1.199-.334 1.363-.053.225-.172.271-.401.165-1.495-.69-2.433-2.878-2.433-4.646 0-3.776 2.748-7.252 7.92-7.252 4.158 0 7.392 2.967 7.392 6.923 0 4.135-2.607 7.462-6.233 7.462-1.214 0-2.354-.629-2.758-1.379l-.749 2.848c-.269 1.045-1.004 2.352-1.498 3.146 1.123.345 2.306.535 3.55.535 6.607 0 11.985-5.365 11.985-11.987C23.97 5.39 18.592.026 11.985.026L12.017 0z"/></svg>',
+    instagram: '<svg width="21" height="21" viewBox="0 0 24 24"><defs><linearGradient id="ov-ig" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#fbb04b"/><stop offset=".45" stop-color="#ed386b"/><stop offset="1" stop-color="#9b42ba"/></linearGradient></defs><rect x="1" y="1" width="22" height="22" rx="6" fill="url(#ov-ig)"/><rect x="5.5" y="5.5" width="13" height="13" rx="4" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="16.4" cy="7.7" r="1" fill="#fff"/></svg>',
+    x: '<svg width="19" height="19" viewBox="0 0 24 24"><path fill="#111111" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.64 7.584H.47l8.6-9.835L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>'
+  };
+  function createSignInOverlay(win, profile, { onManual }) {
+    const name = platformLabel(profile.platform);
+    const platformSvg = overlayPlatformIcon[profile.platform] || '';
+    const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false } });
+    view.setBackgroundColor('#00000000');
+    view.webContents.setAudioMuted(true);
+    view.webContents.on('will-attach-webview', event => event.preventDefault());
+    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    view.webContents.on('will-navigate', (event, url) => {
+      if (url.startsWith('data:')) return;
+      event.preventDefault();
+      if (url === 'savex://manual') onManual();
+    });
+    const fit = () => {
+      if (win.isDestroyed() || view.webContents.isDestroyed()) return;
+      const [width, height] = win.getContentSize();
+      view.setBounds({ x: 0, y: 0, width: Math.max(width, 0), height: Math.max(height, 0) });
+    };
+    win.on('resize', fit);
+    win.contentView.addChildView(view);
+    fit();
+    let stage = 'checking', loaded = false, removed = false;
+    const html = `<!doctype html><meta charset="utf-8"><style>
+      *{box-sizing:border-box}
+      html,body{margin:0;width:100%;height:100%;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff;-webkit-font-smoothing:antialiased}
+      .scrim{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(12,13,12,.56);backdrop-filter:blur(20px) saturate(140%);-webkit-backdrop-filter:blur(20px) saturate(140%)}
+      .card{width:min(330px,100%);background:rgba(24,26,24,.64);backdrop-filter:blur(28px) saturate(170%);-webkit-backdrop-filter:blur(28px) saturate(170%);border:1px solid rgba(255,255,255,.14);border-radius:22px;padding:26px 22px 20px;box-shadow:0 24px 64px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.12);text-align:center}
+      .visual{position:relative;width:132px;height:48px;margin:0 auto 16px}
+      .node{position:absolute;top:3px;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.28);box-shadow:0 6px 20px rgba(0,0,0,.28);transition:transform .42s cubic-bezier(.22,1,.36,1),opacity .28s ease}
+      .node-left{left:6px;color:#46613a}
+      .node-right{left:84px;color:#242622}
+      .node-icon{display:flex;align-items:center;justify-content:center;width:21px;height:21px}
+      .path{position:absolute;left:53px;top:21px;width:26px;height:6px;display:flex;align-items:center;justify-content:center;gap:4px;transition:opacity .22s ease,transform .28s ease}
+      .path i{width:4.5px;height:4.5px;border-radius:50%;background:rgba(255,255,255,.88);animation:travel 1.2s ease-in-out infinite}
+      .path i:nth-child(2){animation-delay:.18s}
+      .path i:nth-child(3){animation-delay:.36s}
+      @keyframes travel{0%,60%,100%{opacity:.24;transform:translateY(0)}30%{opacity:1;transform:translateY(-2.5px)}}
+      .sticky-badge{position:absolute;right:-3px;bottom:-3px;width:18px;height:18px;border-radius:50%;background:#46613a;color:#fff;border:2px solid rgba(22,24,22,.92);display:grid;place-items:center;box-shadow:0 2px 6px rgba(0,0,0,.35);opacity:0;transform:scale(.4);transition:opacity .24s ease .14s,transform .34s cubic-bezier(.34,1.56,.64,1) .14s}
+      [data-stage="connecting"] .node-left{opacity:0;transform:translateX(18px) scale(.72)}
+      [data-stage="connecting"] .path{opacity:0;transform:scale(.5)}
+      [data-stage="connecting"] .node-right{transform:translateX(-39px) scale(1.1)}
+      [data-stage="connecting"] .sticky-badge{opacity:1;transform:scale(1)}
+      h1{margin:0 0 6px;font-size:15.5px;line-height:1.35;font-weight:500;letter-spacing:-.01em;color:#fff}
+      p{margin:0;font-size:13px;line-height:1.45;color:rgba(255,255,255,.68)}
+      .actions{margin-top:18px;display:flex;justify-content:center}
+      button{appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.9);background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 15px;transition:background .15s,border-color .15s,color .15s}
+      button:hover{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.28);color:#fff}
+      .progress{display:none;width:132px;height:3px;margin:18px auto 4px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden}
+      .progress-fill{width:100%;height:100%;border-radius:inherit;background:rgba(255,255,255,.82);transform-origin:left center;transform:scaleX(0)}
+      @keyframes autoclose{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+      [data-stage="connecting"] .actions{display:none}
+      [data-stage="connecting"] .progress{display:block}
+      [data-stage="connecting"] .progress-fill{animation:autoclose 2.2s linear forwards}
+      @media (prefers-reduced-motion:reduce){.path i{animation:none;opacity:.6}.progress-fill{animation:none;transform:scaleX(1)}}
+    </style>
+    <div class="scrim" data-stage="checking">
+      <div class="card" role="status" aria-live="polite">
+        <div class="visual" aria-hidden="true">
+          <span class="node node-left">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4-6 4z"/></svg>
+          </span>
+          <span class="path"><i></i><i></i><i></i></span>
+          <span class="node node-right">
+            <span class="node-icon">${platformSvg}</span>
+            <span class="sticky-badge">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg>
+            </span>
+          </span>
+        </div>
+        <h1 id="title">Checking Chrome for ${name}…</h1>
+        <p id="lead">Hold on — we’ll bring you right back.</p>
+        <div class="actions"><button id="manual" type="button">Sign in manually</button></div>
+        <div class="progress" aria-hidden="true"><div class="progress-fill"></div></div>
+      </div>
+    </div>
+    <script>
+      document.getElementById('manual').addEventListener('click', () => { location.href = 'savex://manual'; });
+      addEventListener('keydown', event => { if (event.key === 'Escape') location.href = 'savex://manual'; });
+      window.__setState = state => {
+        const root = document.querySelector('.scrim');
+        root.dataset.stage = state;
+        const title = document.getElementById('title'), lead = document.getElementById('lead');
+        if (state === 'connecting') {
+          title.textContent = ${JSON.stringify(`${name} connected`)};
+          lead.textContent = 'Returning to saveXtension…';
+        }
+      };
+    </script>`;
+    const apply = () => {
+      if (!removed && !view.webContents.isDestroyed() && stage !== 'checking') {
+        void view.webContents.executeJavaScript(`window.__setState?.(${JSON.stringify(stage)})`).catch(() => {});
+      }
+    };
+    view.webContents.once('did-finish-load', () => { loaded = true; apply(); });
+    void view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
+    return {
+      view,
+      setState(next) { stage = next; if (loaded) apply(); },
+      dismiss() {
+        if (removed) return;
+        removed = true;
+        if (!win.isDestroyed()) {
+          win.off('resize', fit);
+          try { win.contentView.removeChildView(view); } catch {}
+        }
+        if (!view.webContents.isDestroyed()) view.webContents.close();
+      }
+    };
+  }
   // Fastest route: the Chrome helper hands over the person's existing sign-in. If Chrome is closed,
-  // has no helper or isn't signed in, this quietly leaves the sign-in window as it was.
+  // has no helper or isn't signed in, this quietly clears the guide overlay so they can sign in here.
   async function signInFromHelper(login) {
     const { win, profile } = login, helper = library.sync.status().chromeBrowser;
-    if (!helper?.online || !helper.chromeSessionSites?.includes(profile.platform)) return;
+    if (!helper?.online || !helper.chromeSessionSites?.includes(profile.platform)) {
+      login.dismissOverlay?.();
+      return;
+    }
     const id = library.sync.requestChromeSession(profile.platform), original = win.getTitle(), end = Date.now() + 45000;
     win.setTitle(`Looking for your ${platformLabel(profile.platform)} sign-in in Chrome…`);
     let cookies = null;
-    while (!cookies && Date.now() < end && !closed && !win.isDestroyed() && profile.status !== 'connected') {
-      cookies = library.sync.takeChromeSession(id);
-      if (!cookies) await new Promise(resolve => setTimeout(resolve, 400));
+    try {
+      while (!cookies && !login.manual && Date.now() < end && !closed && !win.isDestroyed() && profile.status !== 'connected') {
+        cookies = library.sync.takeChromeSession(id);
+        if (!cookies) await new Promise(resolve => setTimeout(resolve, 400));
+      }
+    } finally {
+      library.sync.cancelChromeSession(id);
     }
-    library.sync.cancelChromeSession(id);
     if (win.isDestroyed()) return;
     win.setTitle(original);
     // A signed-out Chrome has nothing to give, and reloading would interrupt someone typing here.
-    if (!cookies?.some(signedInCookie[profile.platform]) || profile.status === 'connected') return;
+    if (login.manual || !cookies?.some(signedInCookie[profile.platform]) || profile.status === 'connected') {
+      login.dismissOverlay?.();
+      return;
+    }
+    login.overlay?.setState('connecting');
     const ses = profileSession(profile);
     await Promise.allSettled(cookies.map(cookie => ses.cookies.set(extensionCookie(cookie))));
     await ses.cookies.flushStore();
-    if (!win.isDestroyed()) void win.loadURL(home(profile.platform)).catch(() => {});
+    if (win.isDestroyed() || login.manual) { login.dismissOverlay?.(); return; }
+    void win.loadURL(home(profile.platform)).catch(() => {});
+    // If Chrome's session turned out stale or needs a check, clear the overlay so the user can finish on the page.
+    const revealTimer = setTimeout(() => {
+      if (!win.isDestroyed() && profile.status !== 'connected') login.dismissOverlay?.();
+    }, 10000);
+    revealTimer.unref?.();
+    win.once('closed', () => clearTimeout(revealTimer));
   }
   // A connected account's own site in a normal window, signed in with its saved session.
   // One window per account; links to other sites open in the browser.
@@ -735,7 +866,12 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     if (id && !profile) throw new Error('Account connection not found.');
     if (!profile) { profile = { id: randomUUID(), platform, handle: expectedHandle || '', name: '', status: 'needs-login' }; accounts.push(profile); publish(); }
     if (logins.has(profile.id)) { logins.get(profile.id).win.show(); logins.get(profile.id).win.focus(); return publicAccounts(); }
-    const win = makeWindow(profile, true), login = { win, profile, pending: false, last: '', stable: 0 };
+    const win = makeWindow(profile, true), login = { win, profile, pending: false, last: '', stable: 0, manual: false, overlay: null, dismissOverlay: null };
+    const helper = library.sync.status().chromeBrowser;
+    if (helper?.online && helper.chromeSessionSites?.includes(profile.platform)) {
+      login.overlay = createSignInOverlay(win, profile, { onManual: () => { login.manual = true; login.dismissOverlay?.(); } });
+      login.dismissOverlay = () => { if (!login.overlay) return; const current = login.overlay; login.overlay = null; current.dismiss(); };
+    }
     logins.set(profile.id, login);
     const verifyLogin = async () => {
       if (closed || login.pending || win.isDestroyed() || !socialUrl(win.webContents.getURL(), platform)) return;
@@ -745,18 +881,18 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
         // Pinterest can sign in without a page load, leaving that page's data signed out.
         if (!actual && platform === 'pinterest' && Date.now() - (login.reloaded || 0) > 5000 && await evaluate({ win, profile }, `!!document.querySelector('[data-test-id="header-profile"]')`).catch(() => false)) { login.reloaded = Date.now(); win.webContents.reload(); }
         if (!actual || !handlePattern(platform).test(actual.handle)) { login.stable = 0; return; }
-        if (profile.handle && profile.handle.toLowerCase() !== actual.handle.toLowerCase()) { win.setTitle(`Connect ${profile.handle} · currently signed in as ${actual.handle}`); login.stable = 0; return; }
+        if (profile.handle && profile.handle.toLowerCase() !== actual.handle.toLowerCase()) { login.dismissOverlay?.(); win.setTitle(`Connect ${profile.handle} · currently signed in as ${actual.handle}`); login.stable = 0; return; }
         login.stable = login.last === actual.handle ? login.stable + 1 : 1; login.last = actual.handle;
         if (login.stable < 3) return;
         const duplicate = accounts.find(item => item.id !== profile.id && item.platform === platform && item.handle.toLowerCase() === actual.handle.toLowerCase());
         if (duplicate) throw new Error(`${actual.handle} is already connected. To add another, switch to it in Chrome and try again, or sign in here.`);
         Object.assign(profile, { handle: actual.handle, name: actual.name || '', status: 'connected' });
         profileSession(profile).flushStorageData(); publish(); wake(); win.close();
-      } catch (error) { if (!win.isDestroyed() && /already connected/.test(error.message)) win.setTitle(error.message); }
+      } catch (error) { if (!win.isDestroyed() && /already connected/.test(error.message)) { login.dismissOverlay?.(); win.setTitle(error.message); } }
       finally { login.pending = false; }
     };
     login.timer = setInterval(() => void verifyLogin(), 750);
-    win.on('closed', () => { clearInterval(login.timer); logins.delete(profile.id); login.chromeChild?.kill(); publish(); });
+    win.on('closed', () => { clearInterval(login.timer); logins.delete(profile.id); login.dismissOverlay?.(); login.chromeChild?.kill(); publish(); });
     if (platform === 'threads') await shareInstagramSignIn(profile).catch(onError);
     if (win.isDestroyed()) return publicAccounts();
     void win.loadURL(home(platform)).catch(() => {});
@@ -783,7 +919,7 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
       library.store.db.prepare("UPDATE sync_runs SET status='cancelled',finished_at=?,message='Stopped when saveXtension closed. Imported saves are kept.' WHERE status='running'").run(new Date().toISOString());
       for (const call of collectorCalls.values()) { clearTimeout(call.timer); call.reject(new Error('saveXtension is closing.')); }
       collectorCalls.clear();
-      for (const { win, timer } of logins.values()) { clearInterval(timer); win.removeAllListeners('closed'); win.destroy(); }
+      for (const { win, timer, dismissOverlay } of logins.values()) { clearInterval(timer); dismissOverlay?.(); win.removeAllListeners('closed'); win.destroy(); }
       logins.clear();
       for (const value of work.values()) value.win.destroy(); work.clear();
       closePost(); dropAllWarmViews();

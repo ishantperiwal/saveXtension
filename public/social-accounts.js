@@ -6,6 +6,39 @@ export function mountSocialAccounts(root, { esc, icon, sourceIcon, onChange = ()
   const name = platform => platform === 'x' ? 'X' : platform === 'pinterest' ? 'Pinterest' : platform === 'threads' ? 'Threads' : 'Instagram';
   const error = document.createElement('p'); error.className = 'form-error'; error.setAttribute('role', 'alert');
   const content = document.createElement('div'); root.replaceChildren(content, error);
+  function syncScrollIndicators() {
+    const rail = content.querySelector('.native-connect-rail');
+    const strip = rail?.querySelector('.native-connect-actions');
+    if (!rail || !strip) return;
+    const maxScroll = strip.scrollWidth - strip.clientWidth;
+    const moreLeft = strip.scrollLeft > 2;
+    const moreRight = maxScroll - strip.scrollLeft > 2;
+    strip.toggleAttribute('data-more-left', moreLeft);
+    strip.toggleAttribute('data-more-right', moreRight);
+    const prev = rail.querySelector('[data-scroll-dir="-1"]');
+    const next = rail.querySelector('[data-scroll-dir="1"]');
+    if (prev) prev.hidden = !moreLeft;
+    if (next) next.hidden = !moreRight;
+  }
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    if (!root.isConnected) { resizeObserver.disconnect(); return; }
+    syncScrollIndicators();
+  }) : null;
+  resizeObserver?.observe(content);
+  content.addEventListener('scroll', event => {
+    if (event.target.classList?.contains('native-connect-actions')) syncScrollIndicators();
+  }, true);
+  content.addEventListener('wheel', event => {
+    const rail = event.target.closest('.native-connect-rail');
+    const strip = rail?.querySelector('.native-connect-actions');
+    if (!strip || !event.deltaY || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const maxScroll = strip.scrollWidth - strip.clientWidth;
+    if (maxScroll <= 1) return;
+    const next = Math.max(0, Math.min(maxScroll, strip.scrollLeft + event.deltaY));
+    if (next === strip.scrollLeft) return;
+    event.preventDefault();
+    strip.scrollLeft = next;
+  }, { passive: false });
   async function refresh() {
     if (loading || !root.isConnected || root.closest('dialog')?.open === false) return;
     loading = true;
@@ -14,10 +47,12 @@ export function mountSocialAccounts(root, { esc, icon, sourceIcon, onChange = ()
       if (next !== signature) {
         signature = next;
         const accountList = `<div class="native-account-list">${accounts.filter(account => platforms.includes(account.platform)).map(account => `<div class="native-account-row">${sourceIcon(account.platform)}<span class="native-account-label"><strong>${esc(account.handle || name(account.platform))}</strong><small>${account.status === 'connected' ? 'Connected' : 'Sign in needed'}</small></span>${chooseCollections && account.handle && ['instagram', 'pinterest'].includes(account.platform) ? `<button class="text-button" data-collections-platform="${account.platform}" data-collections-handle="${esc(account.handle)}" aria-label="Choose ${account.platform === 'pinterest' ? 'boards' : 'collections'} for ${esc(account.handle)} on ${name(account.platform)}">${account.platform === 'pinterest' ? 'Boards' : 'Collections'}</button>` : ''}${account.status === 'connected' ? browse ? `<button class="text-button" data-browse="${esc(account.id)}" aria-label="Browse ${esc(account.handle)} on ${name(account.platform)}">Browse</button>` : '' : `<button class="text-button" data-reconnect="${esc(account.id)}" data-platform="${account.platform}">Sign in</button>`}<button class="icon-button" data-disconnect="${esc(account.id)}" aria-label="Disconnect ${esc(account.handle || name(account.platform))}">${icon('close')}</button></div>`).join('')}</div>`;
-        content.innerHTML = `<div class="button-row native-connect-actions">${platforms.flatMap(platform => {
+        content.innerHTML = `<div class="native-connect-rail"><div class="button-row native-connect-actions">${platforms.flatMap(platform => {
           const missing = (expected[platform] || []).filter(handle => !accounts.some(account => account.platform === platform && account.handle.toLowerCase() === handle.toLowerCase()));
           return (missing.length ? missing : ['']).map(handle => `<button class="secondary" data-connect="${platform}"${handle ? ` data-expected="${esc(handle)}"` : ` aria-label="Add ${name(platform)} account"`}>${sourceIcon(platform)}${handle ? `Connect ${esc(handle)}` : `Add ${name(platform)}`}</button>`);
-        }).join('')}</div>${accountList}`;
+        }).join('')}</div><button class="icon-button native-connect-scroll is-prev" type="button" data-scroll-dir="-1" aria-label="Scroll accounts left" hidden>${icon('chevron')}</button><button class="icon-button native-connect-scroll is-next" type="button" data-scroll-dir="1" aria-label="Scroll accounts right" hidden>${icon('chevron')}</button></div>${accountList}`;
+        syncScrollIndicators();
+        requestAnimationFrame(syncScrollIndicators);
         onChange(accounts);
       }
     } catch (failure) { error.textContent = failure.message; }
@@ -25,6 +60,16 @@ export function mountSocialAccounts(root, { esc, icon, sourceIcon, onChange = ()
   }
   content.addEventListener('click', async event => {
     const button = event.target.closest('button'); if (!button || button.disabled) return;
+    if (button.dataset.scrollDir) {
+      const strip = button.closest('.native-connect-rail')?.querySelector('.native-connect-actions');
+      if (strip) {
+        const dir = Number(button.dataset.scrollDir);
+        const step = Math.max(140, Math.round(strip.clientWidth * 0.65));
+        const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        strip.scrollBy({ left: dir * step, behavior: reduced ? 'auto' : 'smooth' });
+      }
+      return;
+    }
     if (button.dataset.collectionsPlatform) { chooseCollections({ platform: button.dataset.collectionsPlatform, handle: button.dataset.collectionsHandle }); return; }
     if (button.dataset.browse) { try { await window.saveXDesktop.browseSocial(button.dataset.browse); error.textContent = ''; } catch (failure) { error.textContent = failure.message; } return; }
     button.disabled = true; error.textContent = '';

@@ -33,8 +33,8 @@ export async function mountMcpSettings(root, { api, toast, esc, icon, header }) 
   try { status = await api('/mcp'); } catch (error) { root.innerHTML = `<p role="alert">${esc(error.message)}</p>`; return; }
   if (!root.isConnected) return;
   if (!status.available) { root.hidden = true; return; }
-  root.innerHTML = '<p class="muted">Use your saves in your AI app.</p><p class="form-error" id="mcp-error" role="alert"></p>';
-  header.innerHTML = `<div id="mcp-details" ${status.enabled ? '' : 'hidden'}><div role="group" aria-label="Copy a connection prompt"><button type="button" class="icon-button mcp-copy-prompt" data-copy-mcp-prompt aria-label="Copy connection prompt" title="Copy connection prompt">${icon('copy')}</button></div></div><label class="mcp-switch"><input id="mcp-enabled" type="checkbox" role="switch" aria-label="Enable MCP server" ${status.enabled ? 'checked' : ''}><span aria-hidden="true"></span></label>`;
+  root.innerHTML = '<p class="form-error" id="mcp-error" role="alert"></p>';
+  header.innerHTML = `<div id="mcp-details" ${status.enabled ? '' : 'hidden'}><div role="group" aria-label="Copy a connection prompt"><button type="button" class="secondary mcp-copy-prompt" data-copy-mcp-prompt>Copy connection prompt</button></div></div><label class="mcp-switch"><input id="mcp-enabled" type="checkbox" role="switch" aria-label="Enable MCP server" ${status.enabled ? 'checked' : ''}><span aria-hidden="true"></span></label>`;
   const find = s => root.querySelector(s) || header.querySelector(s), toggle = find('#mcp-enabled');
   toggle.onchange = async () => {
     const requested = toggle.checked; toggle.disabled = true; find('#mcp-error').textContent = '';

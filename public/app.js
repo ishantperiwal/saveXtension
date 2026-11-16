@@ -3132,7 +3132,7 @@ function mountUpdateSettings() {
     if (!section.isConnected || !modal.open) return;
     latest = status;
     $('#app-update-current', section).hidden = status.phase !== 'current';
-    $('#app-update-version', section).textContent = status.currentVersion ? `· ${status.currentVersion}` : '';
+    $('#app-update-version', section).textContent = status.currentVersion ? ` · ${status.currentVersion}` : '';
     const statusLabel = $('#app-update-status', section);
     const messages = { checking: 'Checking…', unpublished: 'No updates available.', error: 'Couldn’t check for updates. Try again.' };
     statusLabel.textContent = status.phase === 'available' ? `Version ${status.availableVersion} available` : messages[status.phase] || ''; statusLabel.hidden = !statusLabel.textContent;
@@ -3164,9 +3164,12 @@ function mountUpdateSettings() {
 // Settings sections are containers that open and close; which ones are open is remembered.
 const openSettingsPanels = (() => { try { const saved = JSON.parse(localStorage.getItem('savex-settings-open')); if (Array.isArray(saved)) return new Set(saved); } catch { /* First visit. */ } return new Set(['accounts']); })();
 const SETTINGS_ICONS = { extension: 'puzzle', accounts: 'users', meaning: 'sparkle', mcp: 'plug', updates: 'package', backup: 'database' };
-function settingsPanel(key, title, { className = '', detail = '', aside = '', headingId = '' }, body) {
-  const open = openSettingsPanels.has(key), bodyId = `settings-panel-${key}`;
-  return `<section class="settings-panel ${className} ${open ? 'is-open' : ''}" data-panel="${key}"><header class="settings-panel-header"><h3 ${headingId ? `id="${headingId}"` : ''}><button class="settings-panel-toggle" type="button" data-action="toggle-settings-panel" aria-expanded="${open}" aria-controls="${bodyId}"><span class="settings-panel-icon">${icon(SETTINGS_ICONS[key])}</span><span>${esc(title)}${detail}</span></button></h3><div class="settings-panel-aside">${aside}</div>${icon('chevron', 'settings-panel-chevron')}</header><div class="settings-panel-body" id="${bodyId}"><div class="settings-panel-inner">${body}</div></div></section>`;
+function settingsPanel(key, title, { className = '', detail = '', aside = '', headingId = '', collapsible = true }, body) {
+  const open = collapsible && openSettingsPanels.has(key), bodyId = `settings-panel-${key}`;
+  const headingControl = collapsible
+    ? `<button class="settings-panel-toggle" type="button" data-action="toggle-settings-panel" aria-expanded="${open}" aria-controls="${bodyId}"><span class="settings-panel-icon">${icon(SETTINGS_ICONS[key])}</span><span>${esc(title)}${detail}</span></button>`
+    : `<div class="settings-panel-toggle is-static"><span class="settings-panel-icon">${icon(SETTINGS_ICONS[key])}</span><span>${esc(title)}${detail}</span></div>`;
+  return `<section class="settings-panel ${className} ${open ? 'is-open' : ''} ${collapsible ? '' : 'is-static'}" data-panel="${key}"><header class="settings-panel-header"><h3 ${headingId ? `id="${headingId}"` : ''}>${headingControl}</h3><div class="settings-panel-aside">${aside}</div>${collapsible ? icon('chevron', 'settings-panel-chevron') : ''}</header><div class="settings-panel-body" id="${bodyId}"><div class="settings-panel-inner">${body}</div></div></section>`;
 }
 // Eases a panel into view as it opens, until all of it shows. A panel taller than the
 // dialog stops with its top just under the title. Scrolling by hand takes over, and
@@ -3267,9 +3270,9 @@ async function settingsDialog() {
       ${window.saveXDesktop?.socialAccounts ? settingsPanel('extension', 'Chrome extension', { aside: '<div id="chrome-helper-settings"></div>' }, '<div id="chrome-helper-about"></div>') : ''}
       ${window.saveXDesktop?.socialAccounts ? settingsPanel('accounts', 'Accounts', { className: 'native-account-settings', detail: '<span class="settings-heading-detail" id="settings-account-count"></span>' }, '<div id="native-account-settings-list"></div>') : ''}
       ${settingsPanel('meaning', 'Use AI', { detail: '<span class="settings-heading-detail"> · LEAF on this computer</span>' }, '<div class="ai-search-settings"></div>')}
-      ${settingsPanel('mcp', 'MCP', { }, '<div class="mcp-settings"></div>')}
-      ${desktop && window.saveXDesktop.updateStatus ? settingsPanel('updates', 'App version', { className: 'app-updates', headingId: 'app-update-heading', aside: '<span class="settings-panel-note" id="app-update-current" role="status" aria-live="polite" hidden>· Up to date</span><span class="settings-panel-note" id="app-update-version"></span>' }, '<p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress><button class="secondary" type="button" id="app-update-button">Check for updates</button>') : ''}
-      ${settingsPanel('backup', 'Backup', { }, `<div class="button-row"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div>`)}
+      ${settingsPanel('mcp', 'MCP', { collapsible: false }, '<div class="mcp-settings"></div>')}
+      ${desktop && window.saveXDesktop.updateStatus ? settingsPanel('updates', 'App version', { className: 'app-updates', headingId: 'app-update-heading', collapsible: false, detail: '<span class="settings-heading-detail" id="app-update-version"></span>', aside: '<span class="settings-panel-note" id="app-update-current" role="status" aria-live="polite" hidden>· Up to date</span><button class="secondary app-update-action" type="button" id="app-update-button">Check for updates</button>' }, '<p id="app-update-status" role="status" aria-live="polite" hidden></p><progress id="app-update-progress" aria-label="Update download" max="100" value="0" hidden></progress>') : ''}
+      ${settingsPanel('backup', 'Backup', { collapsible: false, aside: `<div class="button-row backup-actions"><a class="secondary" href="/api/export" download>${icon('download')} Export library</a><button class="secondary" data-action="import">${icon('plus')} Import a file</button></div>` }, '')}
     </div>`);
     modal.classList.add('settings-dialog');
     const mcpSection = $('.mcp-settings', modal);

@@ -38,8 +38,8 @@ test('Chrome bookmarks sync without social access or opening sites, with folders
     await library.getByRole('button', { name: /^Chrome bookmarks/ }).click();
     await chooseSelect(library, 'Sync source', 'chrome');
     await openSyncOptions(library);
-    await expect(library.getByRole('button', { name: 'Quick scan', exact: true })).toBeVisible();
-    await expect(library.getByRole('button', { name: 'Deep scan', exact: true })).toBeVisible();
+    await expect(library.getByRole('menuitem', { name: 'Quick scan and refresh', exact: true })).toBeVisible();
+    await expect(library.getByRole('menuitem', { name: 'Deep scan and refresh', exact: true })).toBeVisible();
     await closeSyncOptions(library);
     await sync();
     await expect(library.locator('.save-card.chrome')).toHaveCount(2, { timeout: 10000 });

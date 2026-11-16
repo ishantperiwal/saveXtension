@@ -31,7 +31,7 @@ test('native X and Instagram grid players retain library metadata and survive ba
   await expect(page.locator('.save-card[data-post-id="901"]').getByLabel('Note',{exact:true})).toHaveValue(model.posts[0].notes, { timeout: 8000 });
   expect(await frame.evaluate(el => el.isConnected)).toBe(true);
   await expect(page.locator('[data-post-id="901"] .card-footer .tag')).toHaveText(['Design','Tools','Research','Learning']);
-  await expect(page.locator('[data-post-id="901"] .card-header .card-actions button')).toHaveCount(5);
+  await expect(page.locator('[data-post-id="901"] .card-header .card-actions button')).toHaveCount(6);
   await expect(page.locator('[data-post-id="901"]').getByRole('button', { name: 'Copy post link', exact: true })).toBeVisible();
   await expect(page.locator('.card-footer .card-actions')).toHaveCount(0);
   expect(await page.locator('script[src*="platform.twitter.com"],script[src*="instagram.com"]').count()).toBe(0);
@@ -335,7 +335,7 @@ test('scrolling appends batches, preserves players across sync updates, searches
     model.posts.unshift({ ...manyPosts(1)[0], id: 3000, url: 'https://x.com/i/status/300000000', text: 'A newly synced reference', savedAt: '2026-11-01T00:00:00Z' });
     await expect(page.locator('.save-card[data-post-id="3000"]')).toHaveCount(1, { timeout: 8000 });
     expect(await firstPlayer.evaluate(frame => frame.isConnected)).toBe(true);
-    await page.getByRole('searchbox').fill('Pagination reference number 64.');
+    await page.getByRole('searchbox').fill('"Pagination reference number 64."');
     await expect(page.locator('.save-card')).toHaveCount(1); await expect(page.locator('.save-card')).toHaveAttribute('data-post-id', '2064');
     await page.getByRole('searchbox').fill('');
     await expect(page.locator('.save-card[data-post-id="3000"]')).toHaveCount(1);

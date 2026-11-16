@@ -11,7 +11,7 @@ for (const [platform, keys, hint] of [['MacIntel', 'Meta+f', '⌘ F'], ['Win32',
     ], runs: [] } }));
     await page.goto('/');
     await expect(page.locator('.search kbd')).toHaveText(hint);
-    await expect(page.locator('.source-nav .source-icon')).toHaveCount(3);
+    await expect(page.locator('.source-nav .source-icon')).toHaveCount(4);
     const search = page.getByRole('searchbox', { name: 'Search saves' });
     await search.fill('Motion');
     await page.getByRole('button', { name: 'Filters', exact: true }).click();
@@ -26,6 +26,7 @@ for (const [platform, keys, hint] of [['MacIntel', 'Meta+f', '⌘ F'], ['Win32',
     await page.keyboard.press('Enter');
     await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.keyboard.press('Escape');
+    await expect(page.locator('#modal')).not.toBeVisible();
     await expect(search).toHaveValue('reference');
     await page.keyboard.press('/'); await expect(search).not.toBeFocused();
     await search.focus(); await page.keyboard.press('Escape');
@@ -103,7 +104,7 @@ test('Escape restores the unsearched source, loaded batch and scroll position',a
   const before=await page.evaluate(()=>scrollY), rect=await anchor.boundingBox();
   const loaded=await page.locator('.save-card').count();
   expect(before).toBeGreaterThan(100);
-  await findShortcut(page); await search.fill('Reference 59');
+  await findShortcut(page); await search.fill('"Reference 59"');
   await expect(page.locator('.save-card')).toHaveCount(1);
   await expect(page.locator('.save-card')).toHaveAttribute('data-post-id','10059');
   await search.press('Escape');

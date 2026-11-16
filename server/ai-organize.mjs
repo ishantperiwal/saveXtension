@@ -41,7 +41,7 @@ export function readPlan(output) {
 
 export function aiOrganize({ search, topics, visibleIds, run = runPlanTool }) {
   const db = topics.db;
-  let job = null, lastId = 0;
+  let job = null, lastId = Date.now();
   const find = name => db.prepare('SELECT t.id,t.name FROM topics t LEFT JOIN topic_aliases a ON a.topic_id=t.id WHERE t.name_key=? OR a.name_key=?').get(topicKey(String(name || '')), topicKey(String(name || '')));
   const need = name => { const topic = find(name); if (!topic) throw new HttpError(409, `The AI named a topic that doesn’t exist: ${String(name).slice(0, 80)}`); return topic; };
   const members = id => { const visible = new Set(visibleIds()); return db.prepare('SELECT post_id FROM post_topics WHERE topic_id=?').all(id).map(row => row.post_id).filter(post => visible.has(post)); };

@@ -16,8 +16,9 @@ test('desktop Settings checks for an update, shows download progress, and offers
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
-  await expect(page.locator('#app-update-version')).toHaveText('· 1.0.1');
-  await page.getByRole('button', { name: 'App version', exact: true }).click();
+  await expect(page.locator('#app-update-version')).toHaveText(' · 1.0.1');
+  await expect(page.locator('.app-updates .settings-panel-chevron')).toHaveCount(0);
+  await expect(page.locator('.app-updates button.settings-panel-toggle')).toHaveCount(0);
   await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
   await expect(page.getByRole('progressbar', { name: 'Update download' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Install version 1.0.2', exact: true })).toBeEnabled();
@@ -38,8 +39,10 @@ test('current version status stays inline between the heading and version number
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings & backups', exact: true }).click();
-  await expect(page.locator('.app-updates .settings-panel-header')).toHaveText('App version· Up to date· 1.2.0');
+  await expect(page.locator('#app-update-version')).toHaveText(' · 1.2.0');
   await expect(page.locator('#app-update-current')).toBeVisible();
+  await expect(page.locator('#app-update-current')).toHaveText('· Up to date');
+  await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toBeVisible();
   await expect(page.locator('#app-update-status')).toBeHidden();
   const colors = await page.locator('.app-updates .settings-panel-header').evaluate(el => {
     return ['h3', '#app-update-current', '#app-update-version'].map(selector => getComputedStyle(el.querySelector(selector)).color);
@@ -49,23 +52,21 @@ test('current version status stays inline between the heading and version number
   await page.screenshot({ path: 'test-results/settings-current-version.png' });
 });
 
-
 test('local Settings separates sections and provides a manual release check without installer actions',async({page})=>{
   await page.addInitScript(()=>{let status={phase:'development',currentVersion:'1.1.2',message:'Running local source. Installer updates are available in the installed desktop app.'};window.saveXDesktop={updateStatus:async()=>({...status}),checkForUpdates:async()=>{status={...status,phase:'available',availableVersion:'1.2.0'};return{...status};},viewUpdateRelease:async()=>{document.documentElement.dataset.releaseOpened='true';}};});
   await page.route('**/api/mcp',r=>r.fulfill({json:{available:true,enabled:true,url:'http://localhost:3211/mcp'}}));
   await page.goto('/');await page.getByRole('button',{name:'Settings & backups',exact:true}).click();
-  await expect(page.locator('#app-update-version')).toHaveText('· 1.1.2');
-  await expect(page.locator('#app-update-version'),'the version shows while collapsed').toBeVisible();
-  await expect(page.getByRole('button',{name:'Check for updates',exact:true})).toBeHidden();
-  await page.getByRole('button',{name:'App version',exact:true}).click();
+  await expect(page.locator('#app-update-version')).toHaveText(' · 1.1.2');
+  await expect(page.locator('#app-update-version'),'the version shows inline next to the heading').toBeVisible();
+  await expect(page.getByRole('button',{name:'Check for updates',exact:true})).toBeEnabled();
+  await expect(page.locator('.app-updates .settings-panel-chevron')).toHaveCount(0);
   await expect(page.locator('#app-update-status')).toBeHidden();
   await expect(page.getByText(/Running local source/)).toHaveCount(0);
-  await expect(page.getByRole('button',{name:'Check for updates',exact:true})).toBeEnabled();
   await expect(page.getByRole('heading',{name:'Sources',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Accounts & deep scan',exact:true})).toHaveCount(0);
-  await expect(page.getByRole('link',{name:'Export library',exact:true})).toBeHidden();
-  await page.getByRole('button',{name:'Backup',exact:true}).click();
   await expect(page.getByRole('link',{name:'Export library',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Import a file',exact:true})).toBeVisible();
+  await expect(page.locator('.settings-panel[data-panel="backup"] .settings-panel-chevron')).toHaveCount(0);
   const panels=page.locator('.settings-dialog .settings-panel');await expect(panels).toHaveCount(4);
   for(const panel of await panels.all()) await expect(panel).toHaveCSS('border-top-style','solid');
   await page.getByRole('button',{name:'Check for updates',exact:true}).click();

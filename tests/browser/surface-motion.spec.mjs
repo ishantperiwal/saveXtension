@@ -97,34 +97,44 @@ test('Settings sections are containers that open and close, and stay as you left
   await library(page, nativeStatus);
   const settings = page.getByRole('button', { name: 'Settings & backups', exact: true });
   await settings.click();
-  const accounts = page.locator('.settings-panel[data-panel="accounts"]'), backup = page.locator('.settings-panel[data-panel="backup"]');
-  const backupToggle = backup.getByRole('button', { name: 'Backup', exact: true }), exportLink = page.getByRole('link', { name: 'Export library' });
+  const accounts = page.locator('.settings-panel[data-panel="accounts"]'), meaning = page.locator('.settings-panel[data-panel="meaning"]'), backup = page.locator('.settings-panel[data-panel="backup"]');
+  const meaningToggle = meaning.getByRole('button', { name: /^Use AI/ }), extension = page.locator('.settings-panel[data-panel="extension"]'), exportLink = page.getByRole('link', { name: 'Export library' });
   await expect(page.getByRole('button', { name: 'Add X account' }), 'Accounts starts open').toBeVisible();
-  await expect(exportLink, 'the rest start closed').toBeHidden();
+  await expect(page.getByRole('button', { name: 'Connect extension', exact: true }), 'collapsible sections start closed').toBeHidden();
+  await expect(exportLink, 'non-collapsible Backup actions stay visible').toBeVisible();
   await expect(page.locator('.settings-panel[data-panel="library"]'), 'no library name section').toHaveCount(0);
   await expect(page.locator('.settings-panel').first(), 'the extension comes first').toHaveAttribute('data-panel', 'extension');
-  await expect(backupToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(meaningToggle).toHaveAttribute('aria-expanded', 'false');
   await page.waitForTimeout(350);
   // A click anywhere on the header toggles it, and the height animates.
-  const header = await backup.locator('.settings-panel-header').boundingBox();
+  const header = await meaning.locator('.settings-panel-header').boundingBox();
   await page.mouse.click(header.x + header.width / 2, header.y + header.height / 2);
-  await expect(backupToggle).toHaveAttribute('aria-expanded', 'true');
-  await expect.poll(() => backup.locator('.settings-panel-body').evaluate(el => el.getAnimations().some(animation => animation.transitionProperty === 'grid-template-rows')), { intervals: [10], timeout: 1000 }).toBe(true);
-  await expect(exportLink).toBeVisible();
+  await expect(meaningToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => meaning.locator('.settings-panel-body').evaluate(el => el.getAnimations().some(animation => animation.transitionProperty === 'grid-template-rows')), { intervals: [10], timeout: 1000 }).toBe(true);
   await page.waitForTimeout(350);
-  // Hover fills a closed container; an open one stays plain.
+  // Hover fills a closed collapsible container; an open or static one stays plain.
   const mcp = page.locator('.settings-panel[data-panel="mcp"]'), plain = el => getComputedStyle(el).backgroundColor === getComputedStyle(el.closest('dialog')).backgroundColor;
+  await extension.locator('h3').hover();
+  await expect.poll(() => extension.evaluate(plain)).toBe(false);
+  await meaning.locator('.settings-panel-inner').hover();
+  await expect.poll(() => meaning.evaluate(plain)).toBe(true);
   await mcp.locator('h3').hover();
-  await expect.poll(() => mcp.evaluate(plain)).toBe(false);
-  await backup.locator('.settings-panel-inner').hover();
-  await expect.poll(() => backup.evaluate(plain)).toBe(true);
-  // Every bar is the same height, with its controls centred.
+  await expect.poll(() => mcp.evaluate(plain)).toBe(true);
+  await expect(mcp.locator('.settings-panel-chevron')).toHaveCount(0);
+  await expect(backup.locator('.settings-panel-chevron')).toHaveCount(0);
+  // Keyboard focus on a dropdown header shows no box outline.
+  await meaningToggle.focus();
+  expect(await meaningToggle.evaluate(el => getComputedStyle(el, '::after').outlineStyle)).toBe('none');
+  // Every bar is the same height, with its controls centred and equal top/left icon inset.
   const mcpBar = page.locator('.settings-panel[data-panel="mcp"] .settings-panel-header');
   const mcpSwitch = page.locator('.settings-panel[data-panel="mcp"] .mcp-switch');
   await expect.poll(() => mcpSwitch.count()).toBe(1);
   const bar = await mcpBar.boundingBox(), toggle = await mcpSwitch.boundingBox();
-  expect(bar.height).toBe((await page.locator('.settings-panel[data-panel="backup"] .settings-panel-header').boundingBox()).height);
+  expect(bar.height).toBe((await backup.locator('.settings-panel-header').boundingBox()).height);
   expect(Math.abs(toggle.y + toggle.height / 2 - bar.y - bar.height / 2)).toBeLessThan(1);
+  const iconBox = await accounts.locator('.settings-panel-icon').boundingBox();
+  const accBar = await accounts.locator('.settings-panel-header').boundingBox();
+  expect(Math.abs((iconBox.y - accBar.y) - (iconBox.x - accBar.x))).toBeLessThanOrEqual(1);
   // Keyboard works, and choices survive reopening.
   await accounts.getByRole('button', { name: /^Accounts/ }).focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'Add X account' })).toBeHidden();

@@ -37,6 +37,22 @@ test('desktop connects a selected social account in-app and resumes its exact sc
   const row = page.locator('.native-connect-actions'), pills = await row.locator('button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().top));
   expect(new Set(pills).size, 'the pills stay on one row').toBe(1);
   await expect(row).toHaveCSS('overflow-x', 'auto');
+  await expect(row).toHaveAttribute('data-more-right', '');
+  const maskImage = await row.evaluate(el => getComputedStyle(el).maskImage);
+  expect(maskImage).toContain('linear-gradient');
+  const nextBtn = page.getByRole('button', { name: 'Scroll accounts right', exact: true });
+  const prevBtn = page.getByRole('button', { name: 'Scroll accounts left', exact: true });
+  await expect(nextBtn).toBeVisible();
+  await expect(prevBtn).toBeHidden();
+  const rowBox = await row.boundingBox();
+  await page.mouse.move(rowBox.x + 60, rowBox.y + rowBox.height / 2);
+  await page.mouse.wheel(0, 80);
+  await expect.poll(() => row.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+  await expect(prevBtn).toBeVisible();
+  await nextBtn.click();
+  await expect(page.getByRole('button', { name: 'Add Threads account', exact: true })).toBeInViewport();
+  await expect(nextBtn).toBeHidden();
+  expect(connections).toHaveLength(1);
   await page.screenshot({ path: 'test-results/native-account-settings.png' });
 });
 
@@ -193,7 +209,13 @@ test('Settings shows the extension’s state in one line and opens setup as its 
   await expect(page.locator('.native-account-settings')).toContainText('@one');
   // A connected account opens its own window rather than offering another sign-in.
   await expect(page.locator('.native-account-settings').getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Browse @one on X', exact: true }).click();
+  const browseButton = page.getByRole('button', { name: 'Browse @one on X', exact: true });
+  const browseStyle = await browseButton.evaluate(el => {
+    const s = getComputedStyle(el);
+    return { borderRadius: s.borderRadius, borderTopWidth: s.borderTopWidth, height: Math.round(el.getBoundingClientRect().height) };
+  });
+  expect(browseStyle).toEqual({ borderRadius: '999px', borderTopWidth: '1px', height: 30 });
+  await browseButton.click();
   await expect.poll(() => page.evaluate(() => window.browsed)).toEqual(['s1']);
   await expect(page.getByRole('heading', { name: 'Settings', exact: true }), 'Settings stays open').toBeVisible();
   await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
