@@ -25,12 +25,17 @@ import { aiLine } from './ai-line.mjs';
 import { documentAi as createDocumentAi } from './document-ai.mjs';
 import { TopicLibrary, topicCatalog, importTopicCatalog } from './topics.mjs';
 import { Documents, documentImages, documentFonts } from './documents.mjs';
+import { exportBackup, importBackup } from './backup.mjs';
+import { createReadStream, readFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.ttf': 'font/ttf', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.json': 'application/json' };
 const extensionOrigin = value => /^chrome-extension:\/\/[a-p]{32}$/.test(value || '');
 
-export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, documentImagesDir = imagesDir && resolve(imagesDir, '..', 'document-images'), documentFontsDir = imagesDir && resolve(imagesDir, '..', 'document-fonts'), imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '', countChromeBookmarks } = {}) {
+// The version written into backups, so a later app knows what made one.
+function packageVersion() { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || ''; } catch { return ''; } }
+export function createApp({ dataPath, origin = 'http://localhost:3210', secure = false, localMode = true, setupCode = token(), websiteDownload, nativeTransport, imagesDir, documentImagesDir = imagesDir && resolve(imagesDir, '..', 'document-images'), documentFontsDir = imagesDir && resolve(imagesDir, '..', 'document-fonts'), imageDownload, meaningDir, meaningFiles, meaningRequest, checkPinterestGifs = false, keyVault = null, aiKeysFile = '', aiApiBase = '', countChromeBookmarks, appVersion = packageVersion() } = {}) {
   const store = new Store(dataPath || ':memory:');
   if (localMode && !['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local mode requires a localhost origin.');
   const sync = syncQueue(store, { native: !!nativeTransport }), topicLibrary = new TopicLibrary(store), unsaves = unsaveQueue(store, sync, { countChromeBookmarks });
@@ -45,6 +50,14 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   // Only the saves the app shows are ever handed to an AI tool.
   const aiSearch = createAiSearch({ store, visiblePosts: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).filter(post => !hidden.has(post.id)); }, hasLocal: () => meaning.status().state === 'ready', images: { has: id => images.has(id), read: id => images.ensure(id) }, keys: keyVault && aiKeysFile ? aiKeys({ file: aiKeysFile, vault: keyVault }) : null, apiBase: aiApiBase });
   store.onPostsImported = images.schedule; store.onPostDelete = images.forget;
+  // The desktop app listens, so accounts that came with a backup show in its account list at once.
+  const backupListeners = new Set();
+  // A backup can be large: everything but sign-ins, pictures included.
+  async function rawBody(req, limit = 4 * 1024 * 1024 * 1024) {
+    const parts = []; let size = 0;
+    for await (const part of req) { size += part.length; if (size > limit) throw new HttpError(413, 'That backup is too large.'); parts.push(part); }
+    return Buffer.concat(parts);
+  }
 
   const attempts = new Map();
   const appOrigin = new URL(origin).origin;
@@ -434,6 +447,23 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
         if (path === '/api/devices' && req.method === 'GET') return json(res, { devices: store.devices() });
         const dev = path.match(/^\/api\/devices\/([a-f0-9]+)$/);
         if (dev && req.method === 'DELETE') { store.revoke(dev[1]); return json(res, { ok: true }); }
+        if (path === '/api/backup' && req.method === 'GET') {
+          const file = await exportBackup({ store, imagesDir, documentImagesDir, documentFontsDir, appVersion });
+          const day = new Date().toLocaleDateString('en-CA');
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="saveXtension backup ${day}.savex"` });
+          const stream = createReadStream(file);
+          stream.on('close', () => void rm(file, { force: true }));
+          stream.on('error', () => res.destroy());
+          stream.pipe(res); return;
+        }
+        if (path === '/api/backup' && req.method === 'POST') {
+          // A scan or removal changing the same saves mid-import could leave either half done.
+          sync.giveWay();
+          if (['queued', 'running'].includes(sync.status().job?.status) || unsaves.busy()) throw new HttpError(409, 'Wait for the scan or removal to finish, then import.');
+          const result = await importBackup({ store, bytes: await rawBody(req), imagesDir, documentImagesDir, documentFontsDir });
+          for (const listener of backupListeners) { try { listener(result); } catch (error) { console.error(error); } }
+          return json(res, result);
+        }
         if (path === '/api/export' && req.method === 'GET') {
           res.setHeader('Content-Disposition', 'attachment; filename="savextension-backup.json"');
           return json(res, { version: 2, exportedAt: new Date().toISOString(), posts: store.posts({ scope: 'all' }), instagramCollections: store.instagramCollections(), topics: topicCatalog(store.db, { all: true }), documents: documents.list().map(d => documents.get(d.id)) });
@@ -468,5 +498,5 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   const pinGifs = checkPinterestGifs ? pinterestGifs({ store, onError: error => console.error(`Pinterest GIF check: ${error.message}`) }) : null;
   void pinGifs?.start();
   server.on('close', () => { preview.close(); images.close(); meaning.close(); aiSearch.close(); noteAi.close(); docAi.close(); void pinGifs?.close(); void mcp.close(); });
-  return { server, store, setupCode, mcp, sync, unsaves, images };
+  return { server, store, setupCode, mcp, sync, unsaves, images, onBackupImported: listener => backupListeners.add(listener) };
 }

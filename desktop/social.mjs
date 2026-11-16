@@ -899,7 +899,18 @@ export async function createNativeSocial({ library, transport, extensionRoot, ve
     void signInFromHelper(login).catch(onError);
     return publicAccounts();
   }
+  // Accounts that arrived with an imported backup join the list, waiting for someone to sign in to them.
+  function reloadAccounts() {
+    const stored = JSON.parse(library.store.get('desktop_social_accounts') || '[]');
+    let added = false;
+    for (const item of stored) {
+      if (!/^[a-f0-9-]{36}$/.test(item.id) || !platforms.has(item.platform) || !item.handle || !handlePattern(item.platform).test(item.handle) || accounts.some(account => account.id === item.id)) continue;
+      accounts.push({ id: item.id, platform: item.platform, handle: item.handle, name: item.name || '', status: 'needs-login' }); added = true;
+    }
+    if (added) publish();
+  }
   return {
+    reloadAccounts,
     status: publicAccounts, connect, wake, openPost, openPostInBrowser, viewPost, capturePost, hidePost, movePost, closePost, browse: browseAccount,
     async disconnect(id) {
       const profile = accounts.find(item => item.id === id); if (!profile) throw new Error('Connection not found.');

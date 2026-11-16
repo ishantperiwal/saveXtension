@@ -77,6 +77,7 @@ async function start() {
   await refreshHelpers().catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
   library.mcp.setPostViewer((post, options) => social.viewPost(post, options));
+  library.onBackupImported(() => social.reloadAccounts());
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);

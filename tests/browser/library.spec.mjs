@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { chooseSelect, startQuickSync } from './select-helper.mjs';
 import { test, expect, chromium } from '@playwright/test';
 import { readFile, mkdtemp, rm, cp, writeFile } from 'node:fs/promises';
@@ -48,7 +49,10 @@ test('local library: sync-first navigation, autosaved notes, search and backup',
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: 'Settings & backups' }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: 'Export library' }).click()]);
-  const backup = JSON.parse(await readFile(await download.path(), 'utf8')); expect(backup.posts.find(post => post.id === fixture.id).notes).toBe('Try on Sunday');
+  // The export is one .savex file: a library database with its pictures inside.
+  expect(download.suggestedFilename()).toMatch(/^saveXtension backup \d{4}-\d{2}-\d{2}\.savex$/);
+  const backup = new DatabaseSync(await download.path(), { readOnly: true });
+  try { expect(backup.prepare('SELECT notes FROM posts WHERE id=?').get(fixture.id).notes).toBe('Try on Sunday'); } finally { backup.close(); }
   expect(errors).toEqual([]);
 });
 

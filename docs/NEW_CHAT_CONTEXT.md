@@ -160,6 +160,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Copied connection prompt | `public/mcp-settings.js` | `function connectionPrompt` |
 | What's hidden from app and MCP | `server/instagram-save-lists.mjs` | `function hiddenInstagramSaveIds` |
 | Documents: storage, AI edits, pictures | `server/documents.mjs` | `export class Documents` |
+| Whole-library backup: export and import | `server/backup.mjs` | `export async function importBackup` |
 | MCP document tools | `server/mcp.mjs` | `register('edit_document'` |
 | Fonts for documents: download and storage | `server/documents.mjs` | `export function documentFonts` |
 | Sending a post to a document: the job | `server/document-ai.mjs` | `export function documentAi` |
@@ -224,7 +225,9 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 - The browser suite passed in full on 2026-11-14 for v1.5.2, apart from one flaky run of `search.spec.mjs` "search, layout controls and Filters stick together", which passed alone three times. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
 
-**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures, restoring from a backup.
+**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures.
+
+**Whole-library backup (`.savex`), built 2026-11-16:** proven by a round trip of the real library into an empty one (every field of all saves, images, documents, settings matched). Not yet tried on a second computer, or with signing in to an imported account.
 
 **Offered, not built:**
 - Noticing bookmarks deleted in Chrome directly (see Unsaves in `docs/ARCHITECTURE.md` for why it waits)
