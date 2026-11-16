@@ -476,6 +476,15 @@ export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) 
     view.querySelector('[data-doc-action="mode-editor"]')?.setAttribute('aria-pressed', String(!raw));
     view.querySelector('[data-doc-action="mode-raw"]')?.setAttribute('aria-pressed', String(raw));
   }
+  function downloadDocument(doc) {
+    const title = doc.titleField?.value || doc.title || 'document';
+    const stem = title.trim().replace(/[\\/:*?"<>|\x00-\x1f]+/g, '-').replace(/^-+|-+$/g, '') || 'document';
+    const url = URL.createObjectURL(new Blob([doc.markdown()], { type: 'text/markdown;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `${stem}.md`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   async function openDocument(id, { naming = false } = {}) {
     if (open?.id === id && view.open) return;
     if (open) await closeDocument();
@@ -662,6 +671,7 @@ export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) 
       const doc = open;
       openAccountMenu(trigger, [
         { label: 'Copy Markdown', run: () => navigator.clipboard.writeText(doc.markdown()).then(() => toast('Markdown copied', false, 'bottom-center'), () => toast('Couldn’t copy. Try again.', true, 'bottom-center')) },
+        { label: 'Download document', run: () => downloadDocument(doc) },
         ...(doc.icon ? [{ label: 'Reset icon', run: () => void setDocumentIcon(doc.id, '') }] : []),
         { label: 'Delete…', danger: true, run: () => confirmDelete(trigger, doc) },
       ], null, 'Document options', view);

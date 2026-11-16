@@ -17,6 +17,7 @@ test('documents drawer renders as a floating dark glass panel on the right edge'
     json: {
       id: 'doc-1',
       title: 'Website Bookmarks',
+      icon: '📚',
       description: 'Bookmarks collected across the web.',
       body: 'Hello world',
       updatedAt: new Date().toISOString(),
@@ -85,4 +86,23 @@ test('documents drawer renders as a floating dark glass panel on the right edge'
   expect(footStatus.text).toBe('Saved');
   expect(footStatus.afterHint).toBe(true);
   expect(footStatus.rightGap).toBeCloseTo(28, 0);
+
+  // Document options menu: items have uniform vertical spacing (no extra gap above Delete…) and include Download document.
+  await page.locator('#document-view [data-doc-action="more"]').click();
+  const menu = page.getByRole('menu', { name: 'Document options', exact: true });
+  await expect(menu.getByRole('menuitem')).toHaveText(['Copy Markdown', 'Download document', 'Reset icon', 'Delete…']);
+  const gaps = await menu.evaluate(el => {
+    const items = [...el.querySelectorAll('.account-menu-item')];
+    return items.slice(1).map((item, i) => item.getBoundingClientRect().top - items[i].getBoundingClientRect().bottom);
+  });
+  expect(gaps).toEqual([0, 0, 0]);
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    menu.getByRole('menuitem', { name: 'Download document', exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('Website Bookmarks.md');
+  const stream = await download.createReadStream();
+  let downloadedText = '';
+  for await (const chunk of stream) downloadedText += chunk;
+  expect(downloadedText.trim()).toBe('Hello world');
 });

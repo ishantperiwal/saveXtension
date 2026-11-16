@@ -1047,12 +1047,11 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 
 /* Account refresh and Instagram's chosen save list. */
 .account-menu { min-width: 238px; max-width: calc(100vw - 16px); }
-.account-menu-item { display: block; width: 100%; min-height: 40px; padding: 9px 12px; border: 0; border-radius: 12px; background: transparent; color: inherit; text-align: left; font: inherit; }
+.account-menu-item { display: flex; align-items: center; width: 100%; min-height: 36px; padding: 7px 12px; border: 0; border-radius: 12px; background: transparent; color: inherit; text-align: left; font: inherit; }
 .account-menu-item:hover:not(:disabled), .account-menu-item:focus-visible { background: var(--hover); }
 .account-menu-item.danger { color: var(--danger); }
 .collection-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
 .collection-delete { background: var(--danger); }
-.account-menu-item + .account-menu-item:last-child:not(:nth-child(2)) { margin-top: 4px; }
 .collection-toggle:disabled { cursor: default; opacity: .35; }
 .save-list-account { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font: 13px/20px var(--mono); }
 .save-list-account .source-icon { width: 20px; height: 20px; }
