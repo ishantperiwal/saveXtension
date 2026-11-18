@@ -1,6 +1,8 @@
 import { openAccountMenu } from './account-menu.js';
 import { storedMarkdown, editorMarkdown } from './document-markdown.js';
 import { fontDecorations, loadStoredFonts } from './document-fonts.js';
+import { longBlocks } from './document-long-blocks.js';
+import { wordPattern } from './document-search.js';
 import { dotLoader } from './dot-loader.js';
 
 // Documents: the person's own pages beside their saves, for what they want to keep and come back to.
@@ -26,7 +28,9 @@ async function request(path, { method = 'GET', body, signal } = {}) {
 }
 const asBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] || ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
 // The Markdown keeps images/<name>, the same way an exported folder would. Only the page shows it from the server.
-const shownImage = src => (/^images\/[a-f0-9]{32}\.(png|jpg|gif|webp)$/.test(src) ? `/api/documents/${src}` : src);
+// A picture taken from a saved post keeps that post's link after #post=, which stays on the page's address so a click can open the post.
+const shownImage = src => { const [path, from] = String(src).split('#'); return /^images\/[a-f0-9]{32}\.(png|jpg|gif|webp)$/.test(path) ? `/api/documents/${path}${from ? `#${from}` : ''}` : src; };
+const postOfPicture = img => { try { const link = decodeURIComponent(new URL(img.getAttribute('src') || '', location.href).hash.match(/^#post=(.+)$/)?.[1] || ''); return /^https:\/\//.test(link) ? link : ''; } catch { return ''; } };
 const aboutText = description => description ? escapeText(description) : '<span class="document-description-empty">Add what belongs in this document, how entries should be formatted, and what to leave out.</span>';
 const escapeText = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const graphemeSegmenter = typeof Intl?.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
@@ -44,6 +48,17 @@ const when = iso => {
 };
 
 export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) {
+  // Clicking a picture taken from a saved post opens that post, the way the app opens any post link (user's decision).
+  document.addEventListener('click', event => {
+    const img = event.target.closest?.('.milkdown img'), link = img && postOfPicture(img);
+    if (!link) return;
+    event.preventDefault(); event.stopPropagation();
+    window.open(link, '_blank', 'noopener');
+  }, true);
+  document.addEventListener('pointerover', event => {
+    const img = event.target.closest?.('.milkdown img');
+    if (img && !img.dataset.postChecked) { img.dataset.postChecked = 'true'; if (postOfPicture(img)) { img.classList.add('is-post-picture'); img.title = 'Open the original post'; } }
+  });
   if (document.querySelector('.documents-notch')) return;
   const docIcon = doc => doc?.icon ? `<span class="documents-emoji" aria-hidden="true">${esc(doc.icon)}</span>` : DOC_ICON;
   const edge = document.createElement('aside');
@@ -457,6 +472,7 @@ export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) 
     builder.on(listener => listener.markdownUpdated((ctx, now, before) => { if (now !== before) schedule(); }));
     // Font names drawn in their own font; once the added fonts have loaded, the editor redraws them.
     builder.editor.use(fontDecorations(m));
+    builder.editor.use(longBlocks(m));
     const fontsReady = loadStoredFonts();
     await builder.create();
     void fontsReady.then(() => { try { builder.editor.action(ctx => { const view = ctx.get(m.editorViewCtx); view.dispatch(view.state.tr.setMeta('document-fonts', true)); }); } catch { /* Closed meanwhile. */ } });
@@ -485,8 +501,39 @@ export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) 
     document.body.append(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  async function openDocument(id, { naming = false } = {}) {
-    if (open?.id === id && view.open) return;
+  // Opened from a search result: scroll to the section that matched and mark the searched words there for a few seconds.
+  // A long code block holding a match is unfolded first. If the section can't be found, the first match anywhere is used.
+  function showFound({ heading = '', nth = 0, terms = [] } = {}) {
+    const page = view.querySelector('.ProseMirror');
+    if (!page) {
+      const field = view.querySelector('.document-raw'), text = field?.value.toLowerCase() || '';
+      const found = terms.map(term => text.matchAll(wordPattern(term)).next().value).filter(Boolean).sort((a, b) => a.index - b.index)[0];
+      if (field && found) { field.focus({ preventScroll: true }); field.setSelectionRange(found.index, found.index + found[0].length); }
+      return;
+    }
+    const blocks = [...page.children], isHeading = el => /^H[1-3]$/.test(el.tagName);
+    const same = blocks.filter(el => isHeading(el) && el.textContent.replace(/\s+/g, ' ').trim() === heading.replace(/\s+/g, ' ').trim());
+    const start = heading ? same[nth] || same[0] : blocks[0];
+    const from = start ? blocks.indexOf(start) : 0, next = blocks.findIndex((el, index) => index > from && isHeading(el));
+    const section = start ? blocks.slice(from, next < 0 ? blocks.length : next) : blocks;
+    const ranges = [];
+    for (const block of section) {
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (const term of terms) for (const found of node.data.matchAll(wordPattern(term))) { const range = new Range(); range.setStart(node, found.index); range.setEnd(node, found.index + found[0].length); ranges.push(range); }
+      }
+    }
+    // A match inside a folded prompt can't be seen, so that block opens.
+    const folded = new Set(ranges.map(range => range.startContainer.parentElement?.closest('pre.long-block.is-folded')).filter(Boolean));
+    for (const pre of folded) pre.nextElementSibling?.matches('.long-block-toggle') && pre.nextElementSibling.click();
+    const target = start || ranges[0]?.startContainer.parentElement;
+    requestAnimationFrame(() => target?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }));
+    if (!ranges.length || !globalThis.CSS?.highlights || typeof Highlight !== 'function') return;
+    CSS.highlights.set('document-found', new Highlight(...ranges));
+    clearTimeout(showFound.timer); showFound.timer = setTimeout(() => CSS.highlights.delete('document-found'), 4000);
+  }
+  async function openDocument(id, { naming = false, find = null } = {}) {
+    if (open?.id === id && view.open) { if (find) showFound(find); return; }
     if (open) await closeDocument();
     let doc;
     try { doc = await request(`/documents/${id}`); } catch (error) { toast(error.message, true); return void refresh(); }
@@ -609,6 +656,7 @@ export function mountDocuments({ icon, esc, toast, onActivity, onDialogClose }) 
     try { await showBody(doc.body, false); }
     catch (error) { console.error(error); toast('The editor couldn’t load. Showing the Markdown instead.', true, 'bottom-center'); await showBody(doc.body, true); }
     if (naming) startRename(); else if (!doc.body) view.querySelector('.ProseMirror, .document-raw')?.focus();
+    if (find) requestAnimationFrame(() => showFound(find));
   }
   function startRename() {
     const field = open?.titleField; if (!field || !field.hidden) return;

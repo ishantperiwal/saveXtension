@@ -28,7 +28,35 @@ const REFINE_SYSTEM = [
 
 // Sends what belongs from one saved post into one of the person's documents, respecting the document's description and structure.
 // One job at a time. The edit is recorded in the journal so Undo can take it back.
-export function documentAi({ store, documents, topics, tool, visiblePost, mcp, baseUrl, run = runDocumentTool, plan = runPlanTool, line = aiLine() }) {
+// The AI marks where the post's own picture goes with ![](post-image). It becomes the saved picture, stored with the document's
+// pictures, and its address carries the post's link after #post= so clicking it opens the post. Without a picture, a plain link stands in.
+const PICTURE = /!\[[^\]\n]*\]\(post-image\)/g;
+// The picture is a preview, so it goes right under the addition's first heading, or first if there's none (user's decision).
+// For an insert into an existing section, only the part after the text it found is looked at.
+function pictureFirst(text, kept = '') {
+  const rest = kept && text.startsWith(kept) ? text.slice(kept.length) : text, head = text.slice(0, text.length - rest.length);
+  const lines = rest.split('\n'), at = lines.findIndex(line => /^!\[[^\]\n]*\]\(post-image\)$/.test(line.trim()));
+  if (at < 0) return text;
+  const [picture] = lines.splice(at, 1), heading = lines.findIndex(line => /^#{1,6}\s/.test(line));
+  const start = heading >= 0 ? heading + 1 : lines.findIndex(line => line.trim());
+  lines.splice(Math.max(start, 0), 0, '', picture.trim(), '');
+  return head + lines.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+async function placePicture(text, post, images, pictures, kept = '') {
+  if (!text || !post || !PICTURE.test(text)) return text;
+  PICTURE.lastIndex = 0;
+  text = pictureFirst(text, kept);
+  const saved = await images?.ensure(post.id).catch(() => null);
+  const stored = saved?.bytes?.length && pictures ? await pictures.add(Buffer.from(saved.bytes).toString('base64')).catch(() => null) : null;
+  let first = true;
+  return text.replace(PICTURE, () => {
+    if (!first) return '';
+    first = false;
+    return stored ? `![1.00](${stored.src}#post=${encodeURIComponent(post.url)})` : `[Original post](${post.url})`;
+  }).replace(/\n{3,}/g, '\n\n');
+}
+
+export function documentAi({ store, documents, topics, tool, visiblePost, mcp, baseUrl, images = null, pictures = null, run = runDocumentTool, plan = runPlanTool, line = aiLine() }) {
   let job = null, lastId = Date.now();
   const view = current => current && { id: current.id, post: current.post, documentId: current.documentId, documentTitle: current.documentTitle, request: current.request, state: current.state, step: current.step, error: current.error, summary: current.summary, changeId: current.changeId, updatedAt: current.updatedAt, model: current.model };
   async function work(current, chosen) {
@@ -47,10 +75,13 @@ export function documentAi({ store, documents, topics, tool, visiblePost, mcp, b
         `Current document Markdown:\n${JSON.stringify(doc.body)}`,
         `Directions from the user: ${JSON.stringify(current.request || 'None given: extract and add only what fits this document’s description.')}`,
         `The post's note so far: ${JSON.stringify(note)}`,
+        `The post's original URL: ${JSON.stringify(post?.url || '')}`,
+        `The post's saved picture: ${post?.thumbnail || images?.has(current.post) ? 'there is one; see it with get_saved_image, and place it with ![](post-image) only if it objectively adds something' : 'none, so link the original post instead'}`,
       ].join('\n\n');
       const reply = readDocumentEdit(await run(chosen, url, prompt, current.controller.signal, current.modelId, current.handler));
       if (current.state !== 'running') return;
-      const append = reply.append.trim(), replacements = reply.replacements.filter(item => item.find && item.find !== item.replace);
+      const append = (await placePicture(reply.append, post, images, pictures)).trim(), replacements = [];
+      for (const item of reply.replacements.filter(item => item.find && item.find !== item.replace)) replacements.push({ ...item, replace: await placePicture(item.replace, post, images, pictures, item.find) });
       if (!append && !replacements.length) throw new HttpError(422, reply.problem || 'Nothing in this post fits what belongs in that document.');
       if (!visiblePost(current.post)) throw new HttpError(404, 'That save isn’t in your library any more.');
       const latest = documents.get(current.documentId);

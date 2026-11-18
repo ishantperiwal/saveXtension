@@ -154,6 +154,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | MCP deep read of one post | `server/mcp.mjs` | `register('view_save'` |
 | MCP clearing image descriptions | `server/mcp.mjs` | `register('clear_image_descriptions'` |
 | Reading that post in a hidden window | `desktop/social.mjs` | `function viewPost` |
+| Reading one of its replies in full | `desktop/social.mjs` | `function viewReply` |
 | MCP capturing a view's video frames | `server/mcp.mjs` | `register('capture_view_frames'` |
 | MCP reading those frames | `server/mcp.mjs` | `register('read_view_frames'` |
 | MCP endpoint and access checks | `server/app.mjs` | `path === '/mcp'` |
@@ -186,12 +187,13 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | AI search settings, one on at a time | `public/app.js` | `function mountAiSearchSettings` |
 | Organize dialog | `public/organize.js` | `export function organizeTopics` |
 | Running that AI search on Enter | `public/app.js` | `async function startAiSearch` |
-| AI activity view under All saves | `public/app.js` | `function renderAiActivityNavigation` |
+| New saves and Processed today under All saves | `public/app.js` | `function renderAiActivityNavigation` |
 | Sync controls | `public/app.js` | `function renderSync` |
 | Finished-scan cards | `public/app.js` | `function syncReportCards` |
 | Scanning pill | `public/app.js` | `function renderSyncToast` |
 | Unsave queue | `public/app.js` | `function nextUnsave` |
 | Dot loaders, one per kind of work | `public/dot-loader.js` | `export function dotLoader` |
+| Tooltips on icon-only buttons | `public/action-tips.js` | `export function enableActionTips` |
 | Settings panels | `public/app.js` | `function settingsPanel` |
 | What a finished scan reports | `public/sync-report.js` | `function syncReport` |
 | Grid layout | `public/masonry.js` | `function layoutCards` |
@@ -205,6 +207,10 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 | Sending a post to a document: dialog | `public/app.js` | `async function openSendToDocument` |
 | Plain Markdown in, editor Markdown out | `public/document-markdown.js` | `export function storedMarkdown` |
 | Font names drawn in their own font | `public/document-fonts.js` | `export function fontDecorations` |
+| Folding long code blocks (prompts) | `public/document-long-blocks.js` | `export function longBlocks` |
+| Documents in search: sections and matching | `public/document-search.js` | `export function searchDocuments` |
+| Their result cards | `public/app.js` | `function renderDocumentResults` |
+| Opening at the matched section | `public/documents.js` | `function showFound` |
 | Bundling the editor | `scripts/build-editor.mjs` | `public/vendor/editor` |
 
 ## Open items (as of 2026-11-06)
@@ -218,6 +224,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 - Instagram's All posts check, which assumes every new save appears at the top of All posts
 - Pinterest's All pins check, which assumes the same, and that the page's order matches what the grid shows
 - AI open items are in `docs/AI.md`, including filling a note on real posts.
+- Reading X replies with `view_save`'s `reply` (added 2026-11-18): the reply list's markup ("Show more" link, "Discover more" heading) and the check that the reply's page shows the saved post above it haven't been seen on real X yet.
 - `view_save` and `capture_view_frames` are proven on Instagram, X and Pinterest, including a 28-minute X video. Not yet tried above 8 a second. Carousels are proven with all-video posts on Instagram and X, not yet with images and videos mixed. A quoted post's video is proven on an X post that also has its own video, not yet on a post whose only video is the quoted one.
 
 **Cleanup:**
@@ -225,7 +232,7 @@ env -u ELECTRON_RUN_AS_NODE npm run desktop
 - The browser suite passed in full on 2026-11-14 for v1.5.2, apart from one flaky run of `search.spec.mjs` "search, layout controls and Filters stick together", which passed alone three times. Run the full suite before a release, and keep the Mac awake while it runs: sleep turns most tests into timeouts.
 - Live card embed code is dormant, and the user will decide on removal after using the panel for a while.
 
-**Documents, built 2026-11-14, not yet in:** search, AI seeing their pictures.
+**Documents, built 2026-11-14, not yet in:** AI seeing their pictures. Search across documents (2026-11-18) hasn't been tried with a real AI search or on the real library yet.
 
 **Whole-library backup (`.savex`), built 2026-11-16:** proven by a round trip of the real library into an empty one (every field of all saves, images, documents, settings matched). Not yet tried on a second computer, or with signing in to an imported account.
 

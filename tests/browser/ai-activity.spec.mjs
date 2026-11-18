@@ -404,3 +404,94 @@ test('Running document AI job appears under All saves AI activity even when doc:
   await expect(page.locator('#ai-status .ai-toast-summary')).toContainText('1 done');
   await expect(aiNav.locator('.nav-count')).toHaveText('1');
 });
+
+test('Top-right AI pill hides while inline control is active, but shows for queued, finished, and collapsed-note states', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('savex-card-view', 'feed'); });
+  const posts = [
+    makePost(101, { text: 'Post one', savedAt: new Date().toISOString() }),
+    makePost(102, { text: 'Post two', localImage: '/favicon.ico', thumbnail: '/favicon.ico' }),
+  ];
+  const doc = { id: 'doc-design', title: 'Design Notes', description: 'UI', body: '', updatedAt: new Date().toISOString() };
+  const docJobState = { nextId: 1, current: null, pollAdvance: 0, pollCount: 0 };
+  const noteJobsState = { nextId: 1, jobs: new Map() };
+  let holdNote = true;
+  let finishScan;
+  const scanPromise = new Promise(resolve => { finishScan = resolve; });
+
+  await setupAiFixture(page, {
+    posts,
+    doc,
+    docJobState,
+    noteJobsState,
+    scanHandler: async route => {
+      await scanPromise;
+      await route.fulfill({ json: { description: 'Clean layout', model: 'vision-1' } });
+    },
+  });
+  await page.route('**/api/note-ai', async route => {
+    const req = route.request();
+    if (req.method() === 'POST') {
+      const body = req.postDataJSON();
+      const job = { id: noteJobsState.nextId++, post: Number(body.post), request: body.request, state: 'waiting', position: 1, step: '', before: '', notes: '', updatedAt: new Date().toISOString() };
+      noteJobsState.jobs.set(job.id, job);
+      return route.fulfill({ json: { job } });
+    }
+    if (!holdNote) {
+      for (const [id, job] of noteJobsState.jobs) {
+        if (['waiting', 'running'].includes(job.state)) noteJobsState.jobs.set(id, { ...job, state: 'done', notes: 'Done note' });
+      }
+    } else {
+      for (const [id, job] of noteJobsState.jobs) {
+        if (job.state === 'waiting') noteJobsState.jobs.set(id, { ...job, state: 'running', step: 'Searching the web' });
+      }
+    }
+    return route.fulfill({ json: { jobs: [...noteJobsState.jobs.values()] } });
+  });
+
+  await page.goto('/');
+  const card101 = page.locator('.save-card[data-post-id="101"]');
+  const card102 = page.locator('.save-card[data-post-id="102"]');
+
+  // 1. Note AI queued -> top-right pill shows "Filling note · queued".
+  await card101.locator('[data-note-ai="101"]').click();
+  await card101.locator('.note-ai-input').fill('What repo is this?');
+  await card101.locator('.note-ai-input').press('Enter');
+  await expect(card101.locator('.new-tag.ai-tag')).toContainText('Filling note · queued');
+
+  // Once running inline inside the open note box -> top-right AI pill hides (and New stays on fresh post).
+  await expect(card101.locator('.note-ai-box')).toContainText('Searching the web');
+  await expect(card101.locator('.new-tag.ai-tag')).toHaveCount(0);
+  await expect(card101.locator('.new-tag')).toHaveText('New');
+
+  // Once finished -> top-right AI pill appears with tick.
+  holdNote = false;
+  await expect(card101.locator('.new-tag.ai-tag')).toContainText('Note updated');
+  await expect(card101.locator('.new-tag.ai-tag [data-ai-ack]')).toBeVisible();
+
+  // 2. Image scan running inline -> top-right AI pill stays hidden until done.
+  await card102.locator('[data-scan-post]').click();
+  await expect(card102.locator('[data-scan-post]')).toHaveAttribute('data-busy', 'true');
+  await expect(card102.locator('.new-tag.ai-tag')).toHaveCount(0);
+  finishScan();
+  await expect(card102.locator('.new-tag.ai-tag')).toContainText('Image described');
+  await expect(card102.locator('.new-tag.ai-tag [data-ai-ack]')).toBeVisible();
+
+  // 3. Document AI running inline -> top-right AI pill stays hidden until done.
+  await card102.locator('[data-action="send-to-document"]').click();
+  await page.locator('#send-document-form button[type="submit"]').click();
+  await expect(card102.locator('[data-action="send-to-document"]')).toHaveAttribute('data-busy', '');
+  await expect(card102.locator('.new-tag.ai-tag')).toHaveCount(0);
+  docJobState.pollAdvance = 1;
+  await expect(card102.locator('.new-tag.ai-tag')).toContainText('Updated “Design Notes”');
+
+  // 4. In Grid view, running Note AI stays inline without duplicate top-right pill until finished.
+  await page.getByRole('button', { name: 'Grid view', exact: true }).click();
+  holdNote = true;
+  await card101.locator('[data-note-ai="101"]').click();
+  await card101.locator('.note-ai-input').fill('Check grid state');
+  await card101.locator('.note-ai-input').press('Enter');
+  await expect(card101.locator('.note-ai-box')).toContainText('Searching the web');
+  await expect(card101.locator('.new-tag.ai-tag')).toHaveCount(0);
+  holdNote = false;
+  await expect(card101.locator('.new-tag.ai-tag')).toContainText('Note updated');
+});

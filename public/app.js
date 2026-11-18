@@ -21,7 +21,7 @@ import { mountWebsitePreviews } from './website-previews.js';
 import { createNoteAutosave } from './notes.js';
 import { syncNoteLinks } from './note-links.js';
 import { animateEmbedStage, setNoteVisibility, finishNoteAnimation, glideSize, noteHeightSeen, glideNote, shineNote } from './motion.js';
-import { addedTimeGroup, addedTimeKey, libraryAddedAt } from './saved-time.js';
+import { addedTimeGroup, addedTimeKey, addedToday, libraryAddedAt } from './saved-time.js';
 import { applyFilters, defaultFilters, dateBounds, filterChips, accountOptions } from './filters.js';
 import { mountDateRange } from './date-range.js';
 import { enhanceSelects, closeSelect } from './select.js';
@@ -30,6 +30,9 @@ import { topicTree, topicScope, canNest, enableTopicDrag } from './topic-tree.js
 import { isPinterestHost, PINTEREST_PIN } from './pinterest-host.js';
 import { mountDocuments } from './documents.js';
 import { createAiActivity } from './ai-activity.js';
+import { enableActionTips } from './action-tips.js';
+enableActionTips();
+import { documentSections, searchDocuments, sectionKey, wordPattern } from './document-search.js';
 const isPinterestPin = value => { try { const url = new URL(value); return isPinterestHost(url.hostname) && PINTEREST_PIN.test(url.pathname); } catch { return false; } };
 const $ = (selector, root = document) => root.querySelector(selector);
 const app = $('#app'), modal = $('#modal'), toastHome = $('#toast').parentElement;
@@ -101,13 +104,16 @@ const selectedSyncAccounts = () => state.syncAccounts ?? legacySyncSelection(sta
 const selectedSyncRequest = () => syncSelectionRequest(selectedSyncAccounts(), state.sync?.xAccounts);
 const sourceTargets = () => selectedSyncRequest().targets;
 const styleSelects = (root = document) => enhanceSelects(root);
+// Days are counted by the calendar, except that the last 6 hours always count as today, the same rule as the New tag
+// (user's decision, 2026-11-18).
+const calendarDays = date => { if (addedToday(date)) return 0; const day = value => { const at = new Date(value); at.setHours(12, 0, 0, 0); return +at; }; return Math.round((day(Date.now()) - day(date)) / 86400000); };
 const relative = date => {
-  const days = Math.floor((Date.now() - Date.parse(date)) / 86400000);
+  const days = calendarDays(date);
   return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 7 ? `${days} days ago` : new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 // When a post entered saveXtension, said shortly beside its name: today, yesterday, days ago, then the date.
 const addedWhen = date => {
-  const then = new Date(date), days = Math.floor((Date.now() - +then) / 86400000);
+  const then = new Date(date), days = calendarDays(date);
   if (days <= 0) return 'Added today';
   if (days === 1) return 'Added yesterday';
   if (days < 7) return `Added ${days} days ago`;
@@ -303,7 +309,7 @@ async function boot() {
     if (!session.authenticated) return authScreen(session.setupRequired);
     if (!(await installMiniLM())) return;
     void loadAiSearch();
-    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); aiActivity.render(); documentUi = mountDocuments({ icon, esc, toast, onActivity: syncExternalActivity, onDialogClose: () => aiActivity.flushAnnouncements() }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
+    const data = await api('/posts?scope=all'); state.posts = notes.overlay(data.posts); state.runs = data.runs; state.topicCatalog = data.topics || []; state.instagramCollections = data.instagramCollections || []; state.instagramSaveLists = data.instagramSaveLists || {}; state.demo = false; render(); aiActivity.render(); documentUi = mountDocuments({ icon, esc, toast, onActivity: syncExternalActivity, onDialogClose: () => { aiActivity.flushAnnouncements(); loadSearchableDocuments(true); } }); void notes.resume(data.posts); if (state.localMode) await syncStatus();
   } catch (e) { app.innerHTML = `<main class="auth-wrap"><h1>Let’s reconnect.</h1><p>${esc(e.message)}</p><button class="primary" id="retry">Try again</button></main>`; $('#retry').onclick = boot; }
 }
 function authScreen(setup) {
@@ -327,11 +333,23 @@ const meaningSearch = createMeaningSearch({ onResults(query, matches) {
 } });
 function syncMeaningSearch() {
   if (!meaningSearch.running || state.demo || !state.posts) return;
+  loadSearchableDocuments();
   // Worked out again only when saves, their edits or the visible collections change.
-  const list = allPosts(), latest = list.reduce((newest, post) => newest > (post.updatedAt || '') ? newest : post.updatedAt || '', ''), described = list.filter(post => post.imageDescription).length, token = `${list.length}|${latest}|${described}|${JSON.stringify(state.instagramSaveLists)}`;
+  const list = allPosts(), latest = list.reduce((newest, post) => newest > (post.updatedAt || '') ? newest : post.updatedAt || '', ''), described = list.filter(post => post.imageDescription).length;
+  const documents = searchableDocs || [], token = `${list.length}|${latest}|${described}|${JSON.stringify(state.instagramSaveLists)}|${documents.map(doc => `${doc.id}@${doc.updatedAt}`).join()}`;
   if (meaningList === token) return;
-  meaningList = token; meaningSearch.index(token, list);
+  // Each document section is read on its own, with the document's name and heading, so a match points at that part.
+  const sections = documents.flatMap(doc => documentSections(doc.body).map(section => ({ id: sectionKey(doc.id, section.index), text: [doc.title, section.heading, section.text].filter(Boolean).join('\n') })));
+  meaningList = token; meaningSearch.index(token, list, sections);
 }
+// For MCP: the desktop app asks this page to rank a search by meaning, since the local model runs here. The answer is only
+// ids and scores, closest first, from what this page has indexed: the saves it shows and the document sections.
+window.saveXMeaningRank = async query => {
+  if (!aiLocalActive || !meaningSearch.running || state.demo || typeof query !== 'string' || !query.trim()) return null;
+  syncMeaningSearch();
+  const ranked = await meaningSearch.rank(query.trim());
+  return ranked ? { complete: !!ranked.complete, ranking: ranked.ranking.filter(([, score]) => score >= AI_NUDGE_SCORE).slice(0, 60) } : null;
+};
 function stopMeaningSearch(forget = false) {
   const wasRunning = meaningSearch.running;
   meaningSearch.stop(); meaningMatches = null; meaningList = null;
@@ -427,7 +445,7 @@ async function startAiSearch() {
   const allowed = new Set(filtered), postIds = filtered;
   const nudged = ranked?.complete ? ranked.ranking.filter(([id, score]) => allowed.has(id) && score >= AI_NUDGE_SCORE).slice(0, AI_NUDGE_LIMIT).map(([id]) => id) : [];
   try {
-    const { job } = await api('/ai-search', { method: 'POST', body: { query, postIds, nudged } });
+    const { job } = await api('/ai-search', { method: 'POST', body: { query, postIds, nudged, documents: searchesDocuments() } });
     if (aiResults.query !== query) return;
     aiJob = job.id; syncAiSearchActivity({ id: job.id, state: 'running', matches: [] }, query); void followAiSearch(job.id, query);
   } catch (error) { aiResults = { query: '', matches: new Map() }; showAiStatus(false); renderResults(); toast(error.message, true, 'bottom-center'); }
@@ -456,6 +474,8 @@ let aiLocateTimer = 0, aiLocateStop = null;
 function highlightLocatedPost(card) {
   clearTimeout(aiLocateTimer);
   document.querySelectorAll('.save-card.is-ai-located').forEach(el => el.classList.remove('is-ai-located'));
+  // Read the layout once in between, so the glow plays again on a post that was just lit.
+  void card.offsetWidth;
   card.classList.add('is-ai-located');
   aiLocateTimer = setTimeout(() => card.classList.remove('is-ai-located'), 2400);
 }
@@ -467,7 +487,8 @@ function postScrollTop(card) {
   const toolbarHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--toolbar-height')) || 64;
   return Math.max(0, window.scrollY + card.getBoundingClientRect().top - toolbarHeight - 20);
 }
-async function showLibraryPost(postId) {
+// aiView: opened from AI's notification, so the post is shown inside AI activity, or Processed today, when it's there.
+async function showLibraryPost(postId, { aiView = false } = {}) {
   const id = Number(postId);
   stopLocateWatch();
   closeModal();
@@ -484,9 +505,11 @@ async function showLibraryPost(postId) {
     try { localStorage.setItem('savex-topics-view', 'cards'); } catch { /* Keep cards view. */ }
     changedScope = true;
   }
+  const view = aiView && !post.archived && aiDonePostIds().has(id) ? 'done' : null;
+  if (view && state.filters.aiActivity !== view) { state.filters = { ...defaultFilters(), aiActivity: view }; changedScope = true; }
   if (changedScope || !filteredPosts().some(item => item.id === id)) {
     stopAiSearch();
-    state.filters = defaultFilters();
+    state.filters = view ? { ...defaultFilters(), aiActivity: view } : defaultFilters();
     state.query = '';
     const search = $('#search'); if (search) search.value = '';
     changedScope = true;
@@ -517,57 +540,77 @@ async function showLibraryPost(postId) {
   const card = findCard();
   if (!card) { toast('Could not locate that post in the current view.', true, 'bottom-center'); return; }
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // A long way off, jump to just short of the post and glide only the last stretch: a long smooth scroll
-  // ends short when cards above grow as their images load on the way.
+  // The page glides to the post on its own curve: quick to start, then a long gentle settle. It follows the post if cards
+  // above it grow on the way, and only once it has stopped does the post light up, every time, even with no scrolling.
   // The page can't scroll past its end, so a post near the bottom lands as far as it can go.
   const reachable = top => Math.min(top, document.documentElement.scrollHeight - window.innerHeight);
-  const aim = top => {
-    const near = Math.abs(top - window.scrollY) < window.innerHeight * 1.5;
-    if (reduced) { window.scrollTo({ top, behavior: 'instant' }); return; }
-    if (!near) window.scrollTo({ top: top - Math.sign(top - window.scrollY) * window.innerHeight * .6, behavior: 'instant' });
-    // Chrome drops a smooth scroll asked for in the same frame as a jump, so the glide starts on the next one.
-    requestAnimationFrame(() => window.scrollTo({ top, behavior: 'smooth' }));
-  };
-  let lastTarget = reachable(postScrollTop(card));
-  aim(lastTarget);
-  highlightLocatedPost(card);
-  // Keep correcting until the post has stayed put for a moment, up to 4 seconds, or until the person scrolls.
-  let frame = 0, settledSince = 0, lastY = window.scrollY, stillSince = 0;
-  const started = performance.now();
+  const target = () => { const found = findCard(); return found ? reachable(postScrollTop(found)) : null; };
+  let frame = 0, ended = false;
   const finish = () => {
+    if (ended) return; ended = true;
     cancelAnimationFrame(frame);
     for (const evt of ['wheel', 'touchstart', 'keydown']) window.removeEventListener(evt, finish);
     if (aiLocateStop === finish) aiLocateStop = null;
+    const found = findCard(); if (found) highlightLocatedPost(found);
   };
-  const watch = now => {
-    const targetCard = findCard();
-    if (!targetCard || now - started > 4000) { finish(); return; }
+  let to = target();
+  if (reduced) { window.scrollTo({ top: to, behavior: 'instant' }); requestAnimationFrame(finish); return; }
+  // Only a very long way off does it jump first, to a little over a screen away, so the glide stays calm.
+  if (Math.abs(to - window.scrollY) > window.innerHeight * 3) window.scrollTo({ top: to - Math.sign(to - window.scrollY) * window.innerHeight * 1.2, behavior: 'instant' });
+  const from = window.scrollY, distance = Math.abs(to - from), duration = distance < 2 ? 0 : Math.min(900, 380 + distance * .3);
+  const ease = t => 1 - Math.pow(1 - t, 4), started = performance.now();
+  let still = 0;
+  const step = now => {
+    const next = target();
+    if (next === null || now - started > 4000) { finish(); return; }
+    to = next;
+    const t = duration ? Math.min(1, (now - started) / duration) : 1;
+    window.scrollTo({ top: from + (to - from) * ease(t), behavior: 'instant' });
     pauseReadingHold(600);
-    const nextTop = reachable(postScrollTop(targetCard));
-    if (window.scrollY !== lastY) { lastY = window.scrollY; stillSince = now; }
-    if (Math.abs(nextTop - lastTarget) > 12) { lastTarget = nextTop; aim(nextTop); settledSince = 0; }
-    else if (Math.abs(window.scrollY - lastTarget) < 4) {
-      if (!settledSince) settledSince = now;
-      else if (now - settledSince > 400) { finish(); return; }
-    } else {
-      settledSince = 0;
-      // Stopped short (a glide cut off or cards above grew after it ended): aim again.
-      if (now - (stillSince || started) > 150) { stillSince = now; aim(lastTarget); }
-    }
-    frame = requestAnimationFrame(watch);
+    if (t >= 1 && Math.abs(window.scrollY - to) < 2) { if (!still) still = now; else if (now - still > 120) { finish(); return; } }
+    else still = 0;
+    frame = requestAnimationFrame(step);
   };
-  frame = requestAnimationFrame(watch);
+  frame = requestAnimationFrame(step);
   for (const evt of ['wheel', 'touchstart', 'keydown']) window.addEventListener(evt, finish, { passive: true });
   aiLocateStop = finish;
 }
 // Everything AI is working on or has just finished, as the AI activity card lists it. Its posts make the
 // AI activity view under All saves, until each item is dismissed.
 let aiActivityList = [], aiActivityCollapsed = false, aiActivityShown = '';
+// Every post AI worked on today, running or finished, is listed under "Processed today", with nothing to tick (user's decision,
+// 2026-11-18). Today means the same as for New saves: today's date or the last 6 hours. Kept across restarts.
+const AI_TODAY_KEY = 'savex-ai-processed';
+const recentWork = item => addedToday(new Date(item.doneAt ?? item.createdAt ?? 0).toISOString());
+let aiProcessed = [];
+try { aiProcessed = JSON.parse(localStorage.getItem(AI_TODAY_KEY) || '[]').filter(recentWork); } catch { /* Start empty. */ }
+const saveProcessed = () => { aiProcessed = aiProcessed.filter(recentWork).slice(-300); try { localStorage.setItem(AI_TODAY_KEY, JSON.stringify(aiProcessed)); } catch { /* Kept for this page only. */ } };
+// A job counts from when it's first seen finished on this page. One shown again from storage after a restart was counted then.
+function rememberProcessed(list) {
+  let added = false;
+  for (const { key, kind, title, detail, postId, documentId, documentTitle, state, persisted } of list) {
+    if (state !== 'done' || !postId || persisted || aiProcessed.some(old => old.key === key)) continue;
+    aiProcessed.push({ key, kind, state: 'done', title, detail, postId, documentId, documentTitle, doneAt: Date.now() }); added = true;
+  }
+  if (added) saveProcessed();
+}
+// What's running now joins what finished, so the row covers everything AI is doing or did today.
+function processedItems() {
+  const items = new Map(aiProcessed.filter(recentWork).map(item => [item.key, item]));
+  for (const item of aiActivityList) {
+    if (!item.postId || !['running', 'waiting', 'done'].includes(item.state)) continue;
+    const kept = items.get(item.key);
+    if (item.state !== 'done' || kept || recentWork(item)) items.set(item.key, { ...item, doneAt: kept?.doneAt ?? item.doneAt });
+  }
+  return [...items.values()];
+}
+// Work drops out as it gets older than today and 6 hours, so the row is checked again every few minutes.
+setInterval(() => { saveProcessed(); renderAiActivityNavigation(); }, 5 * 60 * 1000);
 try { aiActivityCollapsed = localStorage.getItem('savex-ai-activity-collapsed') === 'true'; } catch { /* Start expanded. */ }
 const aiActivity = createAiActivity({
   container: $('#ai-status'),
   // AI search lists its results in place, so the sidebar leaves it out (user's decision).
-  onChange: list => { aiActivityList = list.filter(item => item.kind !== 'search'); renderAiActivityNavigation(); refreshAiTags(); },
+  onChange: list => { aiActivityList = list.filter(item => item.kind !== 'search'); rememberProcessed(aiActivityList); renderAiActivityNavigation(); refreshAiTags(); },
   esc,
   icon,
   dotLoader,
@@ -582,7 +625,7 @@ const aiActivity = createAiActivity({
       return;
     }
     if (actionId === 'show-post' && item.postId) {
-      await showLibraryPost(item.postId);
+      await showLibraryPost(item.postId, { aiView: true });
       return;
     }
     if (actionId === 'open-organize') {
@@ -846,8 +889,68 @@ function relatedMatches() {
   for (const [id, score] of picked) combined.set(id, 100 + score);
   return combined;
 }
+// Searching also looks through documents (user's decision, 2026-11-18): each document that matches shows as one card
+// above the saves, at its best section, and opens there. Only for a search across the whole library, since documents
+// don't belong to an account, topic or date. Their text is fetched again after a document closes, or when it's old.
+let searchableDocs = null, searchableAt = 0, searchableLoading = null;
+function loadSearchableDocuments(force = false) {
+  if (state.demo || searchableLoading || (!force && searchableDocs && Date.now() - searchableAt < 15000)) return;
+  searchableLoading = api('/documents/searchable').then(({ documents }) => {
+    const changed = JSON.stringify(documents) !== JSON.stringify(searchableDocs);
+    searchableDocs = documents || []; searchableAt = Date.now();
+    if (changed) { syncMeaningSearch(); if (state.query.trim()) renderResults(); }
+  }).catch(() => {}).finally(() => { searchableLoading = null; });
+}
+const searchesDocuments = () => !!state.query.trim() && !state.archive && !state.demo && !state.filters.aiActivity && !showingCollectionFolders()
+  && !state.filters.sources.length && !state.filters.accounts.length && !state.filters.topics.length && !(state.filters.collections || []).length && !state.filters.folder && !state.filters.collection && state.filters.date === 'any';
+function documentResults() {
+  if (!searchesDocuments()) return [];
+  loadSearchableDocuments();
+  return searchableDocs ? searchDocuments(searchableDocs, state.query, { scores: relatedMatches() }).slice(0, 6) : [];
+}
+// The searched words, marked in the card's lines.
+function markTerms(text, terms) {
+  const spans = [];
+  for (const term of terms) for (const found of text.matchAll(wordPattern(term))) spans.push([found.index, found.index + found[0].length]);
+  spans.sort((a, b) => a[0] - b[0]);
+  let html = '', last = 0;
+  for (const [from, to] of spans) { if (from < last) continue; html += `${esc(text.slice(last, from))}<mark>${esc(text.slice(from, to))}</mark>`; last = to; }
+  return html + esc(text.slice(last));
+}
+function documentCard(result) {
+  const heading = result.heading && result.heading !== result.title ? `<span class="doc-result-heading">${markTerms(result.heading, result.terms)}</span>` : '';
+  const picture = result.picture ? `<img class="doc-result-picture" src="/api/documents/${esc(result.picture.split('#')[0])}" alt="" loading="lazy">` : '';
+  return `<article class="doc-result"><button type="button" class="doc-result-open" data-doc-result="${esc(result.documentId)}" data-heading="${esc(result.heading)}" data-nth="${result.nth}" data-section="${result.section}" data-terms="${esc(JSON.stringify(result.terms))}" aria-label="Open ${esc(result.title)}${result.heading ? `, ${esc(result.heading)}` : ''}">`
+    + `<span class="doc-result-head"><span class="doc-result-icon" aria-hidden="true">${result.icon ? esc(result.icon) : icon('file')}</span><span class="doc-result-title">${esc(result.title)}</span>${result.more ? `<span class="doc-result-more">+${result.more}</span>` : ''}</span>`
+    + `${heading}${picture}<span class="doc-result-snippet">${markTerms(result.snippet, result.terms)}</span></button></article>`;
+}
+function renderDocumentResults() {
+  const host = $('#document-results'); if (!host) return 0;
+  const results = documentResults(), html = results.map(documentCard).join('');
+  host.hidden = !results.length; host.dataset.view = state.cardView;
+  if (host.dataset.html !== html) { host.dataset.html = html; host.innerHTML = html; }
+  if (results.length) requestAnimationFrame(alignDocumentResults);
+  return results.length;
+}
+// Document cards line up with the posts below them: in one column, with the post's own box rather than the icons beside it,
+// and in the grid, with its columns. Measured from the cards on show, since the layout sets their size.
+function alignDocumentResults() {
+  const host = $('#document-results'); if (!host || host.hidden) return;
+  const card = $('#results .save-card'), box = card && (state.cardView === 'feed' ? $('.card-preview', card) : card);
+  if (!box) { host.style.removeProperty('--doc-left'); host.style.removeProperty('--doc-width'); return; }
+  const at = box.getBoundingClientRect(), edge = host.getBoundingClientRect();
+  host.style.setProperty('--doc-left', state.cardView === 'feed' ? `${Math.max(0, Math.round(at.left - edge.left))}px` : '0px');
+  host.style.setProperty('--doc-width', `${Math.round(at.width)}px`);
+}
+window.addEventListener('resize', () => requestAnimationFrame(alignDocumentResults), { passive: true });
+document.addEventListener('click', async event => {
+  const open = event.target.closest?.('[data-doc-result]'); if (!open) return;
+  event.preventDefault();
+  closeModal(); closeSheet(); await dismissPost();
+  await documentUi?.open(open.dataset.docResult, { find: { heading: open.dataset.heading, nth: Number(open.dataset.nth) || 0, section: Number(open.dataset.section) || 0, terms: JSON.parse(open.dataset.terms || '[]') } });
+});
 function filteredPosts() {
-  const ai = state.filters.aiActivity && aiActivityPostIds();
+  const ai = state.filters.aiActivity === 'today' ? todayPostIds() : state.filters.aiActivity && aiDonePostIds();
   const posts = ai ? scopedPosts().filter(post => ai.has(post.id)) : scopedPosts(), result = applyFilters(posts, state.filters, { query: state.query, topicScope: name => topicScope(state.topicCatalog, name), meaning: relatedMatches() });
   // Keep the card under the cursor while its edited note changes a search match.
   if (activeNote && activeNoteScope === resultsScopeKey() && !result.some(post => post.id === activeNote.id)) {
@@ -886,27 +989,36 @@ function renderNewSaves() {
     badge.textContent = `+${count}`; badge.title = `${count} new from the last sync`;
   }
 }
-const aiActivityPostIds = () => new Set(aiActivityList.map(item => Number(item.postId)).filter(Boolean));
+// Only posts still in the library count, so a post unsaved or archived since then doesn't leave a count with nothing to show.
+const inLibrary = items => { const present = new Set(allPosts().filter(post => !post.archived).map(post => post.id)); return new Set(items.map(item => Number(item.postId)).filter(id => present.has(id))); };
+// Anything still in AI activity isn't processed yet, including entries an earlier version saved before they were ticked.
+const aiDonePostIds = () => inLibrary(processedItems());
+// Saves with the New tag (today's date or the last 6 hours), for the New saves row under All saves (user's decision, 2026-11-18).
+const todayPostIds = () => new Set(allPosts().filter(post => !post.archived && addedTimeGroup(libraryAddedAt(post)).key === 'added-today').map(post => post.id));
 // AI activity is a view the app makes by itself, never a filter someone sets up: a child row of All saves
 // while AI is working on or has just finished something for a post, gone once those are dismissed.
 function renderAiActivityNavigation() {
   const root = $('#ai-activity-navigation'); if (!root) return;
-  const posts = aiActivityPostIds(), key = [...posts].join();
+  // The rows under All saves: New saves and Processed today, each there only while it has posts.
+  const done = aiDonePostIds(), today = todayPostIds(), key = `${[...done]}|${[...today]}`;
+  const shown = state.filters.aiActivity === 'today' ? today : done;
   // With nothing left to show, the AI activity view goes back to all saves. Redrawing the grid redraws this
   // row too, so the posts are noted first and the grid is redrawn only once per change.
   const changed = state.filters.aiActivity && aiActivityShown !== key;
   aiActivityShown = key;
-  if (changed && !posts.size) state.filters = defaultFilters();
+  if (changed && !shown.size) state.filters = defaultFilters();
   if (changed) updateCollection();
   const working = aiActivityList.some(item => item.postId && ['running', 'waiting'].includes(item.state));
-  const html = posts.size ? `<button type="button" class="collection-toggle" data-ai-activity-toggle aria-label="Toggle AI activity" aria-expanded="${!aiActivityCollapsed}" aria-controls="ai-activity-list" title="${aiActivityCollapsed ? 'Expand' : 'Collapse'} AI activity">${icon('chevron')}</button><ul id="ai-activity-list" class="instagram-collections" aria-label="Under All saves" ${aiActivityCollapsed ? 'hidden' : ''}><li><button class="nav-item instagram-collection ai-activity-nav" type="button" data-ai-activity-nav aria-pressed="false" aria-label="AI activity ${posts.size}" title="Posts AI is working on or just finished"><span class="ai-activity-state" aria-hidden="true">${working ? dotLoader('write') : icon('sparkle')}</span><span class="collection-label">AI activity</span><span class="nav-count">${posts.size}</span></button></li></ul>` : '';
-  root.closest('.all-saves-group')?.classList.toggle('has-collections', !!posts.size);
+  const doneRow = done.size ? `<li><button class="nav-item instagram-collection ai-activity-nav ai-done-nav" type="button" data-ai-done-nav aria-pressed="false" aria-label="Processed today ${done.size}" title="Posts AI worked on today"><span class="ai-activity-state" aria-hidden="true">${working ? dotLoader('write', 'tiny') : icon('sparkle')}</span><span class="collection-label">Processed today</span><span class="nav-count">${done.size}</span></button></li>` : '';
+  const todayRow = today.size ? `<li><button class="nav-item instagram-collection ai-activity-nav today-nav" type="button" data-today-nav aria-pressed="false" aria-label="New saves ${today.size}" title="Saves with the New tag"><span class="ai-activity-state today-state" aria-hidden="true">${icon('plus')}</span><span class="collection-label">New saves</span><span class="nav-count">${today.size}</span></button></li>` : '';
+  const html = todayRow || doneRow ? `<button type="button" class="collection-toggle" data-ai-activity-toggle aria-label="Show or hide the rows under All saves" aria-expanded="${!aiActivityCollapsed}" aria-controls="ai-activity-list" title="${aiActivityCollapsed ? 'Expand' : 'Collapse'}">${icon('chevron')}</button><ul id="ai-activity-list" class="instagram-collections" aria-label="Under All saves" ${aiActivityCollapsed ? 'hidden' : ''}>${todayRow}${doneRow}</ul>` : '';
+  root.closest('.all-saves-group')?.classList.toggle('has-collections', !!(done.size || today.size));
   if (root.dataset.html === html) return;
   root.dataset.html = html; root.innerHTML = html;
   updateSidebarSelection();
 }
 document.addEventListener('click', event => {
-  const target = event.target.closest?.('[data-ai-activity-nav],[data-ai-activity-toggle]');
+  const target = event.target.closest?.('[data-ai-done-nav],[data-today-nav],[data-ai-activity-toggle]');
   if (!target) return;
   event.preventDefault();
   if (target.hasAttribute('data-ai-activity-toggle')) {
@@ -914,7 +1026,7 @@ document.addEventListener('click', event => {
     try { localStorage.setItem('savex-ai-activity-collapsed', String(aiActivityCollapsed)); } catch { /* Keep this session's choice. */ }
     delete $('#ai-activity-navigation').dataset.html; renderAiActivityNavigation(); return;
   }
-  state.archive = false; state.filters = { ...defaultFilters(), aiActivity: true }; state.query = ''; $('#search').value = '';
+  state.archive = false; state.filters = { ...defaultFilters(), aiActivity: target.hasAttribute('data-today-nav') ? 'today' : 'done' }; state.query = ''; $('#search').value = '';
   updateCollection(); window.scrollTo({ top: 0, behavior: 'instant' });
 });
 // Brings the cards' AI tags in line with AI activity.
@@ -927,6 +1039,11 @@ document.addEventListener('click', event => {
   const ack = event.target.closest?.('[data-ai-ack]'); if (!ack) return;
   event.preventDefault(); event.stopPropagation();
   aiActivity.remove(ack.dataset.aiAck);
+}, true);
+document.addEventListener('click', async event => {
+  const open = event.target.closest?.('[data-ai-open-document]'); if (!open) return;
+  event.preventDefault(); event.stopPropagation();
+  closeModal(); closeSheet(); await dismissPost(); await documentUi?.open(open.dataset.aiOpenDocument);
 }, true);
 function renderAccountNavigation() {
   renderAiActivityNavigation();
@@ -1226,7 +1343,7 @@ function updateSidebarSelection() {
     button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
   });
   const archive = $('.archive-nav'); if (archive) { archive.classList.toggle('active', state.archive); archive.setAttribute('aria-pressed', state.archive); }
-  const ai = $('[data-ai-activity-nav]'); if (ai) { const active = !state.archive && !!state.filters.aiActivity; ai.classList.toggle('active', active); ai.setAttribute('aria-pressed', String(active)); }
+  for (const [selector, view] of [['[data-ai-done-nav]', 'done'], ['[data-today-nav]', 'today']]) { const row = $(selector); if (row) { const active = !state.archive && state.filters.aiActivity === view; row.classList.toggle('active', active); row.setAttribute('aria-pressed', String(active)); } }
 }
 function renderSidebarMarkers() {
   const sidebar = $('.sidebar'), marks = $('.sidebar-selection-marks');
@@ -1311,7 +1428,7 @@ function render() {
           <div class="browse-controls"><button class="filter-button" id="open-filters" data-action="filters" aria-label="Filters" aria-haspopup="dialog" aria-expanded="false">${icon('filter')}<span>Filters</span><span class="filter-count" hidden></span></button><div id="active-filters" class="active-filters" hidden></div></div>
         </div>
         ${state.demo ? '<div class="demo-banner"><span>Sample saves</span><button data-action="exit-demo">Close</button></div>' : ''}
-        <div class="ai-results-loader" role="status" aria-label="Searching" hidden><div class="ai-progress-card">${dotLoader('search', 'large')}<div class="ai-progress-text"><p class="ai-progress"></p><div class="ai-progress-bar" aria-hidden="true"><i></i></div><p class="ai-progress-found"></p><p class="ai-progress-names"></p></div></div></div><div id="results"></div>
+        <div class="ai-results-loader" role="status" aria-label="Searching" hidden><div class="ai-progress-card">${dotLoader('search', 'large')}<div class="ai-progress-text"><p class="ai-progress"></p><div class="ai-progress-bar" aria-hidden="true"><i></i></div><p class="ai-progress-found"></p><p class="ai-progress-names"></p></div></div></div><div id="document-results" hidden></div><div id="results"></div>
       </div>
     </main>
   </div>`;
@@ -1365,6 +1482,7 @@ function renderResults(restoreView) {
   fitSearchWidth();
   syncMeaningSearch();
   renderFilterUI();
+  const documentsFound = renderDocumentResults();
   if (showingCollectionFolders()) { renderCollectionFolders(); return; }
   const posts = filteredPosts();
   const pageKey = resultsScopeKey();
@@ -1372,11 +1490,16 @@ function renderResults(restoreView) {
   if (pageChanged) { resultsPageKey = pageKey; resultsLimits.clear(); }
   const restoring = restoreView?.scope === pageKey;
   if (restoring) { resultsLimits.clear(); for (const [key, limit] of restoreView.limits) resultsLimits.set(key, limit); }
+  // Moving to another view, from the sidebar, a topic or the filters, always starts at the top (user's decision). Typing a search
+  // doesn't count, since it has its own way back, and Show post scrolls to its post after this.
+  const viewKey = JSON.stringify([state.archive, state.filters]);
+  if (viewKey !== resultsViewKey) { const first = resultsViewKey === undefined; resultsViewKey = viewKey; if (!first && !restoring) window.scrollTo({ left: scrollX, top: 0, behavior: 'instant' }); }
   resultsPosts = posts;
   $('.ai-results-loader')?.classList.toggle('is-alone', !posts.length);
   if (!posts.length && aiBusy) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); $('#results').innerHTML = ''; return; }
   if (!posts.length && showingChromeSetup()) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); renderChromeSetup(); return; }
   if (!posts.length && emptySourcePlatform()) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); renderSourceConnect(); return; }
+  if (!posts.length && documentsFound) { moreResultsObserver?.disconnect(); disposeCardLayout(); disposeEmbeds(); $('#results').innerHTML = ''; return; }
   if (!posts.length) {
     moreResultsObserver?.disconnect();
     disposeCardLayout();
@@ -1579,7 +1702,7 @@ function renderSourceConnect() {
 }
 const CARD_BATCH_SIZE = 24;
 const resultsLimits = new Map();
-let resultsPageKey, resultsPosts = [], resultsTimeKey = '';
+let resultsPageKey, resultsViewKey, resultsPosts = [], resultsTimeKey = '';
 function rememberSearchView(focus = document.activeElement) {
   if (state.query || !$('#results')) return;
   const visible = [...document.querySelectorAll('#results .save-card:not([hidden])')].map(card => ({ id: card.dataset.postId, rect: card.getBoundingClientRect() })).filter(({rect}) => rect.height && rect.bottom > 0 && rect.top < innerHeight).sort((a,b) => Math.abs(a.rect.top) - Math.abs(b.rect.top));
@@ -1687,6 +1810,7 @@ function renderResultsPage(preservePlayers = true) {
   const sections = [...groups.values()].map(group => ({ ...group, limit: resultsLimits.get(group.key) || CARD_BATCH_SIZE }));
   reconcileCards(sections); renderUnsaving();
   observeMoreResults();
+  requestAnimationFrame(alignDocumentResults);
 }
 function renderFilterUI() {
   if (state.filters.collection) {
@@ -1712,7 +1836,7 @@ function renderFilterUI() {
   if (button) button.hidden = folders;
   syncViewToggle();
   const topicCount = folders ? localCollections().length : 0;
-  const heading = $('.page-content h1'); if (heading) { heading.textContent = folders ? `${topicCount} ${topicCount === 1 ? 'topic' : 'topics'}` : state.archive ? 'Archived' : state.filters.aiActivity ? 'AI activity' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive ? 'collection-heading' : 'sr-only'; }
+  const heading = $('.page-content h1'); if (heading) { heading.textContent = folders ? `${topicCount} ${topicCount === 1 ? 'topic' : 'topics'}` : state.archive ? 'Archived' : state.filters.aiActivity === 'today' ? 'New saves' : state.filters.aiActivity === 'done' ? 'Processed today' : state.filters.aiActivity ? 'AI activity' : state.filters.collectionName || state.filters.topics.join(', ') || selectedAccountLabel() || ({ all: 'All saves', x: 'X', instagram: 'Instagram', chrome: 'Chrome bookmarks' }[selectedSource()]); heading.className = state.archive ? 'collection-heading' : 'sr-only'; }
   renderSidebarMarkers();
 }
 function filterDialog() {
@@ -1819,8 +1943,8 @@ async function scanImage(id) {
   const runId = Date.now(), activityKey = `scan:${id}:${runId}`;
   const place = () => document.querySelector(`.save-card[data-post-id="${id}"] [data-scan-post]`);
   scanningImages.add(id);
-  aiActivity.upsert({ key: activityKey, serverRef: activityKey, kind: 'scan', loaderKind: 'search', state: 'running', title: 'Scanning image', detail: 'Looking closely at the saved image…', postId: id });
   place()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: scanButtonMarkup(id) }).content);
+  aiActivity.upsert({ key: activityKey, serverRef: activityKey, kind: 'scan', loaderKind: 'search', state: 'running', title: 'Scanning image', detail: 'Looking closely at the saved image…', postId: id });
   try {
     const { description, model } = await api('/ai-search/scan', { method: 'POST', body: { post: id } });
     scanningImages.delete(id);
@@ -1881,7 +2005,7 @@ function embedMetadata(p, savedCard = false, preview = false) {
   const dated = Number.isFinite(Date.parse(date));
   const added = libraryAddedAt(p), addedTime = Date.parse(added);
   const addedLabel = savedCard && Number.isFinite(addedTime) ? `<time class="embed-capture-added" datetime="${esc(added)}" title="Added to saveXtension on ${esc(new Date(addedTime).toLocaleString())}">${esc(addedWhen(added))}</time>` : '';
-  return `<div class="embed-placeholder"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><span class="embed-capture-name"><strong>${esc(name)}</strong>${addedLabel}</span>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div><a class="icon-button embed-open-original" href="${esc(p.url)}" aria-label="Open original post" title="Open original" target="_blank" rel="noopener noreferrer">${icon('arrow')}</a></div>${image ? `${savedCard ? `<div class="embed-capture-image-wrap"><a class="embed-capture-image-link" href="${esc(p.url)}" aria-label="${p.kind === 'video' ? 'Play this video' : 'Open this post'}" target="_blank" rel="noopener noreferrer">` : ''}<img class="embed-capture-image" src="${esc(image)}" alt="" loading="${p.localImage ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer">${savedCard && p.kind === 'video' ? '<span class="embed-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg></span>' : ''}${savedCard ? `</a>${p.localImage ? `<span class="image-saved" tabindex="0" aria-label="Downloaded locally">${icon('double-tick')}<span class="image-saved-label">Downloaded locally</span></span>` : ''}${p.imageDescription ? aiSeenMarkup(p) : p.localImage ? scanButtonMarkup(p.id) : ''}</div>` : ''}` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated && !savedCard ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Added '}${esc(relative(date))}</time>` : ''}<div class="embed-loading" role="status"><span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading preview…</span></div></div>`;
+  return `<div class="embed-placeholder"><div class="embed-capture-header">${sourceIcon(p.platform)}<div class="embed-capture-author"><span class="embed-capture-name"><strong>${esc(name)}</strong>${addedLabel}</span>${handle && p.authorName && p.authorName.toLowerCase() !== handle.slice(1).toLowerCase() ? `<span>${esc(handle)}</span>` : ''}</div><a class="icon-button embed-open-original" href="${esc(p.url)}" aria-label="Open original post" target="_blank" rel="noopener noreferrer">${icon('arrow')}</a></div>${image ? `${savedCard ? `<div class="embed-capture-image-wrap"><a class="embed-capture-image-link" href="${esc(p.url)}" aria-label="${p.kind === 'video' ? 'Play this video' : 'Open this post'}" target="_blank" rel="noopener noreferrer">` : ''}<img class="embed-capture-image" src="${esc(image)}" alt="" loading="${p.localImage ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer">${savedCard && p.kind === 'video' ? '<span class="embed-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg></span>' : ''}${savedCard ? `</a>${p.localImage ? `<span class="image-saved" tabindex="0" aria-label="Downloaded locally">${icon('double-tick')}<span class="image-saved-label">Downloaded locally</span></span>` : ''}${p.imageDescription ? aiSeenMarkup(p) : p.localImage ? scanButtonMarkup(p.id) : ''}</div>` : ''}` : ''}${caption ? `<p class="embed-capture-text">${esc(caption)}</p>` : `<a class="embed-capture-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>`}${dated && !savedCard ? `<time class="embed-capture-date" datetime="${esc(date)}" title="${esc(new Date(date).toLocaleString())}">${published ? '' : 'Added '}${esc(relative(date))}</time>` : ''}<div class="embed-loading" role="status"><span class="embed-loading-spinner" aria-hidden="true"></span><span>Loading preview…</span></div></div>`;
 }
 // An image link can expire before a copy is saved, so drop the picture instead of showing it broken.
 function watchSavedImages(cards) {
@@ -2066,7 +2190,7 @@ const noteAiRunning = id => noteAiBusyState(noteAiJobs.get(id));
 const noteAiWaitLabel = job => job.position > 1 ? `Waiting · ${job.position} notes ahead` : job.waitingFor === 'document' ? 'Waiting for a document to finish' : 'Waiting for the other note';
 function noteAiBoxInner(id) {
   const job = noteAiJobs.get(id);
-  if (job?.state === 'running') return `<div class="note-ai-working" role="status">${dotLoader('write')}<span class="note-ai-step">${esc(job.step || 'Starting')}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
+  if (job?.state === 'running') return `<div class="note-ai-working" role="status">${dotLoader('write', 'tiny')}<span class="note-ai-step">${esc(job.step || 'Starting')}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
   if (job?.state === 'waiting') return `<div class="note-ai-working is-waiting" role="status">${icon('clock')}<span class="note-ai-step">${esc(noteAiWaitLabel(job))}…</span><button type="button" class="note-ai-cancel" data-note-ai-cancel>Cancel</button></div><p class="note-ai-asked">${esc(job.request)}</p>`;
   if (!aiTool) return `<div class="note-ai-off"><span>Turn on Claude Code, Codex or DeepSeek to use this.</span><button type="button" class="note-ai-cancel" data-action="settings">Open Settings</button></div>`;
   const error = noteAiErrors.get(id);
@@ -2117,6 +2241,55 @@ function paintNoteAi(id) {
   });
 }
 function focusNoteAi(id) { const input = document.querySelector(`[data-note-ai-box="${id}"] .note-ai-input`); input?.focus({ preventScroll: true }); }
+// "/ai" typed at the end of what's written in a note works as a send key (user's decision). It's highlighted with a hint
+// beside it: Enter sends the text before it on that line (or the line above, if "/ai" is alone) to AI and takes both out of
+// the note, and anything else, like a space, leaves it as ordinary text. The highlight is drawn on a copy of the note's text
+// laid behind it, because a text box can't colour part of its own text.
+const AI_SEND = /(^|\s)\/ai$/i;
+function aiSendAt(field) {
+  const at = field.selectionStart;
+  if (document.activeElement !== field || at !== field.selectionEnd || field.readOnly || state.demo) return -1;
+  if (field.value.slice(at).split('\n')[0].trim() || !AI_SEND.test(field.value.slice(Math.max(0, at - 5), at))) return -1;
+  const id = Number(field.closest('.card-note')?.querySelector('[data-note-ai-box]')?.dataset.noteAiBox);
+  return id && !noteAiRunning(id) ? at - 3 : -1;
+}
+function paintAiSend(field) {
+  const editor = field.parentElement, start = aiSendAt(field);
+  let layer = editor.querySelector('.note-ai-send-layer');
+  if (start < 0) { layer?.remove(); return; }
+  if (!layer) { layer = document.createElement('div'); layer.className = 'note-ai-send-layer'; layer.setAttribute('aria-hidden', 'true'); editor.prepend(layer); }
+  const look = getComputedStyle(field);
+  for (const key of ['font', 'letterSpacing', 'wordSpacing', 'tabSize', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'overflowWrap', 'wordBreak', 'textIndent']) layer.style[key] = look[key];
+  // 8px of room either side, so the highlight around "/ai" at the start or end of a line isn't cut off. The text inside still
+  // wraps at exactly the note's width.
+  const room = 8;
+  Object.assign(layer.style, { left: `${field.offsetLeft - room}px`, top: `${field.offsetTop}px`, width: `${field.clientWidth + room * 2}px`, height: `${field.clientHeight}px`, paddingLeft: `calc(${look.paddingLeft} + ${room}px)`, paddingRight: `calc(${look.paddingRight} + ${room}px)` });
+  const mark = document.createElement('span'), hint = document.createElement('span');
+  mark.className = 'note-ai-send-mark'; mark.textContent = field.value.slice(start, start + 3);
+  hint.className = 'note-ai-send-hint'; hint.textContent = '↵ Enter to send to AI';
+  // The space lets the hint go to the next line on its own when it doesn't fit, so "/ai" stays where it's typed.
+  layer.replaceChildren(document.createTextNode(field.value.slice(0, start)), mark, document.createTextNode(' '), hint);
+  layer.scrollTop = field.scrollTop;
+}
+for (const type of ['input', 'keyup', 'click', 'focusin', 'focusout']) document.addEventListener(type, event => { if (event.target.matches?.('.note-input')) queueMicrotask(() => paintAiSend(event.target)); });
+document.addEventListener('scroll', event => { if (event.target.matches?.('.note-input')) { const layer = event.target.parentElement.querySelector('.note-ai-send-layer'); if (layer) layer.scrollTop = event.target.scrollTop; } }, true);
+document.addEventListener('keydown', event => {
+  const field = event.target;
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !field.matches?.('.note-input')) return;
+  const mark = aiSendAt(field); if (mark < 0) return;
+  event.preventDefault();
+  const id = Number(field.closest('.card-note').querySelector('[data-note-ai-box]').dataset.noteAiBox), value = field.value, at = field.selectionStart;
+  let from = value.lastIndexOf('\n', mark - 1) + 1, request = value.slice(from, mark).trim();
+  if (!request && from > 0) { from = value.lastIndexOf('\n', from - 2) + 1; request = value.slice(from, mark).trim(); }
+  // Take the prompt and "/ai" out, with the line they leave empty.
+  let to = at;
+  if (value[to] === '\n') to++; else if (from > 0) from--;
+  field.setRangeText('', from, to, 'end');
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  paintAiSend(field);
+  if (!request) { noteAiOpen.add(id); paintNoteAi(id); focusNoteAi(id); return; }
+  void startNoteAi(id, request).then(() => { if (noteAiErrors.has(id)) { noteAiOpen.add(id); paintNoteAi(id); focusNoteAi(id); } });
+});
 async function followNoteAi() {
   if (noteAiFollowing) return;
   noteAiFollowing = true;
@@ -2222,7 +2395,7 @@ function paintDocAiButtons() {
   document.querySelectorAll('.save-card [data-action="send-to-document"]').forEach(button => {
     const id = Number(button.closest('.save-card')?.dataset.postId), busy = docAiRunning(id), wasBusy = button.hasAttribute('data-busy');
     button.toggleAttribute('data-busy', busy);
-    if (busy !== wasBusy) button.innerHTML = busy ? dotLoader('write') : icon('file');
+    if (busy !== wasBusy) button.innerHTML = busy ? dotLoader('write', 'tiny') : icon('file');
     const label = busy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
     button.setAttribute('aria-label', label); button.title = label;
   });
@@ -2234,6 +2407,7 @@ function paintDocAiButtons() {
     const label = busy ? `${docAiJob?.step || 'Sending to document'}…` : 'Send to document';
     button.title = label;
   });
+  renderNewSaves();
 }
 function paintSendDocumentRunning() {
   if (!docAiJob || docAiJob.state !== 'running') return;
@@ -2380,6 +2554,7 @@ function syncCardNote(card, post, immediate = false, preview = true) {
   if (noteAiUndo.has(post.id) && noteAiUndo.get(post.id).after !== notes.value(post)) { noteAiUndo.delete(post.id); $('.note-ai-undo', section)?.remove(); }
   if (immediate) { finishNoteAnimation(section); section.hidden = !shown; section.dataset.noteOpen = String(shown); }
   else setNoteVisibility(section, shown);
+  markNew(card, post);
   $('.note-button',card)?.setAttribute('aria-expanded',String(shown));
   label.textContent = status === 'error' ? 'Not saved yet · retrying' : status === 'pending' || status === 'saving' ? 'Saving…' : '';
   label.dataset.state = status || '';
@@ -2421,28 +2596,41 @@ function editNote(id) {
     openNoteIds.delete(post.id);
     if (noteAiOpen.delete(post.id)) paintNoteAi(post.id);
     if (activeNote?.id === post.id) flushActiveNote();
-    button.setAttribute('aria-expanded','false'); setNoteVisibility(section,false);
+    button.setAttribute('aria-expanded','false'); setNoteVisibility(section,false); markNew(card, post);
     button.focus({preventScroll:true}); return;
   }
   openNoteIds.add(post.id); button.setAttribute('aria-expanded','true');
   setNoteVisibility(section,true,() => { sizeNote(field); field.focus({preventScroll:true}); });
+  markNew(card, post);
 }
 window.addEventListener('resize', () => { if (!CSS.supports('field-sizing','content')) document.querySelectorAll('.note-input').forEach(sizeNote); }, {passive:true});
 // Preserve the iframe itself while background sync refreshes metadata around it.
 const cardVersions = new WeakMap();
 // The latest AI job on a post, while it's in AI activity.
-function aiPostItem(id) { let latest = null; for (const item of aiActivityList) if (Number(item.postId) === id && (!latest || (item.createdAt || 0) >= (latest.createdAt || 0))) latest = item; return latest; }
+function aiPostItem(id) { let latest = null; for (const item of state.filters.aiActivity === 'done' ? processedItems() : aiActivityList) if (Number(item.postId) === id && (!latest || (item.createdAt || item.doneAt || 0) >= (latest.createdAt || latest.doneAt || 0))) latest = item; return latest; }
+function aiInlineVisible(card, post, ai) {
+  if (ai.state !== 'running') return false;
+  if (ai.kind === 'note') {
+    const section = $('.card-note', card);
+    return noteAiRunning(post.id) && !section?.hidden && section?.dataset.noteOpen !== 'false';
+  }
+  if (ai.kind === 'document') return docAiRunning(post.id) && !!$('[data-action="send-to-document"]', card);
+  if (ai.kind === 'scan') return scanningImages.has(post.id) && !!$('[data-scan-post]', card);
+  return false;
+}
 function aiTagMarkup(item) {
   const active = item.state === 'running' || item.state === 'waiting';
-  const mark = item.state === 'running' ? dotLoader(item.loaderKind || 'write') : icon(item.state === 'waiting' ? 'clock' : item.state === 'failed' ? 'warning' : 'sparkle');
-  return `<span class="ai-tag-icon" aria-hidden="true">${mark}</span><span class="ai-tag-text">${esc(item.title)}</span>${active ? '' : `<button type="button" class="ai-tag-ack" data-ai-ack="${esc(item.key)}" aria-label="Got it: ${esc(item.title)}" title="Got it">${icon('check')}</button>`}`;
+  const mark = item.state === 'running' ? dotLoader(item.loaderKind || 'write', 'tiny') : icon(item.state === 'waiting' ? 'clock' : item.state === 'failed' ? 'warning' : state.filters.aiActivity === 'done' ? 'check' : 'sparkle');
+  // Under Processed today the pill only says what was done, so there's nothing to tick. A finished document gets its own way in.
+  const history = state.filters.aiActivity === 'done', open = item.state === 'done' && item.documentId ? `<button type="button" class="ai-tag-open" data-ai-open-document="${esc(item.documentId)}" aria-label="Open ${esc(item.documentTitle || 'document')}" title="Open ${esc(item.documentTitle || 'document')}">Open</button>` : '';
+  return `<span class="ai-tag-icon" aria-hidden="true">${mark}</span><span class="ai-tag-text">${esc(item.title)}</span>${open}${active || history ? '' : `<button type="button" class="ai-tag-ack" data-ai-ack="${esc(item.key)}" aria-label="Got it: ${esc(item.title)}" title="Got it">${icon('check')}</button>`}`;
 }
 // Posts first added today carry a small "New" tag on the post's top edge. While AI works on a post, or has
 // just finished, that spot says what it's doing or did instead, and its tick dismisses it (user's decision).
 function markNew(card, post) {
   const fresh = addedTimeGroup(libraryAddedAt(post)).key === 'added-today', layout = $('.card-layout', card), ai = aiPostItem(post.id);
   let tag = $(':scope > .new-tag', layout);
-  if (ai) {
+  if (ai && !aiInlineVisible(card, post, ai)) {
     if (!tag?.classList.contains('ai-tag')) { tag?.remove(); tag = document.createElement('span'); tag.className = 'new-tag ai-tag'; layout.prepend(tag); }
     const html = aiTagMarkup(ai);
     if (tag.dataset.html !== html) { tag.innerHTML = html; tag.dataset.html = html; }
@@ -3012,8 +3200,10 @@ function expandSyncNotice(expanded) {
   syncNoticeGlide.change(() => { syncNotice.dataset.expanded = String(expanded); });
   syncNotice.querySelector('.sync-toast-summary')?.setAttribute('aria-expanded', String(expanded));
 }
-syncNotice.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') expandSyncNotice(true); });
-syncNotice.addEventListener('pointerleave', () => { if (!syncNotice.contains(document.activeElement)) expandSyncNotice(false); });
+// Like the AI notification: a short wait to open and a longer one to close, so quick passes don't flicker it.
+let syncNoticeTimer = 0;
+syncNotice.addEventListener('pointerenter', event => { if (event.pointerType !== 'mouse') return; clearTimeout(syncNoticeTimer); syncNoticeTimer = setTimeout(() => expandSyncNotice(true), 80); });
+syncNotice.addEventListener('pointerleave', () => { clearTimeout(syncNoticeTimer); syncNoticeTimer = setTimeout(() => { if (!syncNotice.matches(':hover') && !syncNotice.contains(document.activeElement)) expandSyncNotice(false); }, 100); });
 syncNotice.addEventListener('focusin', () => expandSyncNotice(true));
 syncNotice.addEventListener('focusout', () => queueMicrotask(() => { if (!syncNotice.matches(':hover') && !syncNotice.contains(document.activeElement)) expandSyncNotice(false); }));
 document.addEventListener('visibilitychange', () => { const now = performance.now(); syncReportTimers.forEach(timer => { timer.at = now; }); updateSyncCountdown(); });
@@ -3363,6 +3553,17 @@ document.addEventListener('contextmenu', event => {
   if (collection) { event.preventDefault(); localCollectionMenu(collection, { x: event.clientX, y: event.clientY }); return; }
   const trigger = accountMenuTrigger(event.target); if (!trigger) return;
   event.preventDefault(); accountMenu(trigger, { x: event.clientX, y: event.clientY });
+});
+// Delete or Backspace with topics selected in the Topics list asks to delete them, the same as the right-click menu (user's
+// decision). It never deletes by itself, and does nothing while typing, with a dialog or panel open, or with the list hidden.
+document.addEventListener('keydown', event => {
+  if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey || event.repeat || state.demo) return;
+  if (event.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])') || $('#sidebar-collections-panel')?.hidden) return;
+  if (modal.open || $('#sheet')?.open || $('#post-panel')?.open || documentUi?.isOpen?.() || state.archive) return;
+  const selected = state.topicCatalog.filter(topic => topic.id && state.filters.topics.includes(topic.name));
+  if (!selected.length) return;
+  event.preventDefault();
+  collectionDialog(selected.length > 1 ? selected : selected[0], 'delete');
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;

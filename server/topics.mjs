@@ -2,6 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { HttpError, updatedTime } from './domain.mjs';
 
 export const topicKey = name => name.normalize('NFKC').trim().toLocaleLowerCase('en-US');
+// The broad topics a scan adds by keyword (topicsFor) help a new library make sense, but one the person deletes stays deleted
+// (user's decision): its name is kept here, and scans never add it again. A topic they make or assign by hand isn't affected.
+export const RETIRED_TOPICS = 'retired_auto_topics';
+export function retiredTopics(db) { try { return new Set(JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(RETIRED_TOPICS)?.value || '[]')); } catch { return new Set(); } }
+function retireTopic(db, name) {
+  const names = retiredTopics(db); names.add(topicKey(name));
+  db.prepare('INSERT OR REPLACE INTO settings VALUES (?,?)').run(RETIRED_TOPICS, JSON.stringify([...names]));
+}
 export function cleanTopicName(name) {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 80 || /[\p{Cc}]/u.test(name)) throw new HttpError(400, 'Use a topic name between 1 and 80 characters.');
   return name.normalize('NFKC').trim();
@@ -249,6 +257,7 @@ export class TopicLibrary {
       // MCP retains its empty-topic-only contract and cannot inspect archived saves.
       const affected = this.db.prepare('SELECT post_id FROM post_topics WHERE topic_id=?').all(topicId);
       if (!removeMemberships && affected.length) throw new HttpError(409, 'This topic still has memberships. Remove its accessible memberships or merge it into another topic.');
+      retireTopic(this.db, this.db.prepare('SELECT name FROM topics WHERE id=?').get(topicId).name);
       this.db.prepare('DELETE FROM topics WHERE id=?').run(topicId);
       for (const { post_id: id } of affected) {
         const post = this.db.prepare('SELECT updated_at FROM posts WHERE id=?').get(id);

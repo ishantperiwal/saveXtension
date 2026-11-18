@@ -76,7 +76,13 @@ async function start() {
   // A saved helper copy is refreshed so Chrome's next reload loads this version.
   await refreshHelpers().catch(log);
   social = await createNativeSocial({ library, transport: nativeTransport, extensionRoot: library.helperPath, version: JSON.parse(await readFile(join(library.helperPath, 'manifest.json'), 'utf8')).version, onError: log });
-  library.mcp.setPostViewer((post, options) => social.viewPost(post, options));
+  library.mcp.setPostViewer((post, options) => options?.reply ? social.viewReply(post, options.reply) : social.viewPost(post, options));
+  // MCP searches by meaning through the library window, where the local model runs. No window, or no answer within 2.5 seconds, means words only.
+  library.mcp.setMeaningRanker(query => {
+    if (!window || window.isDestroyed() || window.webContents.isLoading()) return Promise.resolve(null);
+    const asked = window.webContents.executeJavaScript(`window.saveXMeaningRank ? window.saveXMeaningRank(${JSON.stringify(String(query))}) : null`).catch(() => null);
+    return Promise.race([asked, new Promise(resolve => setTimeout(() => resolve(null), 2500))]);
+  });
   library.onBackupImported(() => social.reloadAccounts());
   updater = createUpdater({ version: app.getVersion(), dataDir: userData, enabled: app.isPackaged && !process.env.SAVEX_DESKTOP_DISABLE_UPDATES, openInstaller: async path => { const error = await shell.openPath(path); if (error) throw new Error(error); } });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -270,6 +276,13 @@ async function createWindow() {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.on('focus', () => checks?.returned());
   window.on('closed', () => { social.closePost(); window = null; });
+  // On a Mac the red button hides the window rather than closing it, so the page and its local model keep running for MCP
+  // while the app runs (user's decision, 2026-11-18). Quitting still closes it. A full-screen window leaves full screen first.
+  window.on('close', event => {
+    if (process.platform !== 'darwin' || quitting) return;
+    event.preventDefault(); social.closePost();
+    if (window.isFullScreen()) { window.once('leave-full-screen', () => window?.hide()); window.setFullScreen(false); } else window.hide();
+  });
   window.once('ready-to-show', () => window?.show());
   await window.loadURL(library.origin);
 }

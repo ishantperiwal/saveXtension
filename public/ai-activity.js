@@ -24,14 +24,22 @@ function writeStorage(key, value) {
  * Manages the bottom-right AI activity nudge card, tracking active and finished
  * AI tasks as persistent list items until the user explicitly dismisses them.
  */
-export function createAiActivity({ container, esc, icon, dotLoader, resolvePostLabel, onAction, isDialogOpen, onChange }) {
+// Leaving slides right, like the sync notifications, and arriving slides in from the right.
+const OUT = [{ transform: 'none', opacity: 1 }, { transform: 'translateX(calc(100% + 32px))', opacity: 0 }];
+const OUT_TIMING = { duration: 240, easing: 'cubic-bezier(.4,0,.8,.6)', fill: 'forwards' };
+const settle = animation => animation.finished.catch(() => {});
+
+export function createAiActivity({ container, esc, icon, dotLoader, resolvePostLabel, onAction, isDialogOpen, onChange, onDismiss }) {
   const items = new Map();
   const dismissedRefs = new Set();
   const pendingAnnouncements = [];
   let lastRenderKey = '';
   let lastOutsideFocus = null;
-  let expanded = false;
+  // Collapsed until the mouse comes near it or it gets focus, and collapsed again when it leaves (user's decision), like the
+  // sync notification. The area that counts as near reaches past its edges, so it's easy to open.
+  let expanded = false, hovered = false;
   let activeAnimations = [];
+  let toggling = false, leaving = 0, cardOut = null;
   const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function stopAnimations() {
@@ -50,7 +58,7 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
     const from = container.getBoundingClientRect();
     if (!from.width || !from.height) return;
     expanded = opening;
-    render();
+    toggling = true; render(); toggling = false;
     const panel = container.querySelector('#ai-toast-panel');
     const to = container.getBoundingClientRect();
     if (!to.width || !to.height) return;
@@ -153,7 +161,7 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
       if (item.postId) actions.push({ id: 'show-post', label: 'Show post' });
       if (item.kind === 'organize') actions.push({ id: 'open-organize', label: 'Open' });
       if (item.kind === 'search') actions.push({ id: 'show-search', label: 'Show' });
-      if (item.canUndo && !item.undone) actions.push({ id: 'undo', label: 'Undo' });
+      // Undo is hidden here for now (user's decision, 2026-11-18). It's still on the note itself and in the document's history.
       return actions;
     }
     if (item.documentId && item.kind !== 'document') actions.push({ id: 'open-document', label: 'Open document' });
@@ -163,7 +171,7 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
   }
 
   function itemIcon(item) {
-    if (item.state === 'running') return dotLoader(item.loaderKind || 'write');
+    if (item.state === 'running') return dotLoader(item.loaderKind || 'write', 'tiny');
     if (item.state === 'waiting') return icon('clock');
     if (item.state === 'done') return icon('check');
     return icon('warning');
@@ -196,7 +204,8 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
   }
 
   function renderCard() {
-    if (!container) return;
+    // While rows slide out, the card waits and is redrawn once they're gone.
+    if (!container || leaving) return;
     const list = sorted();
     if (!list.length) {
       stopAnimations();
@@ -207,6 +216,8 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
         container.replaceChildren();
         lastRenderKey = '';
       }
+      expanded = false; hovered = false;
+      container.getAnimations().forEach(animation => animation.cancel());
       return;
     }
     const activeCount = list.filter(item => isActive(item.state)).length;
@@ -217,18 +228,21 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
     if (activeCount) summaryParts.push(`${activeCount} running`);
     if (doneCount) summaryParts.push(`${doneCount} done`);
     if (failedCount) summaryParts.push(`${failedCount} failed`);
-    const headLead = activeCount ? dotLoader('write') : failedCount ? icon('warning') : icon('sparkle');
+    const headLead = activeCount ? dotLoader('write', 'tiny') : failedCount ? icon('warning') : icon('sparkle');
     const summaryText = summaryParts.join(' · ');
     const toggleAria = `AI activity: ${summaryText}. ${expanded ? 'Collapse' : 'Expand'}`;
-    const clearButton = dismissibleCount > 0
+    // Only once it's open: on the collapsed pill it would move away as the hover opens it.
+    const clearButton = expanded && dismissibleCount > 0
       ? '<button type="button" class="ai-toast-clear" data-ai-clear title="Clear finished notifications">Clear done</button>'
       : '';
     const markup = `<div class="ai-toast-head"><button type="button" class="ai-toast-toggle" data-ai-toggle aria-expanded="${expanded}" aria-controls="ai-toast-panel" aria-label="${esc(toggleAria)}"><span class="ai-toast-brand" aria-hidden="true">${headLead}</span><strong class="ai-toast-heading">AI</strong><span class="ai-toast-summary">${esc(summaryText)}</span><span class="ai-toast-chevron" aria-hidden="true">${icon('chevron')}</span></button>${clearButton}</div><div id="ai-toast-panel" class="ai-toast-panel"${expanded ? '' : ' hidden'}><ul class="ai-toast-list" role="list">${list.map(itemMarkup).join('')}</ul></div><span class="sr-only ai-toast-live" aria-live="polite"></span>`;
+    const arriving = container.hidden;
+    const from = arriving || toggling || reducedMotion() ? null : container.getBoundingClientRect();
     container.hidden = false;
     container.dataset.expanded = String(expanded);
     container.dataset.state = activeCount ? 'active' : failedCount ? 'warning' : 'done';
     if (markup === lastRenderKey) return;
-    stopAnimations();
+    if (!toggling) stopAnimations();
     lastRenderKey = markup;
 
     const focused = container.contains(document.activeElement) ? document.activeElement : null;
@@ -239,6 +253,16 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
       : focused?.hasAttribute('data-ai-clear') ? '[data-ai-clear]' : '';
 
     container.innerHTML = markup;
+
+    if (arriving && !reducedMotion()) container.animate([{ opacity: 0, transform: 'translateX(calc(100% + 32px))' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.22,.68,.2,1)' });
+    // A row arriving, leaving or growing changes the card's size, so it eases to the new one instead of jumping.
+    const to = from && container.getBoundingClientRect();
+    if (to && from.width && (Math.abs(to.height - from.height) > 1 || Math.abs(to.width - from.width) > 1)) {
+      const resize = container.animate([{ width: `${from.width}px`, height: `${from.height}px` }, { width: `${to.width}px`, height: `${to.height}px` }], { duration: 240, easing: 'cubic-bezier(.22,.68,.2,1)' });
+      activeAnimations.push(resize);
+      const panel = container.querySelector('#ai-toast-panel');
+      if (panel && to.height > from.height) activeAnimations.push(panel.animate([{ opacity: .4 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' }));
+    }
 
     if (focusAttr) {
       const target = focusKey
@@ -280,57 +304,69 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
     return next;
   }
 
+  // Dismissed items leave the data at once, so the sidebar and cards update straight away, and slide out of the card
+  // first: one row on its own, or the whole card when nothing would be left. The card is redrawn once they're gone.
+  async function slideOut(keys) {
+    if (!container || container.hidden || reducedMotion()) return;
+    if (!items.size) { cardOut = container.animate(OUT, OUT_TIMING); await settle(cardOut); return; }
+    if (!expanded) return;
+    const rows = keys.map(key => container.querySelector(`[data-ai-key="${CSS.escape(key)}"]`)).filter(Boolean);
+    await Promise.all(rows.map(row => settle(row.animate(OUT, { ...OUT_TIMING, duration: 220 }))));
+  }
+  function take(keys, { rememberDismissal = true, focus = null } = {}) {
+    const gone = [];
+    for (const key of keys) {
+      const item = items.get(key);
+      if (!item) continue;
+      if (rememberDismissal && (item.serverRef || item.key)) dismissedRefs.add(item.serverRef || item.key);
+      items.delete(key);
+      gone.push(item);
+    }
+    if (!gone.length) return;
+    // What's ticked off moves to Processed today.
+    if (rememberDismissal) onDismiss?.(gone.filter(item => item.state === 'done'));
+    persist();
+    onChange?.(sorted());
+    leaving++;
+    void slideOut(gone.map(item => item.key)).then(() => {
+      leaving--;
+      if (leaving) return;
+      renderCard();
+      // If something arrived while the card slid away, it comes back in place.
+      cardOut?.cancel(); cardOut = null;
+      focus?.();
+    });
+  }
+
   function remove(key, { rememberDismissal = true } = {}) {
     const existing = items.get(key);
     if (!existing) return;
-    if (rememberDismissal && existing.serverRef) dismissedRefs.add(existing.serverRef);
     const focusInside = container?.contains(document.activeElement);
     const row = focusInside ? document.activeElement.closest('[data-ai-key]') : null;
     const siblingKey = row?.dataset.aiKey === key
       ? (row.nextElementSibling?.dataset.aiKey || row.previousElementSibling?.dataset.aiKey || '')
       : '';
-    items.delete(key);
-    persist();
-    render();
-    if (focusInside) {
+    take([key], { rememberDismissal, focus: focusInside ? () => {
       const nextTarget = siblingKey
         ? container.querySelector(`[data-ai-key="${CSS.escape(siblingKey)}"] :is([data-ai-dismiss], .ai-toast-btn)`)
         : container.querySelector('[data-ai-clear], [data-ai-toggle], .ai-toast-btn, [data-ai-dismiss]');
       if (nextTarget) nextTarget.focus({ preventScroll: true });
       else if (lastOutsideFocus?.isConnected) lastOutsideFocus.focus({ preventScroll: true });
-    }
+    } : null });
   }
 
   function clearFinished() {
     const focusInside = container?.contains(document.activeElement);
-    for (const [key, item] of items) {
-      if (isActive(item.state)) continue;
-      if (item.serverRef) dismissedRefs.add(item.serverRef);
-      items.delete(key);
-    }
-    if (!items.size) expanded = false;
-    persist();
-    render();
-    if (focusInside) {
+    take([...items.values()].filter(item => !isActive(item.state)).map(item => item.key), { focus: focusInside ? () => {
       const remaining = container.querySelector('.ai-toast-btn, [data-ai-toggle]');
       if (remaining) remaining.focus({ preventScroll: true });
       else if (lastOutsideFocus?.isConnected) lastOutsideFocus.focus({ preventScroll: true });
-    }
+    } : null });
   }
 
   function dismissAll() {
     const focusInside = container?.contains(document.activeElement);
-    for (const item of items.values()) {
-      const ref = item.serverRef || item.key;
-      if (ref) dismissedRefs.add(ref);
-    }
-    items.clear();
-    expanded = false;
-    persist();
-    render();
-    if (focusInside && lastOutsideFocus?.isConnected) {
-      lastOutsideFocus.focus({ preventScroll: true });
-    }
+    take([...items.keys()], { focus: focusInside ? () => { if (lastOutsideFocus?.isConnected) lastOutsideFocus.focus({ preventScroll: true }); } : null });
   }
 
   function removeMatching(predicate, options) {
@@ -346,6 +382,40 @@ export function createAiActivity({ container, esc, icon, dotLoader, resolvePostL
   document.addEventListener('focusin', event => {
     if (container && !container.contains(event.target)) lastOutsideFocus = event.target;
   });
+
+  const NEAR = { left: 32, top: 24, right: 24, bottom: 24 };
+  function setOpen(open) {
+    if (open === expanded || !container || container.hidden) return;
+    if (reducedMotion()) { expanded = open; render(); } else animateToggle(open);
+  }
+  function near(x, y) {
+    if (!container || container.hidden) return false;
+    const box = container.getBoundingClientRect();
+    return x >= box.left - NEAR.left && x <= box.right + NEAR.right && y >= box.top - NEAR.top && y <= box.bottom + NEAR.bottom;
+  }
+  // Opening waits a moment and closing waits longer, so passing the mouse across it, or slipping out and back, doesn't flicker it.
+  const OPEN_DELAY = 80, CLOSE_DELAY = 100;
+  let settleTimer = 0;
+  function pointerAt(x, y) {
+    const now = near(x, y);
+    if (now === hovered) return;
+    hovered = now;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      if (hovered) setOpen(true);
+      else if (!container.contains(document.activeElement)) setOpen(false);
+    }, now ? OPEN_DELAY : CLOSE_DELAY);
+  }
+  let frame = 0, point = null;
+  document.addEventListener('pointermove', event => {
+    if (event.pointerType !== 'mouse') return;
+    point = event;
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; pointerAt(point.clientX, point.clientY); });
+  }, { passive: true });
+  document.documentElement.addEventListener('mouseleave', () => pointerAt(-1e5, -1e5));
+  container?.addEventListener('focusin', () => setOpen(true));
+  container?.addEventListener('focusout', () => queueMicrotask(() => { if (!hovered && !container.contains(document.activeElement)) setOpen(false); }));
+  document.addEventListener('pointerdown', event => { if (container && !hovered && !container.contains(event.target)) setOpen(false); }, { passive: true });
 
   container?.addEventListener('click', event => {
     const toggle = event.target.closest?.('[data-ai-toggle]');

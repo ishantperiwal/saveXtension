@@ -130,6 +130,12 @@
 @media (max-width: 720px) { .document-body .milkdown .ProseMirror { padding: 20px 28px 48px; } .document-head { padding: 16px 14px 8px 18px; } .document-foot { padding-left: 18px; padding-right: 18px; } }
 .document-body .milkdown .ProseMirror pre { margin: 12px 0; padding: 14px 16px; border-radius: 12px; background: var(--surface-soft); color: var(--ink); font: 13px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .document-body .milkdown .ProseMirror pre code { font: inherit; background: none; padding: 0; color: inherit; }
+/* A long code block, usually a prompt, folds to about seven lines with a fade, and its button sits just under it. */
+.document-body .milkdown .ProseMirror pre.long-block.is-folded { max-height: 182px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), transparent); }
+.document-body .milkdown .ProseMirror pre.long-block { margin-bottom: 6px; }
+.document-body .milkdown .ProseMirror .long-block-toggle { display: block; margin: 0 0 12px; padding: 3px 10px; border: 0; border-radius: 999px; background: var(--surface-soft); color: var(--muted); font: 500 12px/18px var(--sans); cursor: pointer; user-select: none; }
+.document-body .milkdown .ProseMirror .long-block-toggle:hover { color: var(--ink); }
+.document-body .milkdown .ProseMirror .long-block-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Starting a document: a modal dialog asking for its name and what belongs in it, both required. */
 #document-new { max-width: 480px; padding: 24px; }
@@ -203,3 +209,6 @@
 .document-refine-send .icon { width: 16px; height: 16px; }
 .document-refine-cancel { min-height: 0; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); font: 500 12px/16px var(--sans); }
 .document-refine-cancel:is(:hover, :focus-visible) { background: var(--ai-chip); color: var(--ink); }
+
+/* Words a search found, marked for a few seconds when a document opens from a search result. */
+::highlight(document-found) { background-color: color-mix(in srgb, #f5d66b 70%, transparent); color: inherit; }

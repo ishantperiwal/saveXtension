@@ -107,6 +107,7 @@ export function cleanPost(input) {
     media: [...new Set((Array.isArray(input.media) ? input.media : []).map(imageUrl).filter(Boolean))].slice(0, 20),
     kindSure: input.kindSure === true,
     kind: ['image', 'video', 'carousel', 'text'].includes(input.kind) ? input.kind : ['instagram', 'pinterest'].includes(canonical.platform) ? 'image' : 'text',
+    autoTopics: !(typeof input.topicsCurated === 'boolean' && Array.isArray(input.topics)),
     tags: tags(input.tags), topics: typeof input.topicsCurated === 'boolean' && Array.isArray(input.topics) ? [...new Set(input.topics.filter(t => typeof t === 'string' && t.trim() && t.trim().length <= 80 && !/[\p{Cc}]/u.test(t)).map(t => t.normalize('NFKC').trim()))].slice(0, 50) : topicsFor(`${title} ${caption} ${text(input.bookmarkTitle, 1000)} ${(Array.isArray(input.folders) ? input.folders : []).join(" ")}`),
     sourceAccount: text(input.sourceAccount, 100), accounts: Array.isArray(input.accounts) ? input.accounts.map(a => text(a, 100)).filter(Boolean).slice(0, 50) : [],
     notes: noteText(input.notes), favorite: input.favorite === true, archived: input.archived === true,

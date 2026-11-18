@@ -48,7 +48,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   const documents = new Documents(store.db), pictures = documentImages(documentImagesDir), fonts = documentFonts(documentFontsDir, { download: websiteDownload || downloadWebsite });
   const meaning = meaningSearch({ dir: meaningDir, ...(meaningFiles ? { files: meaningFiles } : {}), ...(meaningRequest ? { request: meaningRequest } : {}) });
   // Only the saves the app shows are ever handed to an AI tool.
-  const aiSearch = createAiSearch({ store, visiblePosts: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).filter(post => !hidden.has(post.id)); }, hasLocal: () => meaning.status().state === 'ready', images: { has: id => images.has(id), read: id => images.ensure(id) }, keys: keyVault && aiKeysFile ? aiKeys({ file: aiKeysFile, vault: keyVault }) : null, apiBase: aiApiBase });
+  const aiSearch = createAiSearch({ store, documents: () => documents.searchable(), visiblePosts: () => { const hidden = new Set(hiddenInstagramSaveIds(store)); return store.posts({ scope: 'active' }).filter(post => !hidden.has(post.id)); }, hasLocal: () => meaning.status().state === 'ready', images: { has: id => images.has(id), read: id => images.ensure(id) }, keys: keyVault && aiKeysFile ? aiKeys({ file: aiKeysFile, vault: keyVault }) : null, apiBase: aiApiBase });
   store.onPostsImported = images.schedule; store.onPostDelete = images.forget;
   // The desktop app listens, so accounts that came with a backup show in its account list at once.
   const backupListeners = new Set();
@@ -69,7 +69,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
   // Notes and Send to document share one line, so a post is only ever opened by one of them at a time.
   const aiTurns = aiLine();
   const noteAi = createNoteAi({ store, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost, line: aiTurns });
-  const docAi = createDocumentAi({ store, documents, topics: topicLibrary, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost, line: aiTurns });
+  const docAi = createDocumentAi({ store, documents, topics: topicLibrary, tool: () => aiSearch.noteTool(), mcp, baseUrl, visiblePost, images, pictures, line: aiTurns });
   function limited(req, group, max = 10) {
     const key = `${group}:${req.socket.remoteAddress}`;
     const now = Date.now();
@@ -302,7 +302,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           if (typeof input.query !== 'string' || input.query.trim().length < 3 || input.query.length > 500) throw new HttpError(400, 'Enter a search of at least 3 characters.');
           if (input.postIds !== undefined && !(Array.isArray(input.postIds) && input.postIds.every(Number.isInteger))) throw new HttpError(400, 'Invalid posts.');
           const list = value => (Array.isArray(value) && value.every(Number.isInteger) ? value : []);
-          try { return json(res, { job: aiSearch.start(input.query.trim(), input.postIds, list(input.nudged)) }); } catch (error) { throw new HttpError(409, error.message); }
+          try { return json(res, { job: aiSearch.start(input.query.trim(), input.postIds, list(input.nudged), { withDocuments: input.documents === true }) }); } catch (error) { throw new HttpError(409, error.message); }
         }
         if (localMode && path === '/api/organize') {
           if (req.method === 'GET') return json(res, { job: organize.current() });
@@ -414,6 +414,7 @@ export function createApp({ dataPath, origin = 'http://localhost:3210', secure =
           return json(res, store.importPosts(input.posts));
         }
         if (path === '/api/documents' && req.method === 'GET') return json(res, { documents: documents.list() });
+        if (path === '/api/documents/searchable' && req.method === 'GET') return json(res, { documents: documents.searchable() });
         if (path === '/api/documents' && req.method === 'POST') return json(res, documents.create(await body(req)));
         if (localMode && path === '/api/documents/describe' && req.method === 'POST') return json(res, await docAi.describe(await body(req)));
         if (localMode && path === '/api/documents/refine' && req.method === 'POST') {

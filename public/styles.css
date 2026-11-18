@@ -469,18 +469,20 @@ button svg, a svg { pointer-events: none; }
 .ai-toast-dismiss { width: 24px; height: 24px; margin: -2px -4px 0 0; flex: none; color: var(--ai-soft-text); }
 .ai-toast-dismiss:hover { background: var(--ai-chip); color: var(--ink); }
 .ai-toast-dismiss > .icon { width: 13px; height: 13px; }
-.save-card.is-ai-located { box-shadow: 0 0 0 2px var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); animation: ai-locate-pulse 1.6s ease-out; }
-@keyframes ai-locate-pulse {
-  0% { box-shadow: 0 0 0 0 var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); }
-  35% { box-shadow: 0 0 0 4px var(--ai-spark), 0 12px 28px rgba(17, 17, 17, 0.14); }
-  100% { box-shadow: 0 0 0 0 transparent; }
+/* Show post: once the page has settled, only the post's own rounded box glows in the AI orange, swelling once and fading (user's decision). */
+.cards[data-view="feed"] .save-card.is-ai-located .card-preview, .cards:not([data-view="feed"]) .save-card.is-ai-located .card-body { animation: ai-locate-glow 1.6s cubic-bezier(.22,.68,.2,1); }
+@keyframes ai-locate-glow {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ai-spark) 0%, transparent); }
+  22% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ai-spark) 55%, transparent), 0 10px 32px color-mix(in srgb, var(--ai-spark) 22%, transparent); }
+  100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--ai-spark) 0%, transparent), 0 10px 32px transparent; }
+}
 }
 :root[data-theme="dark"] .ai-toast { box-shadow: 0 12px 32px #00000066, inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 6%, transparent); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ai-toast { box-shadow: 0 12px 32px #00000066, inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent), inset 0 -1px 0 color-mix(in srgb, #fff 6%, transparent); } }
 @media (prefers-reduced-transparency: reduce) { .ai-toast { background: linear-gradient(115deg, color-mix(in srgb, #b9dc6e 18%, transparent), color-mix(in srgb, #f5d66b 12%, transparent) 44%, color-mix(in srgb, #f4a07c 16%, transparent) 74%, color-mix(in srgb, #e98fb4 18%, transparent)), var(--paper); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 @media (prefers-reduced-motion: reduce) {
   .ai-toast, .ai-toast-toggle, .ai-toast-chevron, .ai-toast-clear, .ai-toast-btn { transition: none; }
-  .save-card.is-ai-located { animation: none; outline: 2px solid var(--ai-spark); outline-offset: 2px; }
+  .cards[data-view="feed"] .save-card.is-ai-located .card-preview, .cards:not([data-view="feed"]) .save-card.is-ai-located .card-body { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ai-spark) 45%, transparent); }
 }
 
 /* Content supplies the variety: live posts, links and the reader's annotations. */
@@ -519,16 +521,19 @@ button svg, a svg { pointer-events: none; }
 .cards[data-view="feed"] .new-tag { position: static; grid-column: 1; grid-row: 1; justify-self: end; align-self: start; margin-right: 16px; }
 /* In the New tag's place while AI works on a post or has just finished: what it's doing, and a tick to dismiss. */
 .new-tag.ai-tag { display: inline-flex; align-items: center; gap: 6px; max-width: min(260px, calc(100% - 32px)); padding: 2px 3px 2px 8px; border: 1px solid transparent; background: linear-gradient(112deg, #b9dc6e38, #f5d66b24 45%, #f4a07c2e 75%, #e98fb433) padding-box, linear-gradient(var(--paper), var(--paper)) padding-box, var(--ai-edge) border-box; color: var(--ink); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 18px; letter-spacing: 0; text-transform: none; pointer-events: auto; }
-.new-tag.ai-tag:not(:has(.ai-tag-ack)) { padding-right: 9px; }
+.new-tag.ai-tag:not(:has(.ai-tag-ack, .ai-tag-open)) { padding-right: 9px; }
 .ai-tag-icon { display: grid; place-items: center; flex: 0 0 14px; width: 14px; height: 14px; color: var(--ai-spark); }
 .ai-tag-icon .icon { width: 13px; height: 13px; }
-.ai-tag-icon .dot-loader { transform: scale(.75); }
+.ai-tag-icon .dot-loader { transform: none; }
 .ai-tag[data-state="waiting"] .ai-tag-icon { color: var(--muted); }
 .ai-tag[data-state="failed"] .ai-tag-icon { color: #c9892e; }
 .ai-tag-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-tag-ack { display: grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--paper); cursor: pointer; }
 .ai-tag-ack .icon { width: 12px; height: 12px; stroke-width: 2.4; }
 .ai-tag-ack:hover { filter: brightness(1.1); }
+.ai-tag-open { flex: none; height: 20px; padding: 0 8px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font: inherit; font-weight: 600; line-height: 20px; cursor: pointer; }
+.ai-tag-open:hover { background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.ai-tag-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ai-tag-ack:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .is-masonry > :is(.save-card, .save-time-separator, .more-saves) { position: absolute; top: 0; left: 0; }
 /* Paging sentinels move immediately to avoid loading extra batches mid-animation. */
@@ -647,6 +652,9 @@ button svg, a svg { pointer-events: none; }
 .embed-capture-header { display: flex; align-items: center; gap: 10px; }
 .embed-open-original { flex: none; margin-left: auto; width: 28px; height: 28px; padding: 6px; border-radius: 50%; background: var(--surface-soft); color: var(--muted); }
 .native-embed[data-embed-state="failed"] .embed-open-original { display: none; }
+/* Hover darkens the circle to the app's main button colour with a light arrow, instead of fading it into the card. */
+.embed-open-original { transition: background-color 140ms ease, color 140ms ease; }
+.embed-open-original:is(:hover, :focus-visible) { background: var(--action); color: var(--on-action); }
 .embed-capture-author { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .embed-capture-author strong { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
 .embed-capture-author span, .embed-capture-date { color: var(--muted); font-size: 12px; line-height: 18px; }
@@ -1006,7 +1014,8 @@ dialog.filter-dialog { padding: 0; max-width: 640px; overflow: hidden; border-ra
 .all-saves-group:not(.has-collections) > .all-saves-nav { margin-bottom: 8px; }
 .ai-activity-state { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; color: var(--ai-spark, var(--accent)); }
 .ai-activity-state .icon { width: 14px; height: 14px; }
-.ai-activity-state .dot-loader { transform: scale(.8); }
+.ai-activity-state .dot-loader { transform: none; }
+.ai-activity-state.today-state { color: var(--accent); }
 @media (max-width: 640px) {
   .source-account-group { grid-template-columns: 38px fit-content(14ch) 28px minmax(8px, 1fr) max-content max-content 8px; }
   .source-account-group > .account-nav-item > .source-icon { margin-left: 8px; }
@@ -1586,6 +1595,8 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 .sidebar-organize .organize-button { display: flex; justify-content: center; width: 100%; height: 40px; pointer-events: auto; }
 #modal:has(.organize-dialog) { position: fixed; inset: auto auto var(--organize-bottom, 16px) var(--organize-left, 16px); width: min(480px, calc(100vw - 32px)); max-width: none; margin: 0; padding: 0; border: 0; border-radius: 20px; overflow: hidden; background: var(--paper); box-shadow: 0 18px 60px #00000033; --organize-max: min(90dvh, calc(100dvh - var(--organize-bottom, 16px) - 16px)); max-height: var(--organize-max); }
 #modal:has(.organize-dialog) > .modal-close { display: none; }
+/* It grows out of the Organize button instead (organize.js), so the dialogs' usual pop-in would fight that. */
+#modal:has(.organize-dialog)[open] { animation: none; }
 .organize-dialog { position: relative; max-height: var(--organize-max); padding: 18px; overflow-y: auto; scrollbar-width: none; border-radius: inherit; background: var(--ai-glass); box-shadow: inset 0 1px 0 var(--ai-shine); }
 .organize-dialog > :not(.sr-only) { position: relative; }
 .organize-request, .organize-request:focus, .organize-request:focus-visible { display: block; width: 100%; min-height: 66px; max-height: 220px; field-sizing: content; margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; resize: none; background: transparent; box-shadow: none; color: var(--ink); font: 14px/22px var(--sans); }
@@ -1614,7 +1625,8 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 @media (prefers-reduced-motion: reduce) { .collection-picker { animation: none; } }
 
 /* Dot loaders. Dots use the text colour around them, and each place sets one that reads on its background. */
-.dot-loader { --dot: 3px; --gap: 1px; --spin: 1.5s; display: inline-grid; flex-shrink: 0; grid-template-columns: repeat(5, var(--dot)); gap: var(--gap); color: var(--accent); }
+/* Beside text the loader is 14px, about the size of an icon, and sits on the middle of the line, not its baseline. */
+.dot-loader { --dot: 2px; --gap: 1px; --spin: 1.5s; display: inline-grid; flex-shrink: 0; grid-template-columns: repeat(5, var(--dot)); gap: var(--gap); color: var(--accent); vertical-align: middle; }
 .dot-loader.is-large { --dot: 5px; --gap: 3px; }
 .dot-loader i { width: var(--dot); height: var(--dot); border-radius: 50%; background: currentColor; opacity: .24; animation: dot-sweep var(--spin) linear infinite; animation-delay: calc((var(--at) - 1) * var(--spin)); }
 .dot-loader .t0 { --at: 0; } .dot-loader .t1 { --at: 0.042; } .dot-loader .t2 { --at: 0.083; } .dot-loader .t3 { --at: 0.125; } .dot-loader .t4 { --at: 0.167; } .dot-loader .t5 { --at: 0.208; } .dot-loader .t6 { --at: 0.25; } .dot-loader .t7 { --at: 0.292; } .dot-loader .t8 { --at: 0.333; } .dot-loader .t9 { --at: 0.375; } .dot-loader .t10 { --at: 0.417; } .dot-loader .t11 { --at: 0.458; } .dot-loader .t12 { --at: 0.5; } .dot-loader .t13 { --at: 0.542; } .dot-loader .t14 { --at: 0.583; } .dot-loader .t15 { --at: 0.625; } .dot-loader .t16 { --at: 0.667; } .dot-loader .t17 { --at: 0.708; } .dot-loader .t18 { --at: 0.75; } .dot-loader .t19 { --at: 0.792; } .dot-loader .t20 { --at: 0.833; } .dot-loader .t21 { --at: 0.875; } .dot-loader .t22 { --at: 0.917; } .dot-loader .t23 { --at: 0.958; } .dot-loader .t24 { --at: 1; }
@@ -1678,3 +1690,49 @@ html:has(dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
 .card-actions [data-action="send-to-document"][data-busy], .cards[data-view="feed"] .card-actions [data-action="send-to-document"][data-busy], .post-panel-document[data-busy] { border-color: var(--ai-edge-soft); background: var(--ai-glass); box-shadow: inset 0 1px 0 var(--ai-shine), 0 2px 10px var(--ai-glow); color: var(--ai-spark); opacity: 1; }
 .card-actions [data-action="send-to-document"][data-busy]:hover, .cards[data-view="feed"] .card-actions [data-action="send-to-document"][data-busy]:hover, .post-panel-document[data-busy]:hover { background: var(--ai-shine); }
 
+
+/* A picture taken from a saved post opens that post when clicked. */
+.milkdown img.is-post-picture { cursor: pointer; }
+
+/* An open note on a feed card scrolls with a thin bar that stays visible while there's more, in the card's empty right
+   margin rather than over the text (user's decision). The note's text keeps the same width it had before it opened. */
+.cards[data-view="feed"] .card-note .note-input:is(:focus, [data-expanded="true"]) { width: calc(100% + 12px); margin-right: -12px; padding-right: 6px; scrollbar-gutter: stable; }
+.card-note .note-input::-webkit-scrollbar, .post-note::-webkit-scrollbar { width: 6px; }
+.card-note .note-input::-webkit-scrollbar-track, .post-note::-webkit-scrollbar-track { background: transparent; }
+.card-note .note-input::-webkit-scrollbar-thumb, .post-note::-webkit-scrollbar-thumb { border-radius: 3px; background: color-mix(in srgb, #8a7a3f 38%, transparent); }
+.card-note .note-input::-webkit-scrollbar-thumb:hover, .post-note::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, #8a7a3f 60%, transparent); }
+
+/* Documents in search results: one card per matching document, above the saves, opening at the section that matched. */
+#document-results { display: grid; grid-template-columns: repeat(auto-fill, var(--doc-width, minmax(min(100%, 280px), 1fr))); align-items: start; gap: 16px; margin-bottom: 16px; padding-left: var(--doc-left, 0); }
+#document-results[hidden] { display: none; }
+#document-results[data-view="feed"] { grid-template-columns: var(--doc-width, minmax(0, 500px)); padding-left: var(--doc-left, 40px); }
+.doc-result-open { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); color: var(--ink); font: inherit; text-align: left; cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease, translate 160ms ease; }
+.doc-result-open:hover { border-color: color-mix(in srgb, var(--ink) 18%, var(--line)); box-shadow: 0 6px 20px #2931201a; translate: 0 -1px; }
+.doc-result-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.doc-result-head { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; line-height: 18px; }
+.doc-result-icon { display: grid; flex: none; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: var(--surface-soft); color: var(--ink); font-size: 13px; }
+.doc-result-icon .icon { width: 13px; height: 13px; }
+.doc-result-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.doc-result-more { flex: none; margin-left: auto; padding: 0 7px; border-radius: 999px; background: var(--surface-soft); font-size: 12px; line-height: 18px; }
+.doc-result-heading { font-size: 15px; font-weight: 600; line-height: 21px; overflow-wrap: anywhere; }
+.doc-result-picture { display: block; width: 100%; max-height: 200px; object-fit: cover; border-radius: 12px; background: var(--surface-soft); }
+.doc-result-snippet { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; color: color-mix(in srgb, var(--ink) 80%, transparent); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.doc-result-open mark { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, #f5d66b 55%, transparent); color: inherit; }
+@media (prefers-reduced-motion: reduce) { .doc-result-open { transition: none; } .doc-result-open:hover { translate: none; } }
+
+/* "/ai" at the end of a note's text, ready to send: a highlight and a hint drawn on a copy of the text laid behind the note. */
+.note-editor { isolation: isolate; }
+.note-ai-send-layer { position: absolute; z-index: -1; box-sizing: border-box; overflow: hidden; white-space: pre-wrap; color: transparent; pointer-events: none; }
+.note-ai-send-mark { margin: 0 -4px; padding: 1px 4px; border-radius: 6px; background: linear-gradient(112deg, #b9dc6e66, #f5d66b55 45%, #f4a07c5c 75%, #e98fb466); box-shadow: inset 0 0 0 1px #f4a07c66; }
+.note-ai-send-hint { margin-left: 4px; color: var(--ai-soft-text, #8a7a3f); font-size: 12px; white-space: nowrap; }
+
+/* The app's own tooltip on icon-only buttons (action-tips.js): dark, small, quick, never in the way of the pointer. */
+.action-tip { position: fixed; inset: auto; margin: 0; border: 0; overflow: visible; max-width: 260px; padding: 5px 9px; border-radius: 8px; background: color-mix(in srgb, var(--ink) 92%, transparent); color: var(--paper); font: 500 12px/16px var(--sans); white-space: nowrap; pointer-events: none; box-shadow: 0 6px 18px #00000026; opacity: 0; transition: opacity 100ms ease, translate 140ms cubic-bezier(.22,.68,.2,1); }
+.action-tip[data-side="left"] { translate: 4px 0; }
+.action-tip[data-side="right"] { translate: -4px 0; }
+.action-tip[data-side="above"] { translate: 0 4px; }
+.action-tip[data-side="below"] { translate: 0 -4px; }
+.action-tip.is-shown { opacity: 1; translate: 0 0; }
+/* Moving to the next icon: the same tooltip glides to it. */
+.action-tip.is-moving { transition: opacity 120ms ease, translate 140ms cubic-bezier(.22,.68,.2,1), left 180ms cubic-bezier(.22,.68,.2,1), top 180ms cubic-bezier(.22,.68,.2,1); }
+@media (prefers-reduced-motion: reduce) { .action-tip, .action-tip.is-moving { transition: none; translate: none; } }

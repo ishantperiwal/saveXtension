@@ -38,10 +38,12 @@ export function createMeaningSearch({ onResults }) {
       };
     },
     // Called with the saves the library shows, so hidden ones are never read.
-    index(token, posts) {
+    // Document sections come as { id, text } and are read like a post's text, so they can be found by meaning too.
+    index(token, posts, sections = []) {
       if (!worker || source === token) return;
       source = token;
-      worker.postMessage({ type: 'index', items: posts.map(post => ({ id: post.id, parts: meaningParts(post).map(text => ({ key: textKey(text), text })) })).filter(item => item.parts.length) });
+      const items = [...posts.map(post => ({ id: post.id, parts: meaningParts(post) })), ...sections.map(section => ({ id: section.id, parts: meaningParts({ text: section.text }) }))];
+      worker.postMessage({ type: 'index', items: items.map(item => ({ id: item.id, parts: item.parts.map(text => ({ key: textKey(text), text })) })).filter(item => item.parts.length) });
     },
     // Every post, closest to the query first. complete says if all of them have been read yet.
     rank(query) {

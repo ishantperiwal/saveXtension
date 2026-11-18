@@ -3,7 +3,7 @@ import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypt
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cleanPost, cleanCollection, imageUrl, instagramCaption, text, noteText, tags, HttpError, updatedTime } from './domain.mjs';
-import { initializeTopics, topicNames, writeTopicNames } from './topics.mjs';
+import { initializeTopics, retiredTopics, topicKey, topicNames, writeTopicNames } from './topics.mjs';
 import { initializeDocuments } from './documents.mjs';
 
 export const token = () => randomBytes(32).toString('base64url');
@@ -207,11 +207,13 @@ export class Store {
   }
   importPosts(inputs) {
     const result = { imported: 0, updated: 0, rejected: 0, errors: [] };
+    const retired = retiredTopics(this.db);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const [index, input] of inputs.entries()) {
         let p;
         try { p = cleanPost(input); } catch (e) { result.rejected++; result.errors.push({ index, message: e.message }); continue; }
+        if (p.autoTopics && retired.size) p.topics = p.topics.filter(name => !retired.has(topicKey(name)));
         const row = this.db.prepare('SELECT * FROM posts WHERE platform=? AND external_id=?').get(p.platform, p.externalId);
         const now = updatedTime(row?.updated_at);
         const accounts = new Set(row ? JSON.parse(row.accounts) : []);

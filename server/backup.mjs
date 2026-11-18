@@ -17,7 +17,7 @@ import { topicCatalog, importTopicCatalog, topicNames, writeTopicNames } from '.
 
 export const BACKUP_FORMAT = 1;
 // Settings that describe the library. Everything else is this computer's: sign-in state, caches, history.
-const LIBRARY_SETTINGS = ['name', 'desktop_social_accounts', 'instagram_save_lists', 'x_accounts', 'ai-search-tool'];
+const LIBRARY_SETTINGS = ['name', 'desktop_social_accounts', 'instagram_save_lists', 'x_accounts', 'ai-search-tool', 'retired_auto_topics'];
 const travels = key => LIBRARY_SETTINGS.includes(key) || /^(list-order|list-reading|kind-checked):/.test(key);
 // Work that belongs to this computer and would be wrong elsewhere: in-flight jobs, sign-in records, undo history.
 const LOCAL_TABLES = ['sessions', 'devices', 'pairing', 'sync_jobs', 'sync_runs', 'unsave_requests', 'mcp_changes'];

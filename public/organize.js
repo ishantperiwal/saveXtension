@@ -88,10 +88,16 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
   // The box opens from the button and goes back into it.
   const button = () => { const item = document.querySelector('.organize-button'); return item?.offsetParent ? item : null; };
   const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Real radii at both ends, so the corners change evenly with the size. A pill's huge radius would stay clamped, then snap at the end.
-  const pill = rect => ({ left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, borderRadius: `${rect.height / 2}px`, boxShadow: '0 2px 10px #00000014' });
-  const opened = rect => ({ left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, borderRadius: '20px', boxShadow: '0 18px 60px #00000033' });
-  const MOTION = { duration: 440, easing: 'cubic-bezier(.45,.05,.15,1)' };
+  // The box is laid out at its full size from the first frame and revealed by a clip that grows from the button's shape, so its text
+  // never re-wraps while it moves. Real radii at both ends, so the corners change evenly with the size.
+  const clip = (rect, box, radius) => `inset(${rect.top - box.top}px ${box.right - rect.right}px ${box.bottom - rect.bottom}px ${rect.left - box.left}px round ${radius}px)`;
+  const pill = (rect, box) => ({ clipPath: clip(rect, box, rect.height / 2) });
+  const opened = box => ({ clipPath: clip(box, box, 20) });
+  // The clip runs on its own over the whole time, so it eases all the way in and out. The shadow would be clipped
+  // too, so it fades in on its own once the box is nearly open, and fades out first when it closes.
+  const NO_SHADOW = { boxShadow: '0 0 0 #0000' }, SHADOW = { boxShadow: '0 18px 60px #00000033' };
+  const MOTION = { duration: 460, easing: 'cubic-bezier(.32,.72,0,1)' };
+  const BACK = { duration: 340, easing: 'cubic-bezier(.5,0,.2,1)' };
   function place() {
     const from = button()?.getBoundingClientRect(); if (!from) return null;
     const width = Math.min(480, innerWidth - 32);
@@ -105,7 +111,8 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
     if (!from || !content || still()) return;
     modal.dataset.settling = 'true';
     const to = modal.getBoundingClientRect();
-    modal.animate([pill(from), opened(to)], MOTION).finished.catch(() => {}).finally(() => { delete modal.dataset.settling; });
+    modal.animate([NO_SHADOW, SHADOW], { duration: 220, delay: 280, easing: 'ease-out', fill: 'backwards' });
+    modal.animate([pill(from, to), opened(to)], MOTION).finished.catch(() => {}).finally(() => { delete modal.dataset.settling; });
     modal.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 440, easing: 'ease-out', pseudoElement: '::backdrop' });
     content.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, delay: 180, easing: 'ease-out', fill: 'backwards' });
   }
@@ -117,7 +124,9 @@ export function organizeTopics({ modal, showModal, api, toast, esc, icon, model,
     shrinking = true; modal.dataset.settling = 'true';
     content.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 110, easing: 'ease-in', fill: 'forwards' });
     modal.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: 'ease-in', fill: 'forwards', pseudoElement: '::backdrop' });
-    modal.animate([opened(modal.getBoundingClientRect()), pill(to)], { ...MOTION, duration: 320, fill: 'forwards' }).finished.catch(() => {}).finally(() => { shrinking = false; delete modal.dataset.settling; modal.getAnimations({ subtree: true }).forEach(item => item.cancel()); modal.close(); });
+    const box = modal.getBoundingClientRect();
+    modal.animate([SHADOW, NO_SHADOW], { duration: 120, easing: 'ease-in', fill: 'forwards' });
+    modal.animate([opened(box), pill(to, box)], { ...BACK, fill: 'forwards' }).finished.catch(() => {}).finally(() => { shrinking = false; delete modal.dataset.settling; modal.getAnimations({ subtree: true }).forEach(item => item.cancel()); modal.close(); });
   }
   modal.addEventListener('cancel', event => { if (showing()) { event.preventDefault(); shrink(); } });
   modal.addEventListener('click', event => {

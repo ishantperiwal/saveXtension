@@ -47,6 +47,10 @@ export class Documents {
   list({ outlines = false } = {}) {
     return this.db.prepare('SELECT * FROM documents ORDER BY updated_at DESC').all().map(row => ({ id: row.id, title: row.title, description: row.description, icon: row.icon || '', createdAt: row.created_at, updatedAt: row.updated_at, characters: row.body.length, ...(outlines ? { headings: outline(row.body) } : {}) }));
   }
+  // Every document's text, for search. Read in one go: the library has few documents and they're plain text.
+  searchable() {
+    return this.db.prepare('SELECT id,title,icon,body,updated_at FROM documents ORDER BY updated_at DESC').all().map(row => ({ id: row.id, title: row.title, icon: row.icon || '', body: row.body, updatedAt: row.updated_at }));
+  }
   get(id) {
     const doc = view(this.db.prepare('SELECT * FROM documents WHERE id=?').get(String(id)));
     if (!doc) throw new HttpError(404, 'That document isn’t in your library.');
