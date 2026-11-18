@@ -515,7 +515,7 @@ async function showLibraryPost(postId, { aiView = false } = {}) {
     changedScope = true;
     updateCollection();
   }
-  const sequence = showsSiteList(state.filters), now = Date.now(), groups = new Map();
+  const sequence = inOwnOrder(), now = Date.now(), groups = new Map();
   for (const candidate of resultsPosts) {
     const group = sequence ? { key: 'source-sequence' } : addedTimeGroup(libraryAddedAt(candidate), now);
     const count = (groups.get(group.key) || 0) + 1;
@@ -949,7 +949,23 @@ document.addEventListener('click', async event => {
   closeModal(); closeSheet(); await dismissPost();
   await documentUi?.open(open.dataset.docResult, { find: { heading: open.dataset.heading, nth: Number(open.dataset.nth) || 0, section: Number(open.dataset.section) || 0, terms: JSON.parse(open.dataset.terms || '[]') } });
 });
+// Processed today lists the latest AI work first (user's decision, 2026-11-18): anything running or waiting is now, and
+// finished work is when it finished. A post AI worked on more than once goes by its latest.
+function byLatestAiWork(posts) {
+  const latest = new Map();
+  for (const item of processedItems()) {
+    const at = ['running', 'waiting'].includes(item.state) ? Infinity : item.doneAt ?? item.createdAt ?? 0, id = Number(item.postId);
+    if (!(latest.get(id) >= at)) latest.set(id, at);
+  }
+  return [...posts].sort((a, b) => (latest.get(b.id) ?? 0) - (latest.get(a.id) ?? 0));
+}
+// Views listed in their own order rather than by date, so they have no Added today and Added earlier dividers.
+const inOwnOrder = () => showsSiteList(state.filters) || state.filters.aiActivity === 'done';
 function filteredPosts() {
+  const listed = unordered();
+  return state.filters.aiActivity === 'done' ? byLatestAiWork(listed) : listed;
+}
+function unordered() {
   const ai = state.filters.aiActivity === 'today' ? todayPostIds() : state.filters.aiActivity && aiDonePostIds();
   const posts = ai ? scopedPosts().filter(post => ai.has(post.id)) : scopedPosts(), result = applyFilters(posts, state.filters, { query: state.query, topicScope: name => topicScope(state.topicCatalog, name), meaning: relatedMatches() });
   // Keep the card under the cursor while its edited note changes a search match.
@@ -1000,7 +1016,9 @@ const todayPostIds = () => new Set(allPosts().filter(post => !post.archived && a
 function renderAiActivityNavigation() {
   const root = $('#ai-activity-navigation'); if (!root) return;
   // The rows under All saves: New saves and Processed today, each there only while it has posts.
-  const done = aiDonePostIds(), today = todayPostIds(), key = `${[...done]}|${[...today]}`;
+  // Inside Processed today, new AI work on a post already listed moves it to the top, so its order counts as a change too.
+  const done = aiDonePostIds(), today = todayPostIds(), order = state.filters.aiActivity === 'done' ? byLatestAiWork([...done].map(id => ({ id }))).map(post => post.id) : [];
+  const key = `${[...done]}|${[...today]}|${order}`;
   const shown = state.filters.aiActivity === 'today' ? today : done;
   // With nothing left to show, the AI activity view goes back to all saves. Redrawing the grid redraws this
   // row too, so the posts are noted first and the grid is redrawn only once per change.
@@ -1797,7 +1815,7 @@ function renderResultsPage(preservePlayers = true) {
   if (!$('#results') || showingCollectionFolders()) return;
   moreResultsObserver?.disconnect();
   const now = Date.now(), groups = new Map();
-  const sequence = showsSiteList(state.filters);
+  const sequence = inOwnOrder();
   const displayed = new Set(preservePlayers ? [...document.querySelectorAll('#results .save-card')].map(card => card.dataset.postId) : []);
   resultsTimeKey = addedTimeKey(resultsPosts, now);
   for (const post of resultsPosts) {
